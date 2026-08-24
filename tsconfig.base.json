@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "preserve",
+    "jsxImportSource": "solid-js",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    // `vite/client` types `import.meta.env`, which dev-only guards depend on. It belongs here
+    // rather than in one package because `@invflux/ui` exports raw `./src`, so every consumer
+    // compiles its sources into its own program and needs the same lib.
+    "types": ["vite/client"]
+  }
+}

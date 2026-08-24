@@ -1,0 +1,29 @@
+{
+  "name": "@invflux/build",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared Vite config factory for InvFlux admin SPAs — output shape, externals, dev server and HMR, in one place (see arch-build-pipeline.md §3).",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts"
+  ],
+  "peerDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "vite": "^6.0.0",
+    "vite-plugin-solid": "^2.11.0"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.5"
+  }
+}

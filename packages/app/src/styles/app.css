@@ -1,0 +1,63 @@
+/* Tailwind — deliberately NOT the one-line `@import "tailwindcss"`, which is shorthand for the four
+   lines below with utilities wrapped in `@layer utilities`.
+
+   We render into wp-admin, and this stylesheet is also mirrored into the **light DOM** for content
+   portalled out of the shadow root (modals, Kobalte listboxes). There, wp-admin's own stylesheets
+   apply — and they are **unlayered**. In the CSS cascade, unlayered author styles beat *every*
+   cascade layer regardless of specificity, so anything Tailwind puts in a layer loses to wp-admin
+   outright: `common.css`'s `p, .wp-die-message { margin: 1em 0 }` (0-0-1) silently outranked a
+   `.m-0` utility (0-1-0), and `mt-4` on a portalled `<p>` did nothing at all. Only `!important`
+   escaped, which is why hand-written `!m-0` was the only thing that ever worked.
+
+   So: keep theme/base/components layered (preflight MUST stay layered — it is element-based, and
+   this sheet is global once mirrored into the light DOM, so unlayering it would restyle all of
+   wp-admin), and emit **utilities unlayered**. Utilities are class-based, so they can only ever
+   match our own markup, and they now win against wp-admin on plain specificity.
+
+@layer theme, base, components;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/preflight.css" layer(base);
+@import "tailwindcss/utilities.css";
+
+/* Hand wp-admin back the three class names it shares with Tailwind — see the file for the measured
+   collision set and the `revert` caveat. `@import` is only legal at the top of a sheet, so these
+   rules cannot rely on source order to beat the utilities they undo; they carry an id instead. */
+@import "../../../ui/src/styles/host-compat.css";
+
+/* Scan shared UI primitives so their utility classes are detected.
+@source "../../../ui/src";
+/* Scan this app's own section sources (including lazy chunks). */
+@source "../";
+/* Migrated sections reuse their source packages' components — scan them so their utility classes
+   are generated into this app's (single, adopted) stylesheet. */
+@source "../../../workbench/src";
+@source "../../../admin/src";
+@source "../../../dispatch/src";
+@source "../../../procurement/src";
+
+/* Shared design tokens — see @invflux/ui theme.css. Everything below is the unified app's own. */
+@import "../../../ui/src/styles/theme.css";
+
+@theme {
+  /* Dirty-cell tint. App-only: the sole consumer is the settings screen (@invflux/admin), which
+     product-tab never mounts. Promote to the shared sheet the moment a second surface wants it. */
+  --color-dirty-bg: oklch(95% 0.06 60);
+}
+
+/* Preflight for the light-DOM portal root.
+   Inside the shadow root, preflight already zeroes these margins and wp-admin never reaches in. But
+   portalled content (modals, listboxes) lives in the light DOM, where preflight is layered and so
+   loses to wp-admin's unlayered element rules — a portalled `<h2>`/`<p>` would arrive carrying
+   `common.css`'s margins while its shadow-DOM twin does not. This restores the shadow-DOM baseline
+   so a component looks the same wherever it is mounted.
+
+   The specificity is load-bearing. `:where()` keeps the id out of the sum, so the whole selector is
+   0-0-1 — level with wp-admin's own `p {}` / `h2 {}`, and won on **source order** (this sheet is
+   injected at mount, after wp-admin's `<link>`s). Any margin/padding utility is 0-1-0 and still
+   beats it, so `mt-4` on a modal heading keeps working. Raising this to `#id …` (1-0-1) would win
+   more decisively and break every spacing utility in a modal — don't. */
+:where(#invflux-app-portal-root)
+  :is(h1, h2, h3, h4, h5, h6, p, ul, ol, dl, dd, figure, blockquote, pre) {
+  margin: 0;
+  padding: 0;
+}

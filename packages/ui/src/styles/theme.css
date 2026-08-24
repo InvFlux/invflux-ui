@@ -1,0 +1,99 @@
+/* The design tokens every InvFlux surface shares.
+ *
+ * One definition, imported by each SPA's own sheet — which then keeps only what is genuinely its
+ * own: its `@source` scanning, its host-chrome overrides, and its portal-root reset.
+ *
+ * Why this file exists rather than a copy per SPA: the components are shared, so the tokens have to
+ * be. `@invflux/ui` used `font-mono` in eight places while only the unified app defined
+ * `--font-mono`, so the same component rendered a different monospace stack depending on which host
+ * mounted it. A token used by a shared component belongs here by definition.
+ *
+ * A host may override any of these after importing — see `--color-border-host` for the sanctioned
+ * pattern. Tokens used by exactly one surface stay in that surface's sheet.
+ */
+
+@theme {
+  /* ── Brand ─────────────────────────────────────────────────────────────── */
+  --color-primary:       oklch(56.5% 0.22 264);
+  --color-primary-hover: oklch(50%   0.22 264);
+
+  /* ── Surfaces ──────────────────────────────────────────────────────────── */
+  --color-surface:        #ffffff;
+  --color-surface-raised: #f8fafc;
+  --color-border:         #e2e8f0;
+
+  /* The host's own chrome border, for a surface embedded *inside* a host screen rather than
+     occupying its own page. Kept as a named token rather than a bare literal in the embedding
+     sheet, because the value is a deliberate match to WooCommerce's admin input border — not a
+     shade someone preferred. A surface that wants to sit flush in wp-admin overrides
+     `--color-border` with this; see product-tab.css. */
+  --color-border-host: #8c8f94;
+
+  /* ── Text ──────────────────────────────────────────────────────────────────
+     TWO levels, and deliberately not three. A third, fainter grey existed — 121 hardcoded
+     `text-gray-400` / `text-slate-400` sites at 2.54:1, failing WCAG AA — and the obvious repair
+     was to give it a token. Categorising the call sites first showed there was nothing to
+     tokenise: empty states, eyebrow labels, disclosure carets, technical ids, "no value" dashes,
+     loading text and parentheticals each appeared at BOTH greys, split by which file they were
+     written in rather than by what they meant. Two shades were doing one job.
+
+     So there is one secondary grey. What *is* semantically distinct — "this value was not authored
+     here" (inherited, defaulted, or host-owned) — is carried by **italic**, and structurally by the
+     grid's `data-inherited` / `data-readonly` attributes. Provenance is not a brightness.
+
+     Do not add a lighter level. Nothing lighter than `muted` passes AA (it sits at 4.76:1, and the
+     floor is 4.50), so a paler grey can only be a regression wearing a token's name. For weaker
+     emphasis reach for size or weight; for "not authored here" reach for italic. */
+  --color-text:       #1e293b;  /* 14.63:1 on surface, 13.98:1 on raised */
+  --color-text-muted: #64748b;  /*  4.76:1 / 4.55:1 — the AA floor; nothing lighter is available */
+
+  /* ── Type ──────────────────────────────────────────────────────────────── */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+               "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /* ONE step below Tailwind's `text-xs` (12px), and — as with the greys above — deliberately not
+     two. There were 46 hardcoded sites at two sizes, 33 at 11px and 13 at 10px, and the same test
+     applies: sort them by what they *are* rather than by which file they live in and the two piles
+     do not separate. Eyebrow labels, chips, disclosure carets, secondary meta text and monospace
+     technical detail each appear at BOTH sizes — twice inside a single file (`OrderTags.tsx` sets
+     its uppercase section labels at 10px in one popover and 11px in another; `Timeline.tsx` sets
+     the event type at 11px and the payload dump directly under it at 10px). A 1px difference is
+     not a hierarchy a reader can perceive, so it was carrying no meaning to preserve.
+
+     11px, not 10px: it is both the majority and the more legible, and the secondary grey below is
+     already at the AA floor — pairing the floor contrast with the smaller size is the one
+     combination worth not shipping.
+
+     No `--text-2xs--line-height` companion, unlike Tailwind's own steps. An arbitrary-value
+     `text-[11px]` sets font size ONLY, so adding a line-height here would silently reflow all 46
+     swept sites; the ones that care already say `leading-none`. */
+  --text-2xs: 0.6875rem;
+
+  /* ── Layering ──────────────────────────────────────────────────────────────
+     TWO ladders, not one scale, because the two answer different questions.
+
+     Tailwind's own `z-10`…`z-50` is the third, and stays untokenised: it is used for layering
+     *within* one component (the grid's sticky header over its sticky first column, and the like),
+     where the numbers are local and mean nothing outside that component.
+
+     In-page — above the surface's own content, below anything that must clear the host. */
+  --z-index-menu-backdrop:  60;   /* full-viewport click-away catcher under an open menu */
+  --z-index-menu:           61;
+  --z-index-submenu:        62;
+
+  /* Above the host — WordPress fixes `#wpadminbar` at 99999, and these overlays are portalled into
+     `document.body` (see the app's `portalRoot`), so they compete with it directly rather than
+     from inside the SPA's own stacking context. Hence the 100000 base: it is not a magic big
+     number, it is 99999 + 1.
+
+     The order within this ladder is load-bearing: a popover opened from inside a modal must paint
+     over that modal, and a toast must be visible whatever is open — including over a modal, which
+     is why it sits at the top rather than at its former 100 (a toast raised from a modal was
+     painting *behind* the modal's own full-viewport backdrop, so it was seen only after the modal
+     closed, if at all). */
+  --z-index-modal:      100000;
+  --z-index-popover:    100001;   /* combobox / dropdown surfaces, which may open over a modal */
+  --z-index-preview:    100002;   /* transient, pointer-following: the thumbnail zoom */
+  --z-index-toast:      100003;
+}

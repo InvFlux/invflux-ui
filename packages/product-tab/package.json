@@ -1,0 +1,25 @@
+{
+  "name": "@invflux/product-tab",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@invflux/i18n": "*",
+    "@invflux/ui": "*",
+    "@tailwindcss/vite": "^4.2.4",
+    "@tanstack/solid-query": "^5.0.0",
+    "solid-js": "^1.9.3",
+    "tailwindcss": "^4.2.4"
+  },
+  "devDependencies": {
+    "@invflux/build": "*",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.4",
+    "vite-plugin-solid": "^2.11.6"
+  }
+}

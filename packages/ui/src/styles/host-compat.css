@@ -1,0 +1,45 @@
+/* Give wp-admin back the three class names it shares with Tailwind.
+ *
+ * Each SPA renders into a shadow root, but portals its overlays into a light-DOM root carrying a
+ * `<style>` copy of the whole sheet — Kobalte's outside-click detection reads `e.target` rather
+ * than `composedPath()`, so its menus and listboxes have to live in the document tree to work at
+ * all. And a `<style>` element styles the **entire document** wherever it sits, so every unlayered
+ * utility rule is live across wp-admin while a surface is open.
+ *
+ * Almost all of them are harmless, because a Tailwind utility name is not a word anyone else uses.
+ * Five are: measured against the real class vocabulary of the products, posts, plugins, users and
+ * WooCommerce-orders screens, wp-admin uses `.fixed`, `.sticky`, `.inline`, `.hidden` and
+ * `.visible` as semantic classes of its own. `.hidden` and `.visible` mean the same thing in both
+ * vocabularies and are left alone — see the warning below. The other three are not:
+ *
+ *   .fixed    a `table-layout` hint on `wp-list-table widefat fixed`  →  we added position: fixed
+ *   .sticky   a sticky *post* row on the posts list                   →  we added position: sticky
+ *   .inline   the inline-edit data holders                            →  we forced display: inline
+ *
+ * Nothing collides today only because neither mount point has a list table; the first surface
+ * embedded on one would restyle the host's own chrome.
+ *
+ * `#wpwrap` is what makes this safe to state as a blanket undo: the portal root is a *sibling* of
+ * it, and a SPA's own content sits behind a shadow boundary, so this selector can only ever reach
+ * wp-admin's markup. It is also deliberately NOT wrapped in `:where()` — the id counts, putting
+ * each rule at 1-1-0 against the 0-1-0 utility it undoes. Source order could not do that job here:
+ * `@import` is legal only at the top of a sheet, so these rules necessarily precede the utilities
+ * they have to beat.
+ *
+ * ⚠ `revert` drops the whole author origin for that property, WordPress's own declarations
+ * included. It is correct here only because WordPress authors no `position` on `.fixed`/`.sticky`
+ * and no `display` on `.inline` — verified by detaching the mirror and reading the computed values
+ * back. Do NOT extend this list to `.hidden`: WordPress *does* author `display: none` there, and
+ * reverting it would show what it hides.
+ *
+ * This is a stopgap over a containment problem, not a fix for it. The real repair confines the
+ * mirror's selectors instead of undoing them one name at a time.
+ */
+
+#wpwrap :is(.fixed, .sticky) {
+  position: revert;
+}
+
+#wpwrap .inline {
+  display: revert;
+}

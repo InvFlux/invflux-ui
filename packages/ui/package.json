@@ -1,0 +1,49 @@
+{
+  "name": "@invflux/ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": [
+    "./src/index.ts",
+    "./src/AnnotationTimelineRow.tsx",
+    "./src/Timeline.tsx",
+    "./src/filters-builtins.tsx",
+    "./src/settings/controls.tsx",
+    "./src/datatypes/views.tsx",
+    "./src/datatypes/codecs.ts",
+    "./src/datatypes/editors.tsx",
+    "./src/datatypes/drilldowns.tsx"
+  ],
+  "exports": {
+    ".": "./src/index.ts",
+    "./nav": "./src/NavTab.tsx",
+    "./api": "./src/api/index.ts",
+    "./toast": "./src/toast.ts",
+    "./assets/*": "./assets/*"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@invflux/i18n": "*",
+    "@kobalte/core": "^0.13.11",
+    "@tanstack/table-core": "^8.21.3"
+  },
+  "peerDependencies": {
+    "@solidjs/router": "^0.15.3",
+    "@tanstack/solid-query": "^5.0.0",
+    "@tanstack/solid-table": "^8.20.5",
+    "@tanstack/solid-virtual": "^3.13.24",
+    "solid-js": "^1.9.0"
+  },
+  "peerDependenciesMeta": {
+    "@solidjs/router": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "vitest": "^4.1.5"
+  }
+}

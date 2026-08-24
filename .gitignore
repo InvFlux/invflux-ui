@@ -1,0 +1,11 @@
+node_modules/
+
+dist/
+build/
+# `build/` is unanchored, so it matches at any depth — including packages/build, which is the
+# shared Vite-config package (source, not output). Without this it is silently invisible to git.
+!packages/build/
+coverage/
+test-results/
+
+*.local

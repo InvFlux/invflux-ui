@@ -1,0 +1,69 @@
+name: CI
+
+# CI for the published snapshot: builds it and type-checks it, on the repository a reader of
+# the plugin's readme arrives at.
+#
+# It lives under .github/mirror/ rather than .github/workflows/ so that it does NOT run where it
+# is authored — GitHub Actions reads only .github/workflows/*.yml and never a subdirectory — and
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Sanitized snapshot builds and type-checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: invflux-ui }
+
+      # @invflux/build resolves its Vite outDir to ../../../invflux-for-woocommerce, so the
+      # adapter mirror has to be present or the bundles land outside the workspace and the
+      # job proves nothing. Token only needed while the mirrors are still private.
+      - uses: actions/checkout@v4
+        with:
+          repository: InvFlux/invflux-for-woocommerce
+          path: invflux-for-woocommerce
+          token: ${{ secrets.SIBLING_REPOS_TOKEN || github.token }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: invflux-for-woocommerce/.nvmrc
+
+      - name: Install workspace
+        working-directory: invflux-ui
+        run: npm ci --no-audit --no-fund
+
+      - name: Build bundles
+        working-directory: invflux-ui
+        run: npm run build
+
+      - name: Lint
+        working-directory: invflux-ui
+        run: npm run lint
+
+      - name: Typecheck
+        working-directory: invflux-ui
+        run: npm run typecheck
+
+      - name: Vitest
+        working-directory: invflux-ui
+        run: npm test
+
+      - name: Confirm the bundles landed in the adapter tree
+        shell: bash
+        run: |
+          BUILD="$GITHUB_WORKSPACE/invflux-for-woocommerce/build"
+          ls -lR "$BUILD"
+          test -s "$BUILD/product-tab/product-tab.js"
+          compgen -G "$BUILD/app/app.*.js" >/dev/null \
+            || { echo "::error::no app.<hash>.js emitted into $BUILD/app"; exit 1; }
