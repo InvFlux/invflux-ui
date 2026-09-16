@@ -8,12 +8,14 @@
    root and the portal root are shadow roots adopting this sheet, so it reaches our two trees and
    nothing else, and the cascade never meets wp-admin's.
 
+   */
 @layer theme, base, components, utilities;
 @import 'tailwindcss/theme.css' layer(theme);
 @import 'tailwindcss/preflight.css' layer(base);
 @import 'tailwindcss/utilities.css' layer(utilities);
 
 /* Scan shared UI primitives so their utility classes are detected.
+   */
 @source "../../../ui/src";
 /* Scan this app's own section sources (including lazy chunks). */
 @source "../";

@@ -122,6 +122,7 @@ const GRID_STORAGE_PREFIX = 'invflux:workbench-grid:central-workbench:';
  * still refreshes on each products fetch. Passing no `liveUpdates` prop leaves the transport
  * uninstantiated. BACKLOG: finish the poll/apply integration (URL + envelope + mapping the server
  * aggregates onto the grid's stock-column field ids) — not needed for the wp.org submission.
+ */
 
 // ─── Query helpers ────────────────────────────────────────────────────────────
 

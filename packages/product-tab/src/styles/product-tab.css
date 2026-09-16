@@ -5,6 +5,7 @@
    That constraint is load-bearing: a `<style>` styles the whole document wherever it sits, and
    wp-admin's own rules are unlayered, so they would outrank every layered utility regardless of
    specificity. Both the tab's root and the portal root are shadow roots adopting this sheet, so it
+   reaches our two trees and nothing else. */
 @layer theme, base, components, utilities;
 @import 'tailwindcss/theme.css' layer(theme);
 @import 'tailwindcss/preflight.css' layer(base);

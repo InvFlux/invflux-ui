@@ -355,6 +355,7 @@ export function App(props: AppProps) {
                          deliberately short word for "someone other than InvFlux" whose wording is
                          not settled — so the segment's own state id, which is its contract with
                          the settings endpoint, is the stable handle a spec can hold.
+                         */
                       data-testid={`product-tab-stock-mode-${seg.value}`}
                       class="cursor-pointer border-0 border-l border-border px-4 py-1.5 text-sm font-medium first:border-l-0 disabled:cursor-not-allowed disabled:opacity-50"
                       classList={{
