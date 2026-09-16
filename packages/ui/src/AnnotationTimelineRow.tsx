@@ -1,15 +1,10 @@
 import { PencilIcon } from './icons';
 import { For, Show, type JSX } from 'solid-js';
-import { __, sprintf } from '@invflux/i18n';
-import {
-  formatRelative as formatRelativeTime,
-  formatWallClock,
-  timelineRowRegistry,
-  type TimelineRowProps,
-} from './Timeline';
+import { __, _x, sprintf } from '@invflux/i18n';
+import { EventTime, timelineRowRegistry, type TimelineRowProps } from './Timeline';
 import type { AnnotationThread } from './annotations';
 import { isThreadDeleted, latestLiveVersion } from './annotations';
-import { tagColor, tagInk, type TagColor } from './tagPalette';
+import { paletteInk, paletteStyle } from './tagPalette';
 import { Pill } from './Pill';
 
 /**
@@ -23,7 +18,6 @@ import { Pill } from './Pill';
  * Registered against the `annotation` type slug (+ `annotation.note`), so a host's synthetic
  * events resolve here via the registry's parent-chain fallback.
  */
-
 
 /** Resolved display metadata for a tag id — the host supplies it so this SPA-agnostic row can
  * render a tag-change delta as coloured pills. Returns undefined for an unknown/retired-but-absent id. */
@@ -47,10 +41,13 @@ export interface AnnotationTimelinePayload {
  * Built on `Pill` at `tone="none"`: the colour is per-tag *data* from the palette, so it arrives
  * through `style` while `Pill` owns the shape and metrics.
  */
-function DeltaPill(props: { tagId: number; resolve?: TagPillResolver; removed?: boolean }): JSX.Element {
+function DeltaPill(props: {
+  tagId: number;
+  resolve?: TagPillResolver;
+  removed?: boolean;
+}): JSX.Element {
   const meta = (): { name: string; colorId: number } | undefined => props.resolve?.(props.tagId);
   const label = (): string => meta()?.name ?? `#${props.tagId}`;
-  const c = (): TagColor => tagColor(meta()?.colorId ?? 0);
   return (
     <Pill
       tone="none"
@@ -59,8 +56,11 @@ function DeltaPill(props: { tagId: number; resolve?: TagPillResolver; removed?: 
       class={props.removed ? 'line-through' : undefined}
       style={
         props.removed
-          ? { 'box-shadow': `inset 0 0 0 1px ${tagInk(c())}`, color: tagInk(c()) }
-          : { 'background-color': c().bg, color: c().fg }
+          ? {
+              'box-shadow': `inset 0 0 0 1px ${paletteInk(meta()?.colorId ?? 0)}`,
+              color: paletteInk(meta()?.colorId ?? 0),
+            }
+          : paletteStyle(meta()?.colorId ?? 0)
       }
       title={props.removed ? sprintf(__('removed %s'), label()) : sprintf(__('added %s'), label())}
     >
@@ -82,8 +82,12 @@ export function TagDeltaPills(props: {
   return (
     <Show when={(props.added?.length ?? 0) > 0 || (props.removed?.length ?? 0) > 0}>
       <div class="flex flex-wrap gap-1">
-        <For each={props.added ?? []}>{(id) => <DeltaPill tagId={id} resolve={props.resolve} />}</For>
-        <For each={props.removed ?? []}>{(id) => <DeltaPill tagId={id} resolve={props.resolve} removed />}</For>
+        <For each={props.added ?? []}>
+          {(id) => <DeltaPill tagId={id} resolve={props.resolve} />}
+        </For>
+        <For each={props.removed ?? []}>
+          {(id) => <DeltaPill tagId={id} resolve={props.resolve} removed />}
+        </For>
       </div>
     </Show>
   );
@@ -95,9 +99,7 @@ export const TagDeltaChips = TagDeltaPills;
 export function AnnotationTimelineRow(props: TimelineRowProps): JSX.Element {
   const payload = (): AnnotationTimelinePayload | null => {
     const p = props.event.payload;
-    return p && typeof p === 'object' && 'thread' in p
-      ? (p as AnnotationTimelinePayload)
-      : null;
+    return p && typeof p === 'object' && 'thread' in p ? (p as AnnotationTimelinePayload) : null;
   };
   const thread = (): AnnotationThread | null => payload()?.thread ?? null;
   const deleted = (): boolean => {
@@ -117,11 +119,23 @@ export function AnnotationTimelineRow(props: TimelineRowProps): JSX.Element {
   // A pure tag change (delta, no note text) reads as "Tags", not an empty "Note".
   const headerLabel = (): string => (hasDelta() && !hasBody() ? __('Tags') : __('Note'));
 
+  /**
+   * The version the author is read from.
+   *
+   * `live()` is null once a thread is deleted, and the person who wrote a note is still known
+   * after it is removed — falling through to the last recorded version is what keeps a deleted
+   * entry saying who, rather than degrading to a bare id.
+   */
+  const authorVersion = () => {
+    const t = thread();
+    return live() ?? (t ? (t.versions[t.versions.length - 1] ?? null) : null);
+  };
+
   const actorLabel = (): string => {
-    const name = live()?.authorName;
+    const name = authorVersion()?.authorName;
     if (name) return name;
     const r = props.event.actor.ref;
-    return r ? sprintf(__('user #%s'), r) : '';
+    return r ? sprintf(_x('user #%s', 'timeline actor'), r) : '';
   };
 
   return (
@@ -130,35 +144,29 @@ export function AnnotationTimelineRow(props: TimelineRowProps): JSX.Element {
         <PencilIcon class="h-3.5 w-3.5" />
       </span>
       <div class="min-w-0 flex-1">
+        {/* Same header shape as every other timeline entry: what, who, when. A note row that
+            ordered them differently would read as a different kind of thing, which it is not. */}
         <div class="flex items-baseline gap-2 text-sm">
           <span class="font-medium text-gray-800">{headerLabel()}</span>
-          <span
-            class="text-xs text-text-muted shrink-0 whitespace-nowrap tabular-nums"
-            title={formatWallClock(props.event.occurredAt)}
-          >
-            {formatRelativeTime(props.event.occurredAt)}
-            <span class="text-gray-300"> · </span>
-            {formatWallClock(props.event.occurredAt)}
-          </span>
+          <Show when={actorLabel()}>
+            <span class="text-2xs text-text-muted shrink-0 truncate">
+              {sprintf(_x('by %s', 'timeline event author'), actorLabel())}
+            </span>
+          </Show>
+          <EventTime at={props.event.occurredAt} />
           <Show when={total() > 1}>
             <span class="text-2xs text-text-muted">
-              {sprintf(
-                __('edited · v%1$d/%2$d'),
-                live()?.version ?? total(),
-                total(),
-              )}
+              {sprintf(__('edited · v%1$d/%2$d'), live()?.version ?? total(), total())}
             </span>
+          </Show>
+          {/* A deleted note has no body, so the fact of the deletion belongs where the body would
+              have started reading — on the header, not alone on a line of its own. */}
+          <Show when={deleted()}>
+            <span class="text-2xs italic text-text-muted shrink-0">{__('Note deleted.')}</span>
           </Show>
         </div>
 
-        <Show
-          when={!deleted()}
-          fallback={
-            <div class="text-xs italic text-text-muted mt-0.5">
-              {__('Note deleted.')}
-            </div>
-          }
-        >
+        <Show when={!deleted()}>
           <Show when={hasBody()}>
             <div class="text-xs text-gray-700 mt-0.5 whitespace-pre-wrap break-words">
               {live()?.body}
@@ -169,12 +177,6 @@ export function AnnotationTimelineRow(props: TimelineRowProps): JSX.Element {
               <TagDeltaChips added={added()} removed={removed()} resolve={resolveTag()} />
             </div>
           </Show>
-        </Show>
-
-        <Show when={actorLabel()}>
-          <div class="text-2xs text-text-muted mt-0.5">
-            {sprintf(__('by %s'), actorLabel())}
-          </div>
         </Show>
       </div>
     </div>

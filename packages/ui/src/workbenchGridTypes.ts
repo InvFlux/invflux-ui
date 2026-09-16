@@ -214,6 +214,15 @@ export interface WorkbenchApplyResponse {
 // ---------------------------------------------------------------------------
 
 /**
+ * One cell, named by what it IS rather than where it sits: a subject and a column id. Stable across
+ * anything that renumbers rows or reorders columns.
+ */
+export interface SelectedCellRef {
+  subjectId: number;
+  columnId: string;
+}
+
+/**
  * The imperative handles `WorkbenchGrid` hands back to its host via `apiRef` — used to focus the
  * grid, drive column visibility from an external toolbar, jump-scroll, and read the current cell
  * selection geometry for bulk operations. Superset of DataGrid's imperative surface: everything
@@ -234,10 +243,22 @@ export interface WorkbenchHandles {
   isDirty: () => boolean;
   /** Fetch every remaining page (for a host "Load all" affordance before an all-rows export/sweep). */
   loadAllPages: () => Promise<void>;
-  /** Set the cell selection to span these subjects' rows (all columns), grouping contiguous rows into
-   *  ranges; empties it when none are visible. For a host that re-targets the selection after changing
-   *  the displayed set — e.g. keeping the selection on the rows just folded/unfolded. */
-  selectSubjectRows: (subjectIds: number[]) => void;
+  /** The active (focused) cell as stable identities, or null. Pair with {@link selectCells} to carry
+   *  the cursor across a change to the displayed rows. */
+  getActiveCell: () => SelectedCellRef | null;
+  /**
+   * Replace the cell selection with exactly these cells, addressed by SUBJECT and COLUMN rather than
+   * by index.
+   *
+   * Indices are the wrong currency across a change to the displayed set: folding a group renumbers
+   * every row beneath it, so a host that wants to preserve a selection has to name what it selected,
+   * not where it was. Cells whose row is no longer displayed — or whose column is no longer visible —
+   * are dropped, which is exactly the behaviour a collapse wants and needs no special case.
+   *
+   * `active` is honoured when that cell survived; otherwise the cursor falls to the selection's
+   * top-left.
+   */
+  selectCells: (cells: readonly SelectedCellRef[], active?: SelectedCellRef | null) => void;
   /** Toggle the table ⇄ record layout (for a host rendering its own Record-view button). */
   toggleLayout: () => void;
 }

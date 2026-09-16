@@ -37,6 +37,12 @@ export interface SlotContribution<P = Record<string, unknown>> {
    * back to humanizing the `id`.
    */
   label?: () => string;
+  /**
+   * Reachable but not listed: a navigation slot still routes to the contribution, and leaves it out
+   * of the tabs. For a seldom-visited page reached by links from where its choices are made, which a
+   * permanent tab would advertise to everyone who never needs it. Absent ⇒ listed.
+   */
+  hidden?: boolean;
 }
 
 export interface SlotRegistry {
@@ -53,7 +59,10 @@ export function createSlotRegistry(): SlotRegistry {
   const bySlot = new Map<string, SlotContribution<unknown>[]>();
 
   return {
-    register<P = Record<string, unknown>>(slotKey: string, contribution: SlotContribution<P>): void {
+    register<P = Record<string, unknown>>(
+      slotKey: string,
+      contribution: SlotContribution<P>,
+    ): void {
       const stored = contribution as unknown as SlotContribution<unknown>;
       const list = bySlot.get(slotKey) ?? [];
       const existing = list.findIndex((c) => c.id === stored.id);

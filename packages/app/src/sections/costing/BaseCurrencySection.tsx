@@ -1,4 +1,4 @@
-import { __, _n, sprintf } from '@invflux/i18n';
+import { __, _n, formatDateTime, formatNumber, sprintf } from '@invflux/i18n';
 import { Button, Input, Spinner } from '@invflux/ui';
 import { ApiError } from '@invflux/ui/api';
 import { createQuery } from '@tanstack/solid-query';
@@ -55,7 +55,9 @@ type Phase = 'idle' | 'running' | 'done';
  */
 function amount(value: string): string {
   const n = Number(value);
-  return Number.isFinite(n) ? n.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 }) : value;
+  return Number.isFinite(n)
+    ? formatNumber(n, { minimumFractionDigits: 4, maximumFractionDigits: 4 })
+    : value;
 }
 
 /**
@@ -127,7 +129,11 @@ export default function BaseCurrencySection(): JSX.Element {
   /** A rate that cannot be used as entered — not merely half-typed. */
   const rateWrong = (): boolean => '' !== rate().trim() && (!rateUsable() || overflows());
   const ready = (): boolean =>
-    rateUsable() && !overflows() && confirmed() && true === data()?.can_convert && 'running' !== phase();
+    rateUsable() &&
+    !overflows() &&
+    confirmed() &&
+    true === data()?.can_convert &&
+    'running' !== phase();
 
   /**
    * Why the button is disabled, in the merchant's terms — never a disabled control with no account of
@@ -137,14 +143,20 @@ export default function BaseCurrencySection(): JSX.Element {
   const blocker = (): string => {
     if ('' === rate().trim()) return __('Enter your exchange rate above to continue.');
     if (!rateUsable()) return __('The exchange rate must be a number greater than zero.');
-    if (overflows()) return __('Choose a rate that keeps your largest cost within the storable range.');
+    if (overflows())
+      return __('Choose a rate that keeps your largest cost within the storable range.');
     if ('' === confirmation().trim())
-      return sprintf(__('Type the currency code %s in the confirmation box to continue.'), data()?.current ?? '');
+      return sprintf(
+        __('Type the currency code %s in the confirmation box to continue.'),
+        data()?.current ?? '',
+      );
     if (!confirmed())
       // Says what is wrong, not merely that something is — the red field already carries "wrong",
       // and colour must never be the only thing carrying it.
       return sprintf(
-        __('That is not the currency code. Type %s exactly — this box confirms the change, it does not take the rate.'),
+        __(
+          'That is not the currency code. Type %s exactly — this box confirms the change, it does not take the rate.',
+        ),
         data()?.current ?? '',
       );
     return '';
@@ -161,7 +173,9 @@ export default function BaseCurrencySection(): JSX.Element {
       setPhase('done');
       void state.refetch();
     } catch (error) {
-      setFailure(error instanceof ApiError ? error.message : __('The conversion could not be completed.'));
+      setFailure(
+        error instanceof ApiError ? error.message : __('The conversion could not be completed.'),
+      );
       setPhase('idle');
     }
   }
@@ -170,7 +184,13 @@ export default function BaseCurrencySection(): JSX.Element {
     <div class="mx-auto max-w-3xl p-6">
       <h1 class="text-xl font-semibold text-slate-900">{__('Base currency conversion')}</h1>
 
-      <Switch fallback={<div class="mt-8 flex justify-center"><Spinner /></div>}>
+      <Switch
+        fallback={
+          <div class="mt-8 flex justify-center">
+            <Spinner />
+          </div>
+        }
+      >
         {/* Finished — report what happened, and say plainly that the host is still catching up. */}
         <Match when={'done' === phase() && null !== result()}>
           {(() => {
@@ -189,7 +209,10 @@ export default function BaseCurrencySection(): JSX.Element {
                       '%1$d products’ costs were restated from %2$s to %3$s at %4$s.',
                       done.subjects,
                     ),
-                    done.subjects, done.from, done.to, done.rate,
+                    done.subjects,
+                    done.from,
+                    done.to,
+                    done.rate,
                   )}
                 </p>
                 <Show when={done.grounded > 0}>
@@ -200,13 +223,16 @@ export default function BaseCurrencySection(): JSX.Element {
                         '%1$d past stock-adjustment lines were labelled %2$s so their recorded values stay readable. Those are history — they keep their original amounts.',
                         done.grounded,
                       ),
-                      done.grounded, done.from,
+                      done.grounded,
+                      done.from,
                     )}
                   </p>
                 </Show>
                 <p class="mt-2 text-sm text-green-900">
                   {true === data()?.mirrors_cogs
-                    ? __('Goods receipts and cost edits work again immediately. WooCommerce’s own cost fields are being updated in the background and may lag by a few minutes.')
+                    ? __(
+                        'Goods receipts and cost edits work again immediately. WooCommerce’s own cost fields are being updated in the background and may lag by a few minutes.',
+                      )
                     : __('Goods receipts and cost edits work again immediately.')}
                 </p>
               </div>
@@ -218,7 +244,9 @@ export default function BaseCurrencySection(): JSX.Element {
         <Match when={undefined !== data() && false === data()?.drifted}>
           <p class="mt-4 rounded border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
             {sprintf(
-              __('Your stored costs already read in %s, the currency your store runs on. Nothing to convert.'),
+              __(
+                'Your stored costs already read in %s, the currency your store runs on. Nothing to convert.',
+              ),
               data()?.current ?? '',
             )}
           </p>
@@ -228,8 +256,11 @@ export default function BaseCurrencySection(): JSX.Element {
           <p class="mt-3 text-sm text-slate-700">
             {sprintf(
               /* translators: 1: currency stored costs are in, 2: the store's current currency */
-              __('Your store now runs on %2$s, but every cost InvFlux has stored is denominated in %1$s. Until they are restated, goods receipts and cost edits stay blocked — a moving-average cost must never mix two currencies. Converting is one deliberate step, and it cannot be undone automatically.'),
-              data()?.anchor ?? '', data()?.current ?? '',
+              __(
+                'Your store now runs on %2$s, but every cost InvFlux has stored is denominated in %1$s. Until they are restated, goods receipts and cost edits stay blocked — a moving-average cost must never mix two currencies. Converting is one deliberate step, and it cannot be undone automatically.',
+              ),
+              data()?.anchor ?? '',
+              data()?.current ?? '',
             )}
           </p>
 
@@ -243,11 +274,15 @@ export default function BaseCurrencySection(): JSX.Element {
                     '%1$d products’ stored costs will be restated from %2$s to %3$s.',
                     data()?.affected ?? 0,
                   ),
-                  data()?.affected ?? 0, data()?.anchor ?? '', data()?.current ?? '',
+                  data()?.affected ?? 0,
+                  data()?.anchor ?? '',
+                  data()?.current ?? '',
                 )}
               </p>
               <p class="mt-1 text-sm text-slate-500">
-                {__('Orders, shipments, purchase orders and past stock adjustments keep the amounts and currencies they were recorded in. They are history, and are never converted.')}
+                {__(
+                  'Orders, shipments, purchase orders and past stock adjustments keep the amounts and currencies they were recorded in. They are history, and are never converted.',
+                )}
               </p>
             </li>
 
@@ -262,7 +297,11 @@ export default function BaseCurrencySection(): JSX.Element {
                   onInput={(e) => setRate(e.currentTarget.value)}
                   placeholder="0.0000"
                   invalid={rateWrong()}
-                  aria-label={sprintf(__('Exchange rate: how many %1$s one %2$s buys'), data()?.current ?? '', data()?.anchor ?? '')}
+                  aria-label={sprintf(
+                    __('Exchange rate: how many %1$s one %2$s buys'),
+                    data()?.current ?? '',
+                    data()?.anchor ?? '',
+                  )}
                 />
                 <span>{data()?.current ?? ''}</span>
               </label>
@@ -270,16 +309,22 @@ export default function BaseCurrencySection(): JSX.Element {
                 <p class="mt-2 text-sm text-slate-700">
                   {sprintf(
                     /* translators: 1: largest stored cost, 2: old currency, 3: converted amount, 4: new currency */
-                    __('Check the direction: your largest stored cost, %1$s %2$s, becomes %3$s %4$s.'),
-                    amount(data()?.largest_cost ?? '0'), data()?.anchor ?? '',
-                    amount(projected() ?? '0'), data()?.current ?? '',
+                    __(
+                      'Check the direction: your largest stored cost, %1$s %2$s, becomes %3$s %4$s.',
+                    ),
+                    amount(data()?.largest_cost ?? '0'),
+                    data()?.anchor ?? '',
+                    amount(projected() ?? '0'),
+                    data()?.current ?? '',
                   )}
                 </p>
               </Show>
               <Show when={overflows()}>
                 <p class="mt-2 rounded border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900">
                   {sprintf(
-                    __('That rate would take your largest cost past %s, the most InvFlux can store. Check the rate is the right way round, or correct that cost first.'),
+                    __(
+                      'That rate would take your largest cost past %s, the most InvFlux can store. Check the rate is the right way round, or correct that cost first.',
+                    ),
                     amount(data()?.ceiling ?? '0'),
                   )}
                 </p>
@@ -289,14 +334,19 @@ export default function BaseCurrencySection(): JSX.Element {
             <li>
               <h2 class="text-sm font-semibold text-slate-900">{__('3. Confirm')}</h2>
               <label class="mt-2 flex items-center gap-2 text-sm text-slate-700">
-                <span>{sprintf(__('Type the currency code %s to confirm:'), data()?.current ?? '')}</span>
+                <span>
+                  {sprintf(__('Type the currency code %s to confirm:'), data()?.current ?? '')}
+                </span>
                 <Input
                   class="w-24 uppercase"
                   value={confirmation()}
                   onInput={(e) => setConfirmation(e.currentTarget.value)}
                   placeholder={data()?.current ?? ''}
                   invalid={confirmationWrong()}
-                  aria-label={sprintf(__('Type the currency code %s to confirm'), data()?.current ?? '')}
+                  aria-label={sprintf(
+                    __('Type the currency code %s to confirm'),
+                    data()?.current ?? '',
+                  )}
                 />
               </label>
             </li>
@@ -304,12 +354,16 @@ export default function BaseCurrencySection(): JSX.Element {
 
           <Show when={false === data()?.can_convert}>
             <p class="mt-6 rounded border border-slate-300 bg-slate-50 p-3 text-sm text-slate-700">
-              {__('You can see this page but not run the conversion — it restates every stored cost, so it needs permission to change costs. Ask a shop manager.')}
+              {__(
+                'You can see this page but not run the conversion — it restates every stored cost, so it needs permission to change costs. Ask a shop manager.',
+              )}
             </p>
           </Show>
 
           <Show when={'' !== failure()}>
-            <p class="mt-6 rounded border border-red-300 bg-red-50 p-3 text-sm text-red-900">{failure()}</p>
+            <p class="mt-6 rounded border border-red-300 bg-red-50 p-3 text-sm text-red-900">
+              {failure()}
+            </p>
           </Show>
 
           <div class="mt-6 flex items-center gap-3">
@@ -318,7 +372,9 @@ export default function BaseCurrencySection(): JSX.Element {
                 ? __('Converting…')
                 : sprintf(__('Convert stored costs to %s'), data()?.current ?? '')}
             </Button>
-            <Show when={'running' === phase()}><Spinner /></Show>
+            <Show when={'running' === phase()}>
+              <Spinner />
+            </Show>
             <Show when={'' !== blocker() && true === data()?.can_convert}>
               <p class="text-sm text-slate-600">{blocker()}</p>
             </Show>
@@ -336,15 +392,14 @@ export default function BaseCurrencySection(): JSX.Element {
             <For each={[...(data()?.history ?? [])].reverse()}>
               {(entry) => (
                 <li class="flex flex-wrap items-baseline justify-between gap-2 py-2">
-                  <span class="font-mono">{entry.from} → {entry.to}</span>
+                  <span class="font-mono">
+                    {entry.from} → {entry.to}
+                  </span>
                   <span class="font-mono text-slate-600">{entry.rate}</span>
                   <span class="text-slate-600">
-                    {sprintf(
-                      _n('%d product', '%d products', entry.subjects),
-                      entry.subjects,
-                    )}
+                    {sprintf(_n('%d product', '%d products', entry.subjects), entry.subjects)}
                   </span>
-                  <span class="text-slate-500">{new Date(entry.at).toLocaleString()}</span>
+                  <span class="text-slate-500">{formatDateTime(entry.at)}</span>
                 </li>
               )}
             </For>

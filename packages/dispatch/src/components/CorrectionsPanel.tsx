@@ -1,16 +1,9 @@
 import { For, Show, createMemo, createSignal } from 'solid-js';
-import { __, _x } from '@invflux/i18n';
-import { Button, FoldingSection } from '@invflux/ui';
+import { __, _n, _x, sprintf } from '@invflux/i18n';
+import { Button, ErrorBanner, FoldingSection } from '@invflux/ui';
 import { useDispatch } from '../context';
-import {
-  useDeleteCorrectionMutation,
-  useOrderCorrectionsQuery,
-} from '../queries';
-import type {
-  DispatchCorrection,
-  DispatchOrderLine,
-  DispatchOrderSummary,
-} from '../types';
+import { useDeleteCorrectionMutation, useOrderCorrectionsQuery } from '../queries';
+import type { DispatchCorrection, DispatchOrderLine, DispatchOrderSummary } from '../types';
 import { ProcessCorrectionsModal } from './ProcessCorrectionsModal';
 
 /**
@@ -51,47 +44,74 @@ export function CorrectionsPanel(props: {
 
   function canDelete(c: DispatchCorrection): boolean {
     // Withdrawing rides with raising: same capability, own rows only, unprocessed only.
-    return ctx.capabilities.createCorrections
-      && c.createdBy === ctx.currentUser.id
-      && c.processedAt === null;
+    return (
+      ctx.capabilities.createCorrections &&
+      c.createdBy === ctx.currentUser.id &&
+      c.processedAt === null
+    );
   }
 
-  const pendingCount = createMemo(
-    () => corrections().filter((c) => c.processedAt === null).length,
-  );
+  const pendingCount = createMemo(() => corrections().filter((c) => c.processedAt === null).length);
 
   return (
     <>
       <FoldingSection
-        title={__('Corrections')}
+        testId="corrections-panel"
+        // "Corrections (2)" — the count in parentheses after the noun, as every fold heading on
+        // this page states its size. Zero drops the parenthesis; the body already says the section
+        // is empty, and "(0)" makes an absence look like a measurement.
+        title={
+          corrections().length > 0
+            ? sprintf(__('Corrections (%d)'), corrections().length)
+            : __('Corrections')
+        }
+        // The heading carries the state the count already states, so an operator scanning a
+        // collapsed page sees which section is holding work without reading any of them. Derived,
+        // so it goes away the moment the last correction is processed.
+        tone={pendingCount() > 0 ? 'warning' : 'default'}
+        // Only what the count cannot say. How many there are is now in the title; how many still
+        // owe someone an action is a different fact, and the one that earns the amber heading.
         aside={
-          <>
-            {corrections().length} on this order
-            <Show when={pendingCount() > 0}>
-              <span class="ml-2 text-amber-700">· {pendingCount()} pending</span>
-            </Show>
-          </>
+          <Show when={pendingCount() > 0}>
+            <span
+              class="text-amber-700"
+              data-testid="corrections-pending"
+              data-pending-count={pendingCount()}
+            >
+              {sprintf(_n('%d pending', '%d pending', pendingCount()), pendingCount())}
+            </span>
+          </Show>
         }
         actions={
           <>
             {/* Processing issues the refund, so it needs the CS capability, not the floor-ops one. */}
             <Show when={pendingCount() > 0 && ctx.capabilities.processCorrections}>
+              {/* `primary`, not `success`. Emerald is the house "this completed a workflow", and
+                  this button completes nothing — the trailing ellipsis is the honest part: it opens
+                  the review modal, whose OWN confirm is the emerald one. Wearing it here spends the
+                  completion colour twice on one workflow, and the first spend is a promise the
+                  click does not keep.
+
+                  Primary is what it actually is: the dominant action on this surface, and the
+                  thing standing between the order and shipping. That it shares a colour with
+                  "Ship order" is the point rather than a collision — ship is disabled while a
+                  correction is pending, so exactly one blue is live at a time and it is always
+                  the next real step. */}
               <Button
-                variant="success"
+                variant="primary"
                 size="sm"
                 onClick={() => setProcessModalOpen(true)}
                 title={__('Review refund handling, then process all pending corrections.')}
               >
-                Process {pendingCount()} correction{pendingCount() === 1 ? '' : 's'}…
+                {sprintf(
+                  _n('Process %d correction…', 'Process %d corrections…', pendingCount()),
+                  pendingCount(),
+                )}
               </Button>
             </Show>
             <Show when={ctx.capabilities.createCorrections}>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => props.onOpenCorrection(null)}
-              >
-                + Add correction
+              <Button variant="secondary" size="sm" onClick={() => props.onOpenCorrection(null)}>
+                {__('+ Add correction')}
               </Button>
             </Show>
           </>
@@ -113,12 +133,24 @@ export function CorrectionsPanel(props: {
           <table class="w-full border-collapse text-sm">
             <thead>
               <tr class="border-b border-gray-200 bg-gray-50">
-                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">Line</th>
-                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">Type</th>
-                <th class="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wide">Qty</th>
-                <th class="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wide">{_x('Refund', 'corrections table column')}</th>
-                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">{_x('State', 'corrections table column')}</th>
-                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">Note</th>
+                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
+                  {_x('Line', 'corrections table column')}
+                </th>
+                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
+                  {_x('Type', 'corrections table column')}
+                </th>
+                <th class="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wide">
+                  {_x('Qty', 'corrections table column')}
+                </th>
+                <th class="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wide">
+                  {_x('Refund', 'corrections table column')}
+                </th>
+                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
+                  {_x('State', 'corrections table column')}
+                </th>
+                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
+                  {_x('Note', 'corrections table column')}
+                </th>
                 <th class="px-3 py-2" />
               </tr>
             </thead>
@@ -126,11 +158,15 @@ export function CorrectionsPanel(props: {
               <For each={corrections()}>
                 {(c) => {
                   const line = linesById().get(c.lineId);
-                  const lineLabel = line ? line.name : `Line ${c.lineId.slice(0, 8)}…`;
+                  const lineLabel = line
+                    ? line.name
+                    : sprintf(__('Line %s…'), c.lineId.slice(0, 8));
                   // In the batch model, processing IS the refund confirmation
                   // (auto or attested) — there is no post-processing "refund
                   // pending" sub-state. A processed correction is simply Processed.
-                  const stateLabel = c.processedAt ? 'Processed' : 'Pending';
+                  const stateLabel = c.processedAt
+                    ? _x('Processed', 'correction state')
+                    : _x('Pending', 'correction state');
                   const stateClass = c.processedAt
                     ? 'bg-emerald-50 text-emerald-700'
                     : 'bg-amber-50 text-amber-800';
@@ -145,11 +181,15 @@ export function CorrectionsPanel(props: {
                       <td class="px-3 py-2 text-center tabular-nums">{c.qty}</td>
                       <td class="px-3 py-2 text-right tabular-nums">{c.refundAmount}</td>
                       <td class="px-3 py-2">
-                        <span class={`inline-flex items-center px-2 py-0.5 rounded text-xs ${stateClass}`}>
+                        <span
+                          class={`inline-flex items-center px-2 py-0.5 rounded text-xs ${stateClass}`}
+                        >
                           {stateLabel}
                         </span>
                       </td>
-                      <td class="px-3 py-2 text-xs text-gray-500 truncate max-w-[24ch]">{c.note ?? '—'}</td>
+                      <td class="px-3 py-2 text-xs text-gray-500 truncate max-w-[24ch]">
+                        {c.note ?? '—'}
+                      </td>
                       <td class="px-3 py-2 text-right">
                         <Show when={deletable}>
                           <Button
@@ -159,7 +199,7 @@ export function CorrectionsPanel(props: {
                             disabled={isPending}
                             onClick={() => deleteMutation.mutate(c.id)}
                           >
-                            {isPending ? '…' : 'Delete'}
+                            {isPending ? '…' : __('Delete')}
                           </Button>
                         </Show>
                         {/* The legacy "Mark refund done" affordance was removed: in
@@ -177,9 +217,9 @@ export function CorrectionsPanel(props: {
         </Show>
 
         <Show when={deleteMutation.isError}>
-          <div class="px-4 py-2 bg-red-50 text-sm text-red-700">
-            Delete failed: {deleteMutation.error?.message ?? 'Unknown error'}
-          </div>
+          <ErrorBanner as="div" class="px-4 py-2 bg-red-50 text-sm">
+            {sprintf(__('Delete failed: %s'), deleteMutation.error?.message ?? __('Unknown error'))}
+          </ErrorBanner>
         </Show>
       </FoldingSection>
 

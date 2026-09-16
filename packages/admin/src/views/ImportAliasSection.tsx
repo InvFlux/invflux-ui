@@ -41,7 +41,10 @@ const conceptLabel = (concept: string): string => {
  */
 export function ImportAliasSection(props: { context: AdminContext }): JSX.Element {
   const queryClient = useQueryClient();
-  const query = createQuery(() => ({ queryKey: IMPORT_ALIASES_QUERY_KEY, queryFn: () => fetchImportAliases(props.context) }));
+  const query = createQuery(() => ({
+    queryKey: IMPORT_ALIASES_QUERY_KEY,
+    queryFn: () => fetchImportAliases(props.context),
+  }));
 
   // One editable CSV text per concept. Kept as raw text while editing (smooth typing); parsed/normalized
   // only on save so a comma-in-progress isn't reformatted under the cursor.
@@ -61,7 +64,8 @@ export function ImportAliasSection(props: { context: AdminContext }): JSX.Elemen
     if (data && !dirty()) setTexts(textsFrom(data));
   });
 
-  const concepts = (): string[] => Object.keys(texts()).sort((a, b) => conceptLabel(a).localeCompare(conceptLabel(b)));
+  const concepts = (): string[] =>
+    Object.keys(texts()).sort((a, b) => conceptLabel(a).localeCompare(conceptLabel(b)));
 
   const setText = (concept: string, value: string): void => {
     setTexts((prev) => ({ ...prev, [concept]: value }));
@@ -92,14 +96,24 @@ export function ImportAliasSection(props: { context: AdminContext }): JSX.Elemen
     <div>
       <Show
         when={concepts().length > 0}
-        fallback={<p class="text-sm text-text-muted">{__('No custom aliases yet. Use “Remember” while mapping a column during an import to teach one.')}</p>}
+        fallback={
+          <p class="text-sm text-text-muted">
+            {__(
+              'No custom aliases yet. Use “Remember” while mapping a column during an import to teach one.',
+            )}
+          </p>
+        }
       >
-        <p class="mb-3 text-xs text-text-muted">{__('One line per column. Separate alternate header names with commas.')}</p>
+        <p class="mb-3 text-xs text-text-muted">
+          {__('One line per column. Separate alternate header names with commas.')}
+        </p>
         <div class="space-y-2">
           <For each={concepts()}>
             {(concept) => (
               <div class="flex items-start gap-3">
-                <label class="w-44 shrink-0 pt-1.5 text-sm font-medium text-text">{conceptLabel(concept)}</label>
+                <label class="w-44 shrink-0 pt-1.5 text-sm font-medium text-text">
+                  {conceptLabel(concept)}
+                </label>
                 <input
                   type="text"
                   class="min-w-0 flex-1 rounded border border-border bg-surface px-2 py-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
@@ -114,10 +128,7 @@ export function ImportAliasSection(props: { context: AdminContext }): JSX.Elemen
       </Show>
 
       <div class="mt-4 flex items-center gap-3">
-        <Button
-          disabled={!dirty() || saving()}
-          onClick={() => void save()}
-        >
+        <Button disabled={!dirty() || saving()} onClick={() => void save()}>
           {saving() ? __('Saving…') : __('Save aliases')}
         </Button>
         <Show when={dirty()}>

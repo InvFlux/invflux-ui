@@ -52,14 +52,40 @@ export const qk = {
     tags: (): Key => ['dispatch', 'tags'],
     archivedTags: (): Key => ['dispatch', 'tags', 'archived'],
     filterOptions: (kind: string): Key => ['dispatch', 'filter-options', kind],
+    /**
+     * Filter-facet counts for one dimension under one filter state. Keyed by both, because the
+     * counts *are* a function of both — a cache hit across different filters would answer the
+     * operator's question with another question's numbers.
+     */
+    facets: (dimension: string, filterKey?: string): Key =>
+      filterKey === undefined
+        ? ['dispatch', 'facets', dimension]
+        : ['dispatch', 'facets', dimension, filterKey],
   },
 
   procurement: {
     all: ['procurement'] as const,
-    purchaseOrders: (...axes: readonly unknown[]): Key => ['procurement', 'purchase-orders', ...axes],
+    purchaseOrders: (...axes: readonly unknown[]): Key => [
+      'procurement',
+      'purchase-orders',
+      ...axes,
+    ],
     purchaseOrder: (poId: string | number): Key => ['procurement', 'purchase-order', id(poId)],
     suppliers: (): Key => ['procurement', 'suppliers'],
     supplier: (supplierId: string | number): Key => ['procurement', 'suppliers', id(supplierId)],
+  },
+
+  /**
+   * Saved filters, keyed by the surface that owns them.
+   *
+   * A top-level axis rather than a branch of each surface, because saved filters are one mechanism
+   * with one endpoint and the surface is a parameter of it — nesting them under `dispatch` and
+   * `workbench` would mean an invalidation written for "the queue moved" also dropped the queue's
+   * saved views, which no stock or order change can affect.
+   */
+  savedFilters: {
+    all: ['saved-filters'] as const,
+    forSurface: (surface: string): Key => ['saved-filters', surface],
   },
 } as const;
 

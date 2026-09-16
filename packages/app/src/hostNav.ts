@@ -6,8 +6,8 @@ import { type HostNav, wordpressHostNav } from '@invflux/ui';
  * at the shell, so every embedded surface (Workbench, Procurement, Dispatch) and every shared
  * component (the grid's ledger link, supplier pills, FeatureGate) links in-app automatically.
  *
- * Non-SPA pages (upgrade prompts) are still host-rendered pages, so those delegate to the WordPress
- * binding — this app runs inside wp-admin.
+ * Non-SPA pages are still host-rendered pages, so those delegate to the WordPress binding — this app
+ * runs inside wp-admin.
  */
 export const unifiedHostNav: HostNav = {
   routeHref: (route, query) => {

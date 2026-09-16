@@ -23,7 +23,9 @@ export function currencyOptions(ctx: ProcurementContext): GeoOption[] {
 /** State/region options for a country [{value: code, label: name}], or [] when WC has none. */
 export function stateOptions(ctx: ProcurementContext, country: string): GeoOption[] {
   const states = ctx.geo.states[country];
-  return undefined === states ? [] : Object.entries(states).map(([value, label]) => ({ value, label }));
+  return undefined === states
+    ? []
+    : Object.entries(states).map(([value, label]) => ({ value, label }));
 }
 
 /** Display name for a country code (falls back to the code itself). */
@@ -32,7 +34,11 @@ export function countryName(ctx: ProcurementContext, code: string | null): strin
 }
 
 /** Display name for a state code within a country (falls back to the code). */
-export function stateName(ctx: ProcurementContext, country: string | null, code: string | null): string {
+export function stateName(
+  ctx: ProcurementContext,
+  country: string | null,
+  code: string | null,
+): string {
   if (null === code || '' === code) return '';
   const states = null === country || '' === country ? undefined : ctx.geo.states[country];
   return states?.[code] ?? code;

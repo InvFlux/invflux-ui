@@ -41,7 +41,8 @@ export default function WorkbenchSection(): JSX.Element {
    * surface. Writes are inert unless Workbench is the active surface, so a kept-alive (hidden)
    * Workbench can never scribble over another surface's URL.
    */
-  const isActive = (): boolean => 'workbench' === location.pathname.replace(/^\/+/, '').split('/')[0];
+  const isActive = (): boolean =>
+    'workbench' === location.pathname.replace(/^\/+/, '').split('/')[0];
   const urlPort: UrlParamsPort = {
     read: () => new URLSearchParams(location.search),
     replace: (params) => {
@@ -72,10 +73,14 @@ export default function WorkbenchSection(): JSX.Element {
       viewStock: app.capabilities.viewStock ?? false,
       onhandCorrect: app.capabilities.onhandCorrect ?? false,
       editProducts: app.capabilities.editProducts ?? false,
+      // Renaming a column changes what the whole store reads, so it answers to the settings
+      // capability rather than the workbench's own — see WorkbenchColumnLabels server-side.
+      manageSettings: app.capabilities.manageSettings ?? false,
     },
     entitlements: {
       exportStructured: app.entitlements?.exportStructured ?? false,
     },
+    applyConcurrency: app.workbench?.applyConcurrency,
   };
 
   return (

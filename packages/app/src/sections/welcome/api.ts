@@ -17,6 +17,12 @@ export interface OnboardingStatus {
   hpos_enabled: boolean;
   /** Deep link to WooCommerce → Settings → Advanced → Features, where HPOS is turned on. */
   hpos_settings_url: string;
+  /**
+   * Settings whose current value is the host's rather than this merchant's, or one InvFlux has a
+   * specific objection to. Counted, not listed — the screen sends the merchant to the filtered
+   * settings page, which is the only surface that can drive it to zero.
+   */
+  settings_needing_decision: number;
 }
 
 /** One chunk of the keyset-paged adoption (`POST governance/adopt-all`). */

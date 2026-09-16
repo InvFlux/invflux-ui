@@ -1,7 +1,7 @@
 # Merchant-facing help content
 
 Long-form **help articles** shown in the in-app Help surface, authored as Markdown, one file per
-article. This is the *content*; the *system* that indexes, searches, and renders it (the `docsRegistry`
+article. This is the _content_; the _system_ that indexes, searches, and renders it (the `docsRegistry`
 in `@invflux/ui`, the Markdown renderer, the Help SPA section, the build-time codegen that compiles
 these files into typed article objects) is designed in the adapter and **not built yet** — so these
 files are written ahead of it and wired in when it lands.
@@ -30,10 +30,10 @@ Each article carries YAML front matter the codegen maps onto a `DocArticle`. Pro
 
 ```yaml
 ---
-id: workbench-bulk-editing      # stable slug — the #/help/<id> deep-link anchor. Never rename.
+id: workbench-bulk-editing # stable slug — the #/help/<id> deep-link anchor. Never rename.
 title: Bulk-editing products
-category: Workbench             # groups articles in the Help outline
-keywords: [bulk, edit, filter, select column, F2]   # fuzzy-search hints
-related: [workbench-filtering, workbench-editable-cells]   # sibling article ids
+category: Workbench # groups articles in the Help outline
+keywords: [bulk, edit, filter, select column, F2] # fuzzy-search hints
+related: [workbench-filtering, workbench-editable-cells] # sibling article ids
 ---
 ```

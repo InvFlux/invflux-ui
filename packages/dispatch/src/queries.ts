@@ -1,6 +1,19 @@
-import { qk, STOCK_MOVED } from '@invflux/ui/api';
+import {
+  createInvFluxApi,
+  createSavedFilter,
+  deleteSavedFilter,
+  fetchSavedFilters,
+  qk,
+  SAVED_FILTER_SURFACE,
+  STOCK_MOVED,
+  updateSavedFilter,
+  type SavedFilterIndex,
+  type SavedFilterQuery,
+} from '@invflux/ui/api';
 // Subpath, deliberately: the package barrel pulls the whole component tree into this module.
 import { toast } from '@invflux/ui/toast';
+import { __ } from '@invflux/i18n';
+import { usePaneActive } from '@invflux/ui/pane';
 import {
   createInfiniteQuery,
   createMutation,
@@ -15,6 +28,7 @@ import type { Accessor } from 'solid-js';
 import {
   createCorrection,
   deleteCorrection,
+  fetchDispatchFacets,
   fetchDispatchOrders,
   fetchDispatchOrderDetail,
   fetchOrderCorrections,
@@ -26,6 +40,7 @@ import {
   fetchWorksheetFilterOptions,
   capturePayment,
   type CaptureResolution,
+  type ManualPaymentInput,
   processCorrections,
   settleManualRefund,
   searchSkuFilterOptions,
@@ -48,6 +63,7 @@ import {
 import {
   assignOrderTags,
   bulkAssignOrderTags,
+  type BulkAssignResult,
   createTag,
   deleteTag,
   fetchArchivedTags,
@@ -61,7 +77,9 @@ import type {
   CreateCorrectionRequest,
   CreateCorrectionResponse,
   DispatchCorrectionsResponse,
+  DispatchFacetsResponse,
   DispatchOrderDetail,
+  DispatchOrderLine,
   DispatchQueueFilters,
   DispatchQueueResponse,
   GovernanceFlag,
@@ -96,11 +114,20 @@ import type {
  */
 export function useDispatchOrdersQuery(
   filters: Accessor<DispatchQueueFilters>,
+  /**
+   * Off while the surface is serving rows from the replicated working set. The paged query is the
+   * fallback for what the set cannot answer, and running both would spend a request per filter
+   * change to produce rows nothing renders.
+   */
+  enabled: Accessor<boolean> = () => true,
 ): CreateInfiniteQueryResult<InfiniteData<DispatchQueueResponse>, Error> {
   const ctx = useDispatch();
+  const queueCadence = pausedWhenHidden(30_000);
+
   return createInfiniteQuery(() => {
     const { page: _ignoredPage, ...filterKey } = filters();
     return {
+      enabled: enabled(),
       queryKey: qk.dispatch.queue(filterKey),
       initialPageParam: 1,
       queryFn: ({ pageParam }) =>
@@ -110,22 +137,41 @@ export function useDispatchOrdersQuery(
         return fetched < lastPage.total ? lastPage.page + 1 : undefined;
       },
       placeholderData: (previousData) => previousData,
-      refetchInterval: 30_000,
+      refetchInterval: queueCadence,
       refetchIntervalInBackground: false,
       staleTime: 20_000,
     };
   });
 }
 
-/** Single-order detail; refetches on a slower 60s cadence (more bandwidth-heavy). */
+/**
+ * A refetch cadence that pauses when this pane is not the one on screen.
+ *
+ * `refetchIntervalInBackground: false` already stops polling when the *browser* window loses focus.
+ * This is the other half: surfaces stay mounted behind the active tab, so without it a queue nobody
+ * is looking at keeps fetching pages on a 30s tick for as long as the admin page is open.
+ */
+function pausedWhenHidden(ms: number): () => number | false {
+  const paneActive = usePaneActive();
+
+  return () => (paneActive() ? ms : false);
+}
+
+/**
+ * Single-order detail. Kept current by the viewer heartbeat rather than a timer of its own: each beat
+ * carries a revision of what the page shows, and a moved revision invalidates this query (see
+ * `heartbeat.ts`). The slow interval is only a backstop for what the revision does not cover.
+ */
 export function useDispatchOrderDetailQuery(
   hexId: Accessor<string>,
 ): CreateQueryResult<DispatchOrderDetail, Error> {
   const ctx = useDispatch();
+  const cadence = pausedWhenHidden(5 * 60_000);
+
   return createQuery(() => ({
     queryKey: qk.dispatch.orderDetail(hexId()),
     queryFn: () => fetchDispatchOrderDetail(ctx, hexId()),
-    refetchInterval: 60_000,
+    refetchInterval: cadence,
     refetchIntervalInBackground: false,
     staleTime: 30_000,
     enabled: hexId() !== '',
@@ -154,7 +200,12 @@ interface StageLineMutationContext {
  */
 export function useStageLineMutation(
   orderHexId: Accessor<string>,
-): CreateMutationResult<StageLineResponse, StageLineError, StageLineMutationVariables, StageLineMutationContext> {
+): CreateMutationResult<
+  StageLineResponse,
+  StageLineError,
+  StageLineMutationVariables,
+  StageLineMutationContext
+> {
   const ctx = useDispatch();
   const queryClient = useQueryClient();
 
@@ -169,7 +220,10 @@ export function useStageLineMutation(
       await queryClient.cancelQueries({ queryKey });
       const previous = queryClient.getQueryData<DispatchOrderDetail>(queryKey);
       if (previous) {
-        queryClient.setQueryData<DispatchOrderDetail>(queryKey, applyOptimisticStage(previous, variables, ctx.currentUser.id));
+        queryClient.setQueryData<DispatchOrderDetail>(
+          queryKey,
+          applyOptimisticStage(previous, variables, ctx.currentUser.id),
+        );
       }
       return { previous };
     },
@@ -197,7 +251,9 @@ export function useStageLineMutation(
             unprocessedCorrections: response.order.unprocessedCorrections,
             updatedAt: response.order.updatedAt ?? prev.order.updatedAt,
           },
-          lines: prev.lines.map((line) => (line.id === response.line.id ? response.line : line)),
+          lines: prev.lines.map((line) =>
+            line.id === response.line.id ? withStagingFrom(line, response.line) : line,
+          ),
         };
       });
       // Queue cache is keyed on FilterSpec; we don't know which is active, so
@@ -227,6 +283,42 @@ export function useWorksheetFilterOptionsQuery(): CreateQueryResult<FilterOption
 }
 
 /**
+ * Filter-facet counts for the dimension whose control is currently open — nothing while none is.
+ *
+ * **Only for the control being opened.** Counting every dimension on every list render is what
+ * makes faceted UIs slow; one dimension when the operator opens something is affordable and feels
+ * instant. `dimension()` returning null is the closed state, and it disables the query rather than
+ * fetching a discarded answer.
+ *
+ * Counts are an **affordance, not the answer** — the rows are the answer. So this keeps the last
+ * numbers on screen while new ones load (`placeholderData`), never blocks on them, and a failure
+ * leaves the control working with no counts rather than surfacing an error over a filter list.
+ */
+export function useDispatchFacetsQuery(
+  dimension: Accessor<string | null>,
+  filters: Accessor<DispatchQueueFilters>,
+): CreateQueryResult<DispatchFacetsResponse, Error> {
+  const ctx = useDispatch();
+
+  return createQuery(() => {
+    const dim = dimension();
+    const { page: _page, perPage: _perPage, ...filterKey } = filters();
+
+    return {
+      queryKey: qk.dispatch.facets(dim ?? 'none', JSON.stringify(filterKey)),
+      queryFn: ({ signal }) => fetchDispatchFacets(ctx, dim ?? '', filters(), signal),
+      enabled: dim !== null,
+      placeholderData: (previousData) => previousData,
+      // Short, not zero: an operator reopening the same control within a few seconds is looking at
+      // the same store, and re-counting it would be a round trip to redraw identical numbers.
+      staleTime: 15_000,
+      // A count that cannot be had is not worth a retry storm behind a popover.
+      retry: false,
+    };
+  });
+}
+
+/**
  * One-shot SKU search. The `multiselect:async` filter control owns
  * its own debounce/min-char gate; this helper just wraps the
  * server call so a chip can pass it as `loadOptions`.
@@ -240,16 +332,18 @@ export function useSkuSearchLoader(): (query: string) => Promise<FilterOption[]>
 // Corrections — GET/POST/DELETE
 // ---------------------------------------------------------------------------
 
-/** Live list of corrections for one order. */
+/**
+ * Live list of corrections for one order. No interval of its own: the viewer heartbeat's revision
+ * moves whenever a correction is created, deleted or processed, and invalidates this query then.
+ */
 export function useOrderCorrectionsQuery(
   hexId: Accessor<string>,
 ): CreateQueryResult<DispatchCorrectionsResponse, Error> {
   const ctx = useDispatch();
+
   return createQuery(() => ({
     queryKey: qk.dispatch.orderCorrections(hexId()),
     queryFn: () => fetchOrderCorrections(ctx, hexId()),
-    refetchInterval: 60_000,
-    refetchIntervalInBackground: false,
     staleTime: 30_000,
     enabled: hexId() !== '',
   }));
@@ -339,7 +433,10 @@ export function useEditOrderAnnotationMutation(
   const queryClient = useQueryClient();
   return createMutation(() => ({
     mutationFn: (v: NoteSubmit & { threadId: string }) =>
-      editOrderAnnotation(ctx, hexId(), v.threadId, v.body, { addTags: v.addTags, removeTags: v.removeTags }),
+      editOrderAnnotation(ctx, hexId(), v.threadId, v.body, {
+        addTags: v.addTags,
+        removeTags: v.removeTags,
+      }),
     onSuccess: (_r, v) => invalidateAnnotations(queryClient, hexId(), noteTouchedTags(v)),
     onError: (e) => toast.error(e instanceof Error ? e.message : String(e)),
   }));
@@ -359,13 +456,17 @@ export function useDeleteOrderAnnotationMutation(
 
 export function useCreateCorrectionMutation(
   orderHexId: Accessor<string>,
-): CreateMutationResult<CreateCorrectionResponse, CorrectionApiError, CreateCorrectionRequest, unknown> {
+): CreateMutationResult<
+  CreateCorrectionResponse,
+  CorrectionApiError,
+  CreateCorrectionRequest,
+  unknown
+> {
   const ctx = useDispatch();
   const queryClient = useQueryClient();
 
   return createMutation(() => ({
-    mutationFn: (request: CreateCorrectionRequest) =>
-      createCorrection(ctx, orderHexId(), request),
+    mutationFn: (request: CreateCorrectionRequest) => createCorrection(ctx, orderHexId(), request),
     onSuccess: (response) => {
       const correctionsKey = qk.dispatch.orderCorrections(orderHexId());
       // Append the new correction to the cache so the panel re-renders
@@ -406,7 +507,12 @@ export function useCreateCorrectionMutation(
 
 export function useDeleteCorrectionMutation(
   orderHexId: Accessor<string>,
-): CreateMutationResult<void, CorrectionApiError, string, { previous: DispatchCorrectionsResponse | undefined }> {
+): CreateMutationResult<
+  void,
+  CorrectionApiError,
+  string,
+  { previous: DispatchCorrectionsResponse | undefined }
+> {
   const ctx = useDispatch();
   const queryClient = useQueryClient();
 
@@ -450,7 +556,12 @@ export function useDeleteCorrectionMutation(
  */
 export function useProcessCorrectionsMutation(
   orderHexId: Accessor<string>,
-): CreateMutationResult<ProcessCorrectionsResponse, CorrectionApiError, ProcessCorrectionsPayload, unknown> {
+): CreateMutationResult<
+  ProcessCorrectionsResponse,
+  CorrectionApiError,
+  ProcessCorrectionsPayload,
+  unknown
+> {
   const ctx = useDispatch();
   const queryClient = useQueryClient();
 
@@ -505,18 +616,24 @@ export function useSettleManualRefundMutation(
 
 /**
  * Record a manual payment + capture stock (manual gateways). The mutation variable is the
- * optional shortfall resolution (`cancel` | `hold`); omit it for the initial capture
- * attempt. A `{status:'shortfall'}` result is NOT an error — the caller prompts the
+ * payment entered and the optional shortfall resolution; omit the resolution for the initial
+ * capture attempt. A `{status:'shortfall'}` result is NOT an error — the caller prompts the
  * merchant and re-runs with a resolution. Only a fresh capture invalidates the caches.
  */
 export function useCapturePaymentMutation(
   orderHexId: Accessor<string>,
-): CreateMutationResult<CapturePaymentResult, CorrectionApiError, CaptureResolution | undefined, unknown> {
+): CreateMutationResult<
+  CapturePaymentResult,
+  CorrectionApiError,
+  { payment: ManualPaymentInput; resolution?: CaptureResolution },
+  unknown
+> {
   const ctx = useDispatch();
   const queryClient = useQueryClient();
 
   return createMutation(() => ({
-    mutationFn: (resolution: CaptureResolution | undefined) => capturePayment(ctx, orderHexId(), resolution),
+    mutationFn: (vars: { payment: ManualPaymentInput; resolution?: CaptureResolution }) =>
+      capturePayment(ctx, orderHexId(), vars.payment, vars.resolution),
     onSuccess: (result) => {
       if (result.status === 'shortfall') return; // not a terminal change — caller prompts
       void queryClient.invalidateQueries({ queryKey: qk.dispatch.orderDetail(orderHexId()) });
@@ -528,10 +645,32 @@ export function useCapturePaymentMutation(
 
 /**
  * Compute the cache shape immediately after an optimistic stage operation.
- * Updates the targeted line's staged_qty / staged_by / staged_at / staged_source
+ * Updates the targeted line's qty_staged / staged_by / staged_at / staged_source
  * and recomputes stagedCount + status on the order using the same rule the
  * backend will apply on commit.
  */
+/**
+ * Take from a stage response only what the stage endpoint is authoritative for.
+ *
+ * The response is shaped as a whole line, but the endpoint re-reads only the line's own row. What
+ * the detail read joins in — stock concerns and the deficit's operands, the unit price, the shipping
+ * class, product links, the unmanaged flag — arrives as defaults. Swapping the line in whole showed
+ * a line in deficit as clear from the moment it was staged until the next detail refetch. Staging
+ * moves no stock and changes none of those, so the line already held is right about all of them.
+ */
+function withStagingFrom(held: DispatchOrderLine, staged: DispatchOrderLine): DispatchOrderLine {
+  return {
+    ...held,
+    qtyOrdered: staged.qtyOrdered,
+    qtyCorrected: staged.qtyCorrected,
+    qtyShipped: staged.qtyShipped,
+    stagedQty: staged.stagedQty,
+    stagedBy: staged.stagedBy,
+    stagedAt: staged.stagedAt,
+    stagedSource: staged.stagedSource,
+  };
+}
+
 function applyOptimisticStage(
   prev: DispatchOrderDetail,
   variables: StageLineMutationVariables,
@@ -550,7 +689,7 @@ function applyOptimisticStage(
     };
   });
 
-  // stagedCount = lines where staged_qty == qty_ordered - qty_corrected - qty_shipped
+  // stagedCount = lines where qty_staged == qty_ordered - qty_corrected - qty_shipped
   // (matches the backend's COUNT(*) recount; trivially counts fully-corrected
   // lines as "done" too because both sides equal zero).
   const stagedCount = updatedLines.filter(
@@ -564,21 +703,21 @@ function applyOptimisticStage(
     order.unprocessedCorrections === 0 &&
     order.workflowState === 'Active';
   const allShipped = order.lineCount > 0 && order.shippedCount === order.lineCount;
-  const anyWorkDone =
-    stagedCount > 0 || order.shippedCount > 0 || order.unprocessedCorrections > 0;
+  const anyWorkDone = stagedCount > 0 || order.shippedCount > 0 || order.unprocessedCorrections > 0;
   // Mirror `OrderStatusRecomputer::recompute` on the PHP side. Keep
   // the rule shape identical here so the optimistic update doesn't
   // disagree with the server's commit and flicker through a wrong
   // status pill on settle.
-  const newStatus = order.status === 'Cancelled'
-    ? 'Cancelled'
-    : allShipped
-      ? 'Shipped'
-      : isReady
-        ? 'Staged'
-        : anyWorkDone
-          ? 'Started'
-          : 'Untouched';
+  const newStatus =
+    order.status === 'Cancelled'
+      ? 'Cancelled'
+      : allShipped
+        ? 'Shipped'
+        : isReady
+          ? 'Staged'
+          : anyWorkDone
+            ? 'Started'
+            : 'Untouched';
 
   return {
     ...prev,
@@ -602,7 +741,7 @@ interface ShipOrderMutationContext {
 
 /**
  * Essentials-tier Ship mutation. Optimistically flips the cached order to
- * `Shipped` (line `qty_shipped` += `qty_outstanding`, `staged_qty` → 0,
+ * `Shipped` (line `qty_shipped` += `qty_outstanding`, `qty_staged` → 0,
  * counts updated) so the merchant sees the action take effect the
  * instant they confirm the modal; rolls back on error; settles to the
  * server's authoritative header on success and invalidates the queue
@@ -651,6 +790,9 @@ export function useShipOrderMutation(
       }
     },
     onSuccess: (response) => {
+      // The confirmation is a toast rather than text in the ship bar, which now offers the next
+      // order instead — the one thing a packer does after shipping.
+      toast.success(__('Order shipped'));
       const queryKey = qk.dispatch.orderDetail(orderHexId());
       queryClient.setQueryData<DispatchOrderDetail>(queryKey, (prev) => {
         if (!prev) return prev;
@@ -707,7 +849,9 @@ export function useArchivedTagNamesQuery(): CreateQueryResult<ArchivedTagName[],
  * The retired tags in full — only fetched once the merchant opens the retired section, or a name
  * collision opens it for them. `enabled` is what keeps an archive nobody asked for off the wire.
  */
-export function useArchivedTagsQuery(enabled: () => boolean): CreateQueryResult<TagSummary[], Error> {
+export function useArchivedTagsQuery(
+  enabled: () => boolean,
+): CreateQueryResult<TagSummary[], Error> {
   const ctx = useDispatch();
   return createQuery(() => ({
     queryKey: qk.dispatch.archivedTags(),
@@ -812,7 +956,8 @@ export function useOrderTagMutations(orderHexId: Accessor<string>): {
       onSuccess: writeTags,
     })),
     unassign: createMutation(() => ({
-      mutationFn: (v: { tagId: number; note?: string }) => unassignOrderTag(ctx, orderHexId(), v.tagId, v.note),
+      mutationFn: (v: { tagId: number; note?: string }) =>
+        unassignOrderTag(ctx, orderHexId(), v.tagId, v.note),
       onSuccess: writeTags,
     })),
   };
@@ -820,7 +965,7 @@ export function useOrderTagMutations(orderHexId: Accessor<string>): {
 
 /** Bulk-assign tags across a selection of orders; invalidates the queue. */
 export function useBulkAssignTagsMutation(): CreateMutationResult<
-  void,
+  BulkAssignResult,
   Error,
   { orderIds: string[]; tagIds: number[]; note?: string }
 > {
@@ -837,3 +982,76 @@ export function useBulkAssignTagsMutation(): CreateMutationResult<
     onError: (e) => toast.error(e instanceof Error ? e.message : String(e)),
   }));
 }
+
+// ── Saved filters ────────────────────────────────────────────────────────────
+//
+// The queue's named views. The endpoints and the resolution rule are shared (`@invflux/ui/api`);
+// what is dispatch's own is the surface key and the invalidation, which is deliberately narrow:
+// saving a view moves no stock and changes no order, so it touches only its own key.
+
+/** This surface's saved views, with whether the caller may change them. */
+export function useSavedFiltersQuery(): CreateQueryResult<SavedFilterIndex, Error> {
+  const ctx = useDispatch();
+  return createQuery(() => ({
+    queryKey: qk.savedFilters.forSurface(SAVED_FILTER_SURFACE.dispatch),
+    queryFn: ({ signal }) =>
+      fetchSavedFilters(
+        createInvFluxApi({ apiRoot: ctx.apiRoot, nonce: ctx.nonce }),
+        SAVED_FILTER_SURFACE.dispatch,
+        signal,
+      ),
+    staleTime: 5 * 60_000,
+  }));
+}
+
+/**
+ * Create / pin / delete, as one mutation over a discriminated action.
+ *
+ * One mutation rather than three because they share an invalidation and a failure mode, and the
+ * component drives them through one busy flag — three would give three independent in-flight
+ * states for a surface that can only be doing one of them at a time.
+ */
+export function useSavedFilterMutation(): CreateMutationResult<
+  unknown,
+  Error,
+  SavedFilterAction,
+  unknown
+> {
+  const ctx = useDispatch();
+  const queryClient = useQueryClient();
+  return createMutation(() => ({
+    mutationFn: async (action: SavedFilterAction): Promise<unknown> => {
+      const api = createInvFluxApi({ apiRoot: ctx.apiRoot, nonce: ctx.nonce });
+      const surface = SAVED_FILTER_SURFACE.dispatch;
+      if (action.kind === 'create') {
+        return createSavedFilter(api, surface, {
+          name: action.name,
+          query: action.query,
+          colorId: action.colorId,
+        });
+      }
+      if (action.kind === 'pin') {
+        return updateSavedFilter(api, surface, action.id, { pinned: action.pinned });
+      }
+      if (action.kind === 'color') {
+        return updateSavedFilter(api, surface, action.id, { colorId: action.colorId });
+      }
+
+      return deleteSavedFilter(api, surface, action.id);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: qk.savedFilters.forSurface(SAVED_FILTER_SURFACE.dispatch),
+      });
+    },
+    // No toast here: the control surfaces its own failure next to the affordance that caused it,
+    // where the operator is already looking.
+  }));
+}
+
+/** What {@link useSavedFilterMutation} can be asked to do. */
+export type SavedFilterAction =
+  | { kind: 'create'; name: string; query: SavedFilterQuery; colorId: number }
+  | { kind: 'pin'; id: number; pinned: boolean }
+  | { kind: 'color'; id: number; colorId: number }
+  | { kind: 'delete'; id: number };

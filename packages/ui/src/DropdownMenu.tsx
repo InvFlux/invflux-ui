@@ -20,6 +20,12 @@ export interface DropdownMenuItem {
   /** Native tooltip (`title`) — typically explains WHY a `disabled` item is disabled (an unmet
    *  precondition or an upgrade prompt). Shows on hover; disabled items keep pointer events so it does. */
   tooltip?: string;
+  /**
+   * A second, muted line under the label — what choosing this item will *do*, for a menu whose
+   * entries are named things rather than verbs (a saved view's constraints, say). Wraps to at most
+   * two lines; anything longer belongs in a `tooltip`.
+   */
+  description?: string;
   run?: () => void;
   children?: DropdownMenuItem[];
 }
@@ -31,15 +37,15 @@ export interface DropdownMenuProps {
   triggerClass?: string;
   ariaLabel?: string;
   disabled?: boolean;
-  /** Portal target for the panels (the SPA's light-DOM portalRoot — mirrors SearchSelectAsync). */
+  /** Portal target for the panels (the SPA's shared portalRoot — mirrors SearchSelectAsync). */
   mount?: HTMLElement;
 }
 
 const CONTENT =
-  'z-popover min-w-[11rem] rounded border border-border bg-surface py-1 text-sm shadow-xl focus:outline-none';
+  'z-popover min-w-[11rem] max-w-[26rem] rounded border border-border bg-surface py-1 text-sm shadow-xl focus:outline-none';
 
 const ITEM =
-  'flex cursor-pointer select-none items-center gap-2 px-3 py-1.5 text-sm text-text outline-none ' +
+  'group flex cursor-pointer select-none items-center gap-2 px-3 py-1.5 text-sm text-text outline-none ' +
   'data-[highlighted]:bg-primary data-[highlighted]:text-white ' +
   // NB: no `pointer-events-none` on disabled — Kobalte already inerts selection/keyboard-nav via
   // aria-disabled, and keeping pointer events lets the native `title` tooltip surface on hover so a
@@ -47,6 +53,9 @@ const ITEM =
   'data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50';
 
 const SEPARATOR = 'my-1 h-px bg-border';
+
+// The panel widens to its content, so an item carrying a `description` would otherwise drag it
+// across half the screen; capped, the description wraps to the two lines it is clamped to.
 
 /** A leading icon, fixed-width so labels align whether or not siblings have icons. */
 const ICON = 'h-4 w-4 shrink-0';
@@ -70,11 +79,30 @@ export function DropdownMenu(props: DropdownMenuProps): JSX.Element {
               <Show when={item.separatorBefore}>
                 <Menu.Separator class={SEPARATOR} />
               </Show>
-              <Menu.Item class={ITEM} disabled={item.disabled} title={item.tooltip} onSelect={() => item.run?.()}>
+              <Menu.Item
+                class={ITEM}
+                disabled={item.disabled}
+                title={item.tooltip}
+                // The item's own id, for browser checks and E2E: a label is translated and reworded.
+                data-item-id={item.id}
+                onSelect={() => item.run?.()}
+              >
                 <Show when={item.icon}>
                   {(Icon) => <Dynamic component={Icon()} class={ICON} />}
                 </Show>
-                <span class="flex-1 truncate">{item.label}</span>
+                <span class="flex min-w-0 flex-1 flex-col">
+                  <span class="truncate">{item.label}</span>
+                  <Show when={item.description}>
+                    {(description) => (
+                      // Muted through the highlight too: on a highlighted row the item's own text
+                      // colour is inherited, so `text-text-muted` would fight the white and the
+                      // description would drop out at exactly the moment it is being read.
+                      <span class="line-clamp-2 text-2xs text-text-muted data-[highlighted]:text-white/80 group-data-[highlighted]:text-white/80">
+                        {description()}
+                      </span>
+                    )}
+                  </Show>
+                </span>
               </Menu.Item>
             </>
           }
@@ -84,9 +112,7 @@ export function DropdownMenu(props: DropdownMenuProps): JSX.Element {
               <Menu.Separator class={SEPARATOR} />
             </Show>
             <Menu.SubTrigger class={ITEM} disabled={item.disabled} title={item.tooltip}>
-              <Show when={item.icon}>
-                {(Icon) => <Dynamic component={Icon()} class={ICON} />}
-              </Show>
+              <Show when={item.icon}>{(Icon) => <Dynamic component={Icon()} class={ICON} />}</Show>
               <span class="flex-1 truncate">{item.label}</span>
               <span class="text-text-muted" aria-hidden="true">
                 ▸

@@ -47,13 +47,21 @@ describe('gridFiltersToDescriptors', () => {
       { ...supplier, id: 'a', priority: 50 },
       { ...supplier, id: 'c', priority: 10 },
     ];
-    const ids = gridFiltersToDescriptors(metas, () => ({}), () => {}).map((d) => d.id);
+    const ids = gridFiltersToDescriptors(
+      metas,
+      () => ({}),
+      () => {},
+    ).map((d) => d.id);
     expect(ids).toEqual(['c', 'a', 'b']);
   });
 
   it('reflects selection as active + summary and exposes live value/options', () => {
     const values = { supplier: ['7'] };
-    const [d] = gridFiltersToDescriptors([supplier], () => values, () => {});
+    const [d] = gridFiltersToDescriptors(
+      [supplier],
+      () => values,
+      () => {},
+    );
     expect(d.active).toBe(true);
     expect(d.summary).toBe('ACME');
     expect(d.value()).toEqual(['7']);
@@ -61,10 +69,133 @@ describe('gridFiltersToDescriptors', () => {
   });
 
   it('is inactive with an empty summary when nothing is selected', () => {
-    const [d] = gridFiltersToDescriptors([supplier], () => ({}), () => {});
+    const [d] = gridFiltersToDescriptors(
+      [supplier],
+      () => ({}),
+      () => {},
+    );
     expect(d.active).toBe(false);
     expect(d.summary).toBe('');
     expect(d.value()).toEqual([]);
+  });
+
+  // An `emptyMeansAll` filter showing every option marked is showing a DEFAULT, not a choice, and
+  // the descriptor has to say which so the control can render dots and replace on the first click.
+  describe('emptyMeansAll is a default, not a selection', () => {
+    const productType: GridFilterMeta = {
+      ...supplier,
+      id: 'kind',
+      emptyMeansAll: true,
+      options: [
+        { value: 'simple', label: 'Simple' },
+        { value: 'variable', label: 'Variable' },
+      ],
+    };
+
+    it('reports default while empty, showing every option as the value', () => {
+      const [d] = gridFiltersToDescriptors(
+        [productType],
+        () => ({}),
+        () => {},
+      );
+      expect(d.isDefault?.()).toBe(true);
+      expect(d.value()).toEqual(['simple', 'variable']);
+      // A default matching everything hides nothing, so it earns no chip (§2.3).
+      expect(d.active).toBe(false);
+    });
+
+    it('reports deliberate once a value is stored', () => {
+      const [d] = gridFiltersToDescriptors(
+        [productType],
+        () => ({ kind: ['simple'] }),
+        () => {},
+      );
+      expect(d.isDefault?.()).toBe(false);
+      expect(d.active).toBe(true);
+    });
+
+    it('never reports default for a filter whose empty value is simply no filter', () => {
+      const [d] = gridFiltersToDescriptors(
+        [supplier],
+        () => ({}),
+        () => {},
+      );
+      expect(d.isDefault?.()).toBe(false);
+    });
+  });
+
+  // A saved filter has to store what a defaulted filter is constraining, and only the filter knows
+  // its own URL encoding. The bridge answers through the same writer that puts the filter on the
+  // URL, so a bespoke encoding cannot drift between the two.
+  describe('params — what a saved filter stores for this filter', () => {
+    it('uses the repeated-array encoding for an ordinary multiselect', () => {
+      const [d] = gridFiltersToDescriptors(
+        [supplier],
+        () => ({ supplier: ['7', '12'] }),
+        () => {},
+      );
+
+      expect(d.params?.()).toEqual({ 'supplier[]': ['7', '12'] });
+    });
+
+    it('keeps a single value in list shape, because the key says so', () => {
+      const [d] = gridFiltersToDescriptors(
+        [supplier],
+        () => ({ supplier: ['7'] }),
+        () => {},
+      );
+
+      expect(d.params?.()).toEqual({ 'supplier[]': ['7'] });
+    });
+
+    it('uses the bespoke dash-joined encoding for numeric_ids', () => {
+      // Assembled by hand this would have come out as `post_ids[]`, which the surface does not read.
+      const postIds: GridFilterMeta = {
+        ...supplier,
+        id: 'post_ids',
+        type: 'numeric_ids',
+        options: [],
+      };
+      const [d] = gridFiltersToDescriptors(
+        [postIds],
+        () => ({ post_ids: ['1036', '1037'] }),
+        () => {},
+      );
+
+      expect(d.params?.()).toEqual({ post_ids: '1036-1037' });
+    });
+
+    it('reports every option for an emptyMeansAll filter at its default', () => {
+      // The point of the whole exercise: the URL carries nothing here, so without this the saved
+      // filter would store no product-type constraint and re-aim if the default ever narrowed.
+      const productType: GridFilterMeta = {
+        ...supplier,
+        id: 'kind',
+        emptyMeansAll: true,
+        options: [
+          { value: 'simple', label: 'Simple' },
+          { value: 'variable', label: 'Variable' },
+        ],
+      };
+      const [d] = gridFiltersToDescriptors(
+        [productType],
+        () => ({}),
+        () => {},
+      );
+
+      expect(d.isDefault?.()).toBe(true);
+      expect(d.params?.()).toEqual({ 'kind[]': ['simple', 'variable'] });
+    });
+
+    it('is empty when the filter constrains nothing', () => {
+      const [d] = gridFiltersToDescriptors(
+        [supplier],
+        () => ({}),
+        () => {},
+      );
+
+      expect(d.params?.()).toEqual({});
+    });
   });
 
   it('routes onChange and clear through the setter', () => {
@@ -78,30 +209,49 @@ describe('gridFiltersToDescriptors', () => {
 
   it('summarises 3+ selections as first +N and honours an override', () => {
     const many = { supplier: ['7', '12', '99'] };
-    const [d] = gridFiltersToDescriptors([supplier], () => many, () => {});
+    const [d] = gridFiltersToDescriptors(
+      [supplier],
+      () => many,
+      () => {},
+    );
     expect(d.summary).toBe('ACME +2');
 
-    const [custom] = gridFiltersToDescriptors([supplier], () => many, () => {}, {
-      summarize: (vals) => `${vals.length} picked`,
-    });
+    const [custom] = gridFiltersToDescriptors(
+      [supplier],
+      () => many,
+      () => {},
+      {
+        summarize: (vals) => `${vals.length} picked`,
+      },
+    );
     expect(custom.summary).toBe('3 picked');
   });
 
   it('prefers an optionsFor override over the metadata options', () => {
     const override = [{ value: '1', label: 'Live' }];
-    const [d] = gridFiltersToDescriptors([supplier], () => ({}), () => {}, {
-      optionsFor: () => override,
-    });
+    const [d] = gridFiltersToDescriptors(
+      [supplier],
+      () => ({}),
+      () => {},
+      {
+        optionsFor: () => override,
+      },
+    );
     expect(d.options()).toEqual(override);
   });
 });
 
 describe('gridFiltersToDescriptors — modes', () => {
   it('renders no mode toggle and no prefix at the default mode', () => {
-    const [d] = gridFiltersToDescriptors([supplierWithModes], () => ({ supplier: ['7'] }), () => {}, {
-      modifiers: () => ({}),
-      extraFor: () => 'TOGGLE',
-    });
+    const [d] = gridFiltersToDescriptors(
+      [supplierWithModes],
+      () => ({ supplier: ['7'] }),
+      () => {},
+      {
+        modifiers: () => ({}),
+        extraFor: () => 'TOGGLE',
+      },
+    );
     expect(d.summary).toBe('ACME'); // default mode → unprefixed
     expect(d.extra?.()).toBe('TOGGLE'); // toggle still offered (modes present)
   });
@@ -127,14 +277,19 @@ describe('gridFiltersToDescriptors — modes', () => {
   it('exposes the current mode and routes setMode through setModifier', () => {
     const setModifier = vi.fn();
     let captured: { mode: () => string; setMode: (v: string) => void } | undefined;
-    gridFiltersToDescriptors([supplierWithModes], () => ({}), () => {}, {
-      modifiers: () => ({ supplier: { mode: 'all' } }),
-      setModifier,
-      extraFor: (args) => {
-        captured = args;
-        return 'x';
+    gridFiltersToDescriptors(
+      [supplierWithModes],
+      () => ({}),
+      () => {},
+      {
+        modifiers: () => ({ supplier: { mode: 'all' } }),
+        setModifier,
+        extraFor: (args) => {
+          captured = args;
+          return 'x';
+        },
       },
-    }).forEach((d) => d.extra?.());
+    ).forEach((d) => d.extra?.());
 
     expect(captured?.mode()).toBe('all');
     captured?.setMode('none');
@@ -143,7 +298,12 @@ describe('gridFiltersToDescriptors — modes', () => {
 
   it('omits the toggle when the filter declares no modes', () => {
     const plain: GridFilterMeta = { ...supplierWithModes, modes: undefined };
-    const [d] = gridFiltersToDescriptors([plain], () => ({}), () => {}, { extraFor: () => 'x' });
+    const [d] = gridFiltersToDescriptors(
+      [plain],
+      () => ({}),
+      () => {},
+      { extraFor: () => 'x' },
+    );
     expect(d.extra).toBeUndefined();
   });
 });
@@ -368,9 +528,14 @@ describe('gridFiltersToDescriptors — scopes', () => {
   });
 
   it('leaves a filter without scopes untouched', () => {
-    const [d] = gridFiltersToDescriptors([supplier], () => ({ supplier: ['7'] }), () => {}, {
-      modifiers: () => ({}),
-    });
+    const [d] = gridFiltersToDescriptors(
+      [supplier],
+      () => ({ supplier: ['7'] }),
+      () => {},
+      {
+        modifiers: () => ({}),
+      },
+    );
 
     expect(d.summary).toBe('ACME');
     expect(d.extra).toBeUndefined();

@@ -1,8 +1,9 @@
 import { __ } from '@invflux/i18n';
-import { slotRegistry } from '@invflux/ui';
+import { settingControlRegistry, slotRegistry } from '@invflux/ui';
 import { lazy } from 'solid-js';
 import { hasCapability } from '../../capabilities';
 import { surfaceEnabled } from '../../surfaces';
+import { TermsSetControl } from './TermsSetControl';
 
 /**
  * Register the Procurement section (stage c). A `lazy()` chunk loaded on first visit to
@@ -19,5 +20,10 @@ export function registerProcurementSection(): void {
     label: () => __('Procurement'),
     enabled: () => hasCapability('managePurchaseOrders') && surfaceEnabled('procurement'),
     component: lazy(() => import('./ProcurementSection')),
+  });
+  // Eager, unlike the section: the settings screen renders the store's terms choice without ever
+  // visiting Procurement.
+  settingControlRegistry.register('enum:terms-set', 'procurement.terms-set', TermsSetControl, {
+    default: true,
   });
 }

@@ -24,6 +24,8 @@ import {
 export interface PoDetailActionContext extends EntityActionContext {
   /** The PO's stage slug (in_prep/submitted/in_transit/in_reception/…). */
   stage: string;
+  /** Filed out of the working lists — orthogonal to {@link stage}, never folded into it. */
+  archived: boolean;
   /** A mutation is in flight — mutating actions show disabled to prevent a double-fire. */
   busy: boolean;
   /** Line count — an empty PO cancels without a confirm prompt. */
@@ -47,10 +49,13 @@ export interface PoDetailActionContext extends EntityActionContext {
   openInWorkbench: () => void;
   beginCancel: () => void;
   beginArchive: () => void;
+  /** Put a filed-away order back in the lists. No confirm: it is the undo, not the destructive half. */
+  unarchive: () => void;
 }
 
 const SCOPE = 'po.detail';
-const busyReason = (c: PoDetailActionContext): string | undefined => (c.busy ? __('Working…') : undefined);
+const busyReason = (c: PoDetailActionContext): string | undefined =>
+  c.busy ? __('Working…') : undefined;
 
 let registered = false;
 
@@ -86,7 +91,8 @@ export function registerPoDetailActions(): void {
     ...core,
     id: 'download',
     // Named after the document itself once there is one — that is what the operator is reaching for.
-    label: (c) => (null === c.number ? __('Download (.xlsx)') : sprintf(__('Download %s'), c.number)),
+    label: (c) =>
+      null === c.number ? __('Download (.xlsx)') : sprintf(__('Download %s'), c.number),
     icon: DownloadIcon,
     group: 'primary',
     order: 120,
@@ -116,14 +122,20 @@ export function registerPoDetailActions(): void {
     // Same verb as the plain download it supersedes, because it ends in the same act: the operator
     // gets the file. What is added is the number, so that leads.
     label: () => __('Assign number & download'),
-    hint: () => __('Gives this order its permanent purchase order number and downloads it, ready to send to the supplier. The lines stay editable until you mark it as sent.'),
+    hint: () =>
+      __(
+        'Gives this order its permanent purchase order number and downloads it, ready to send to the supplier. The lines stay editable until you mark it as sent.',
+      ),
     icon: TagIcon,
     group: 'primary',
     isAvailable: (c) => 'in_prep' === c.stage && !c.numbered,
     // A draft with rows but nothing orderable on them is refused by the server, so it shows disabled
     // and says what is missing — rather than opening a modal whose only outcome is an error.
     disabledReason: (c) =>
-      busyReason(c) ?? (0 === c.submittableCount ? __('Add at least one line with both a quantity and a price.') : undefined),
+      busyReason(c) ??
+      (0 === c.submittableCount
+        ? __('Add at least one line with both a quantity and a price.')
+        : undefined),
     run: (c) => c.openIssue(),
   });
   reg.register<PoDetailActionContext>(SCOPE, {
@@ -133,7 +145,10 @@ export function registerPoDetailActions(): void {
     // themselves (the download above is the hand-off), so the label promises only the bookkeeping
     // and the hint says outright who does the sending — the icon alone reads as "transmitting".
     label: () => __('Mark as sent'),
-    hint: () => __('Records that you sent this order to the supplier, and locks the lines. InvFlux does not send it for you — download the order to get it to them.'),
+    hint: () =>
+      __(
+        'Records that you sent this order to the supplier, and locks the lines. InvFlux does not send it for you — download the order to get it to them.',
+      ),
     icon: SentIcon,
     group: 'primary',
     // Declines the headline: while a PO is numbered-but-unsent the operator's next act is to fetch the
@@ -143,7 +158,10 @@ export function registerPoDetailActions(): void {
     order: 10,
     isAvailable: (c) => 'in_prep' === c.stage && c.numbered,
     disabledReason: (c) =>
-      busyReason(c) ?? (0 === c.submittableCount ? __('Add at least one line with both a quantity and a price.') : undefined),
+      busyReason(c) ??
+      (0 === c.submittableCount
+        ? __('Add at least one line with both a quantity and a price.')
+        : undefined),
     run: (c) => c.markSent(),
   });
   reg.register<PoDetailActionContext>(SCOPE, {
@@ -186,8 +204,22 @@ export function registerPoDetailActions(): void {
     icon: ArchiveIcon,
     group: 'destructive',
     order: 110,
-    isAvailable: (c) => ['received', 'cancelled'].includes(c.stage),
+    // Any stage, because filing an order away says nothing about how it turned out — it is not a
+    // lifecycle move. Offered only while it is *in* the lists, which is the only time it does
+    // anything.
+    isAvailable: (c) => !c.archived,
     disabledReason: busyReason,
     run: (c) => c.beginArchive(),
+  });
+  reg.register<PoDetailActionContext>(SCOPE, {
+    ...core,
+    id: 'unarchive',
+    label: () => __('Put back in the lists'),
+    icon: ArchiveIcon,
+    group: 'destructive',
+    order: 111,
+    isAvailable: (c) => c.archived,
+    disabledReason: busyReason,
+    run: (c) => c.unarchive(),
   });
 }

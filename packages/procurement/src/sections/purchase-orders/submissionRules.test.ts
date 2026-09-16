@@ -4,7 +4,7 @@ import type { PoLine } from './types';
 
 /** A draft line carrying only the fields the submission rule reads. */
 const line = (over: Partial<PoLine> & { id: number }): PoLine =>
-  ({ requestedQty: 1, unitCost: '10.00', catalogUnitCost: null, ...over }) as PoLine;
+  ({ qtyRequested: 1, unitCost: '10.00', catalogUnitCost: null, ...over }) as PoLine;
 
 describe('effectiveCost', () => {
   it('prefers the line override, falls back to the catalogue price, else null', () => {
@@ -22,15 +22,19 @@ describe('effectiveCost', () => {
 
 describe('pruneReason', () => {
   it('survives only with both a positive quantity and a positive effective price', () => {
-    expect(pruneReason(line({ id: 1, requestedQty: 3, unitCost: '2.00' }))).toBeNull();
-    expect(pruneReason(line({ id: 2, requestedQty: 3, unitCost: null, catalogUnitCost: '2.00' }))).toBeNull();
+    expect(pruneReason(line({ id: 1, qtyRequested: 3, unitCost: '2.00' }))).toBeNull();
+    expect(
+      pruneReason(line({ id: 2, qtyRequested: 3, unitCost: null, catalogUnitCost: '2.00' })),
+    ).toBeNull();
   });
 
   it('reports a missing quantity before a missing price, matching the server', () => {
-    expect(pruneReason(line({ id: 3, requestedQty: 0 }))).toBe('zero_qty');
-    expect(pruneReason(line({ id: 4, requestedQty: -2 }))).toBe('zero_qty');
+    expect(pruneReason(line({ id: 3, qtyRequested: 0 }))).toBe('zero_qty');
+    expect(pruneReason(line({ id: 4, qtyRequested: -2 }))).toBe('zero_qty');
     // Lacking both: the server's `zeroQty ? 'zero_qty' : 'no_price'` reports the quantity.
-    expect(pruneReason(line({ id: 5, requestedQty: 0, unitCost: null, catalogUnitCost: null }))).toBe('zero_qty');
+    expect(
+      pruneReason(line({ id: 5, qtyRequested: 0, unitCost: null, catalogUnitCost: null })),
+    ).toBe('zero_qty');
   });
 
   it('prunes a priceless or non-positively-priced line', () => {
@@ -43,18 +47,18 @@ describe('pruneReason', () => {
 describe('submittableLines', () => {
   it('keeps the orderable lines and drops the rest', () => {
     const lines = [
-      line({ id: 1, requestedQty: 2, unitCost: '5.00' }),
-      line({ id: 2, requestedQty: 0, unitCost: '5.00' }),
-      line({ id: 3, requestedQty: 4, unitCost: null, catalogUnitCost: null }),
-      line({ id: 4, requestedQty: 1, unitCost: null, catalogUnitCost: '7.25' }),
+      line({ id: 1, qtyRequested: 2, unitCost: '5.00' }),
+      line({ id: 2, qtyRequested: 0, unitCost: '5.00' }),
+      line({ id: 3, qtyRequested: 4, unitCost: null, catalogUnitCost: null }),
+      line({ id: 4, qtyRequested: 1, unitCost: null, catalogUnitCost: '7.25' }),
     ];
     expect(submittableLines(lines).map((l) => l.id)).toEqual([1, 4]);
   });
 
   it('is empty for a draft whose rows all fail — the case that must disable the headline action', () => {
     const lines = [
-      line({ id: 1, requestedQty: 0, unitCost: '5.00' }),
-      line({ id: 2, requestedQty: 3, unitCost: null, catalogUnitCost: null }),
+      line({ id: 1, qtyRequested: 0, unitCost: '5.00' }),
+      line({ id: 2, qtyRequested: 3, unitCost: null, catalogUnitCost: null }),
     ];
     expect(submittableLines(lines)).toHaveLength(0);
   });

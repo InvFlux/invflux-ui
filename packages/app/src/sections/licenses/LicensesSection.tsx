@@ -2,7 +2,16 @@ import { __, formatDate, sprintf } from '@invflux/i18n';
 import { Button, ConfirmModal, buttonClass, toast } from '@invflux/ui';
 import { A } from '@solidjs/router';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
-import { createEffect, createMemo, createSignal, For, type JSX, onCleanup, onMount, Show } from 'solid-js';
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  type JSX,
+  onCleanup,
+  onMount,
+  Show,
+} from 'solid-js';
 import { useApp } from '../../context';
 import { ESSENTIALS_WELCOME, welcomePage, welcomePath } from '../../welcomeCatalog';
 import { ApiError, createLicensesApi } from './api';
@@ -44,7 +53,9 @@ function stateMeta(state: string): { label: string; class: string } {
 function StatePill(props: { state: string }): JSX.Element {
   const meta = (): { label: string; class: string } => stateMeta(props.state);
   return (
-    <span class={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${meta().class}`}>
+    <span
+      class={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${meta().class}`}
+    >
       {meta().label}
     </span>
   );
@@ -210,9 +221,13 @@ export default function LicensesSection(): JSX.Element {
       setCheckoutUrl(res.checkout_url);
       const win = window.open(res.checkout_url, '_blank', 'noopener,noreferrer');
       if (win === null) {
-        toast.warning(__('Your browser blocked the checkout window — use the “Open checkout” link below.'));
+        toast.warning(
+          __('Your browser blocked the checkout window — use the “Open checkout” link below.'),
+        );
       } else {
-        toast.info(__('Complete your purchase in the new tab. We’ll refresh this page when you return.'));
+        toast.info(
+          __('Complete your purchase in the new tab. We’ll refresh this page when you return.'),
+        );
       }
     },
     onError: (err: unknown) => toast.error(checkoutErrorMessage(err)),
@@ -221,7 +236,9 @@ export default function LicensesSection(): JSX.Element {
   const cancel = createMutation(() => ({
     mutationFn: (key: string) => api.cancelSubscription(key),
     onSuccess: () => {
-      toast.success(__('Cancellation requested. You keep your features until the end of the paid period.'));
+      toast.success(
+        __('Cancellation requested. You keep your features until the end of the paid period.'),
+      );
       void queryClient.invalidateQueries({ queryKey: ['account'] });
     },
     onError: (err: unknown) => toast.error(cancelErrorMessage(err)),
@@ -252,7 +269,9 @@ export default function LicensesSection(): JSX.Element {
       if (res.account_status === 'verification_required') {
         setAwaitingEmail(res.pending_email ?? null);
         setOutcome('awaiting_confirmation');
-        toast.info(__('Almost there — open the link we just emailed you to finish linking this site.'));
+        toast.info(
+          __('Almost there — open the link we just emailed you to finish linking this site.'),
+        );
 
         return;
       }
@@ -409,9 +428,10 @@ export default function LicensesSection(): JSX.Element {
    * Worth stating anyway, because otherwise the page silently contradicts itself — Pro is running
    * and "Your licenses" does not list it. Stated as a fact, not a warning.
    */
-  const seatOnAnotherAccount = createMemo(
-    (): SiteSeat | null =>
-      account.isSuccess && account.data !== undefined && thisSeat() === null ? currentSiteSeat() : null,
+  const seatOnAnotherAccount = createMemo((): SiteSeat | null =>
+    account.isSuccess && account.data !== undefined && thisSeat() === null
+      ? currentSiteSeat()
+      : null,
   );
 
   /**
@@ -426,12 +446,12 @@ export default function LicensesSection(): JSX.Element {
    */
   const seatOrphaned = createMemo(
     (): boolean =>
-      site.data?.registered === true
-      && account.isSuccess
-      && account.data !== undefined
-      && siteSeats.isSuccess
-      && currentSiteSeat() === null
-      && thisSeat() === null,
+      site.data?.registered === true &&
+      account.isSuccess &&
+      account.data !== undefined &&
+      siteSeats.isSuccess &&
+      currentSiteSeat() === null &&
+      thisSeat() === null,
   );
 
   // The install-state of each entitled downloadable plugin (`pro` + any add-on slug). Returns an
@@ -600,7 +620,9 @@ export default function LicensesSection(): JSX.Element {
           exists but isn't bought — because they are the same products in three states, and the gap
           between them is exactly what a merchant comes to this page to close. */}
       <section>
-        <h2 class="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">{__('Catalog')}</h2>
+        <h2 class="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
+          {__('Catalog')}
+        </h2>
         <p class="mb-3 text-sm text-slate-500">
           {__('Every InvFlux product, what it costs, and where each one stands on this site.')}
         </p>
@@ -658,7 +680,12 @@ export default function LicensesSection(): JSX.Element {
         <Show when={checkoutUrl()}>
           {(url) => (
             <p class="mt-3 text-sm">
-              <a href={url()} target="_blank" rel="noopener noreferrer" class="text-primary hover:underline">
+              <a
+                href={url()}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-primary hover:underline"
+              >
                 {__('Open checkout')}
               </a>
             </p>
@@ -704,7 +731,9 @@ export default function LicensesSection(): JSX.Element {
                     giving up your own takes effect immediately and locally. */}
                 <Show
                   when={seat().is_current}
-                  fallback={__('Nothing changes on this site — it is not the licence this install uses.')}
+                  fallback={__(
+                    'Nothing changes on this site — it is not the licence this install uses.',
+                  )}
                 >
                   {__(
                     'This is the licence this install uses, so it becomes un-registered straight away. It will keep checking for a licence, so you can register or activate another one here whenever you like — to stop the daily check as well, use “Un-register this site”.',
@@ -811,7 +840,9 @@ function RegisterCard(props: {
     <section class="mb-6 rounded border border-primary/30 bg-primary/5 p-4">
       {/* Named, not generic: "your free licence" reads as a formality, while the product's own name
           is the thing the merchant already knows they are running. */}
-      <h2 class="text-base font-semibold text-slate-900">{__('Register your free Essentials licence')}</h2>
+      <h2 class="text-base font-semibold text-slate-900">
+        {__('Register your free Essentials licence')}
+      </h2>
       <p class="mt-1 text-sm text-slate-600">
         {__(
           'Free and permanent. It links this site to an account, which is what a licence — free or paid — is held against.',
@@ -833,7 +864,7 @@ function RegisterCard(props: {
           type="email"
           required
           autocomplete="email"
-          class="min-w-0 flex-1 rounded border border-slate-300 bg-white px-3 py-1.5 text-sm"
+          class="min-w-0 flex-1 rounded border border-slate-300 bg-surface px-3 py-1.5 text-sm"
           placeholder={__('you@example.com')}
           value={email()}
           onInput={(e) => setEmail(e.currentTarget.value)}
@@ -858,7 +889,12 @@ function RegisterCard(props: {
         {__(
           'Pressing Register sends your email address, this site’s address and the plugin version to the InvFlux licensing service. After that it checks your licence status once a day, sending the site address and whether WordPress reports this site as debug or staging. Your products, stock and orders are never sent.',
         )}{' '}
-        <a href={PRIVACY_URL} target="_blank" rel="noopener noreferrer" class="text-primary underline">
+        <a
+          href={PRIVACY_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          class="text-primary underline"
+        >
           {__('Privacy policy')}
         </a>
       </p>
@@ -903,7 +939,9 @@ function ThisSitePanel(props: {
 }): JSX.Element {
   return (
     <section class="mb-6 rounded border border-slate-200 bg-slate-50/60 p-4">
-      <h2 class="mb-1 text-sm font-semibold uppercase tracking-wide text-slate-500">{__('This site')}</h2>
+      <h2 class="mb-1 text-sm font-semibold uppercase tracking-wide text-slate-500">
+        {__('This site')}
+      </h2>
 
       <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span class="font-medium text-slate-900">{props.site.site_url}</span>
@@ -985,7 +1023,9 @@ function ThisSitePanel(props: {
           <p class="mt-2 text-sm text-slate-600">
             {sprintf(
               /* translators: 1: product name, 2: the account email holding that licence. */
-              __('This site runs %1$s on a licence held by %2$s — a different account from the one signed in here. That is fine: what runs on a site comes from the licence it is activated on, while this page shows the account the site registered with.'),
+              __(
+                'This site runs %1$s on a licence held by %2$s — a different account from the one signed in here. That is fine: what runs on a site comes from the licence it is activated on, while this page shows the account the site registered with.',
+              ),
               seat().name,
               seat().email,
             )}
@@ -1013,7 +1053,9 @@ function ThisSitePanel(props: {
                     <span class="font-mono text-xs text-text-muted">{seat.license_key}</span>{' '}
                     <span class="text-slate-600">{seat.email}</span>
                     <Show when={seat.is_current}>
-                      <span class="ml-1 text-xs font-medium text-slate-500">{__('(this install)')}</span>
+                      <span class="ml-1 text-xs font-medium text-slate-500">
+                        {__('(this install)')}
+                      </span>
                     </Show>
                     <Show when={seat.paid}>
                       <span class="ml-1 text-xs font-medium text-amber-700">{__('(paid)')}</span>
@@ -1092,7 +1134,9 @@ function AwaitingConfirmationCard(props: {
 }): JSX.Element {
   return (
     <section class="mb-6 rounded border border-amber-300 bg-amber-50 p-4">
-      <h2 class="text-base font-semibold text-slate-900">{__('One more step: confirm your email')}</h2>
+      <h2 class="text-base font-semibold text-slate-900">
+        {__('One more step: confirm your email')}
+      </h2>
 
       <p class="mt-1 text-sm text-slate-700">
         <Show
@@ -1116,7 +1160,9 @@ function AwaitingConfirmationCard(props: {
       {/* Said plainly, because the panel is amber and reads as a problem otherwise — and a merchant
           who thinks their stock control is on hold will go looking for a way to undo something. */}
       <p class="mt-1 text-sm text-slate-600">
-        {__('Nothing is on hold in the meantime — every feature this site is licensed for keeps working.')}
+        {__(
+          'Nothing is on hold in the meantime — every feature this site is licensed for keeps working.',
+        )}
       </p>
 
       <div class="mt-3 flex flex-wrap items-center gap-3">
@@ -1191,7 +1237,9 @@ function LicenseCard(props: {
         <Show when={l().awaiting_first_payment}>
           <span
             class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800"
-            title={__('Your payment has been requested and is not confirmed yet. Everything works in the meantime.')}
+            title={__(
+              'Your payment has been requested and is not confirmed yet. Everything works in the meantime.',
+            )}
           >
             {__('Payment pending')}
           </span>
@@ -1251,7 +1299,12 @@ function LicenseCard(props: {
                     <span class="ml-1 text-xs font-medium text-slate-500">{__('(this site)')}</span>
                   </Show>
                 </span>
-                <Button variant="quiet" size="xs" class="shrink-0" onClick={() => props.onFreeSeat(seat)}>
+                <Button
+                  variant="quiet"
+                  size="xs"
+                  class="shrink-0"
+                  onClick={() => props.onFreeSeat(seat)}
+                >
                   {__('Release seat')}
                 </Button>
               </li>
@@ -1383,7 +1436,7 @@ function CatalogCard(props: {
     actions().length > 0 || null !== welcomeSlug() || buyable() || announced();
 
   return (
-    <div class="flex flex-col rounded border border-slate-200 p-4">
+    <div class="flex flex-col rounded border bg-surface border-slate-200 p-4">
       <div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <span class="font-semibold text-slate-900">{sku().name}</span>
         <Show when={showPrice()}>
@@ -1426,7 +1479,9 @@ function CatalogCard(props: {
         </div>
       </Show>
 
-      <Show when={sku().tagline}>{(tagline) => <p class="mt-1 text-sm text-slate-500">{tagline()}</p>}</Show>
+      <Show when={sku().tagline}>
+        {(tagline) => <p class="mt-1 text-sm text-slate-500">{tagline()}</p>}
+      </Show>
 
       <Show when={versionLine() !== ''}>
         <p class="mt-1 text-sm text-slate-500">{versionLine()}</p>

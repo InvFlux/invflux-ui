@@ -12,18 +12,25 @@ import type { PoLine, VarianceStatus } from '../sections/purchase-orders/types';
 export type VarianceLens = 'ordered' | 'expected';
 
 /** Pure classifier — mirror of core VarianceStatus::classify(). */
-export function classifyVariance(baseline: number, actual: number, finalized: boolean): VarianceStatus {
+export function classifyVariance(
+  baseline: number,
+  actual: number,
+  finalized: boolean,
+): VarianceStatus {
   if (actual > baseline) return 'over';
   if (actual < baseline) return finalized ? 'short' : 'open';
   return 'match';
 }
 
 /** The fields any variance helper needs off a line — a structural subset of {@link PoLine}. */
-export type VarianceLineInput = Pick<PoLine, 'requestedQty' | 'expectedQty' | 'qtyReceived' | 'qtyOpen'>;
+export type VarianceLineInput = Pick<
+  PoLine,
+  'qtyRequested' | 'qtyExpected' | 'qtyReceived' | 'qtyOpen'
+>;
 
 /** Baseline quantity for a lens: Ordered = requested, Expected = confirmed (falls back to ordered). */
 export function baselineQty(line: VarianceLineInput, lens: VarianceLens): number {
-  return 'ordered' === lens ? line.requestedQty : (line.expectedQty ?? line.requestedQty);
+  return 'ordered' === lens ? line.qtyRequested : (line.qtyExpected ?? line.qtyRequested);
 }
 
 /** Signed delivery variance (received − baseline) under a lens. */
@@ -38,10 +45,10 @@ export function deliveryStatus(line: VarianceLineInput, lens: VarianceLens): Var
 
 /** Signed confirmation variance: supplier-confirmed (expected) − ordered. 0 until an OA/ASN is recorded. */
 export function confirmationVarianceQty(line: VarianceLineInput): number {
-  return (line.expectedQty ?? line.requestedQty) - line.requestedQty;
+  return (line.qtyExpected ?? line.qtyRequested) - line.qtyRequested;
 }
 
 /** Confirmation status (confirmed vs ordered); non-progressive, so always finalized (never Open). */
 export function confirmationStatus(line: VarianceLineInput): VarianceStatus {
-  return classifyVariance(line.requestedQty, line.expectedQty ?? line.requestedQty, true);
+  return classifyVariance(line.qtyRequested, line.qtyExpected ?? line.qtyRequested, true);
 }

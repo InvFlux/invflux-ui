@@ -27,7 +27,10 @@ function Step(props: {
   'data-testid'?: string;
 }): JSX.Element {
   return (
-    <li class="flex gap-4 border-b border-slate-200 py-6 last:border-b-0" data-testid={props['data-testid']}>
+    <li
+      class="flex gap-4 border-b border-slate-200 py-6 last:border-b-0"
+      data-testid={props['data-testid']}
+    >
       <span
         class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold"
         classList={{
@@ -96,6 +99,9 @@ export default function WelcomeSection(props: WelcomeProps): JSX.Element {
 
   const total = (): number => status.data?.adoptable ?? 0;
   const hposOn = (): boolean => true === status.data?.hpos_enabled;
+  /** Settings still wanting a decision — see the settings step. Absent while the read is in flight,
+   *  which reads as "nothing outstanding" only after the data lands, never during. */
+  const decisions = (): number => status.data?.settings_needing_decision ?? 0;
   /**
    * Nothing left to adopt — for one of two opposite reasons, which must not be conflated.
    *
@@ -104,7 +110,8 @@ export default function WelcomeSection(props: WelcomeProps): JSX.Element {
    * true tells a merchant their catalogue is empty right after they handed all of it over.
    */
   const nothingToAdopt = (): boolean => undefined !== status.data && 0 === total();
-  const nothingManaged = (): boolean => undefined !== status.data && 0 === (status.data.managed ?? 0);
+  const nothingManaged = (): boolean =>
+    undefined !== status.data && 0 === (status.data.managed ?? 0);
   /**
    * The offer was already settled — by another tab, an earlier visit, or a run this page reloaded
    * away from.
@@ -191,13 +198,12 @@ export default function WelcomeSection(props: WelcomeProps): JSX.Element {
                     )}
                   </p>
                   <p class="text-slate-600">
-                    {__('Turn it on under WooCommerce → Settings → Advanced → Features, then check again.')}
+                    {__(
+                      'Turn it on under WooCommerce → Settings → Advanced → Features, then check again.',
+                    )}
                   </p>
                   <div class="flex flex-wrap items-center gap-2">
-                    <a
-                      class="text-primary underline"
-                      href={status.data?.hpos_settings_url ?? '#'}
-                    >
+                    <a class="text-primary underline" href={status.data?.hpos_settings_url ?? '#'}>
                       {__('Open WooCommerce settings')}
                     </a>
                     <Button
@@ -309,7 +315,11 @@ export default function WelcomeSection(props: WelcomeProps): JSX.Element {
                 >
                   {sprintf(
                     /* translators: %d: number of products still eligible for adoption. */
-                    _n('Adopt the %d remaining product', 'Adopt the %d remaining products', total()),
+                    _n(
+                      'Adopt the %d remaining product',
+                      'Adopt the %d remaining products',
+                      total(),
+                    ),
                     total(),
                   )}
                 </Button>
@@ -329,11 +339,15 @@ export default function WelcomeSection(props: WelcomeProps): JSX.Element {
                 </p>
                 <Show when={'failed' === phase()}>
                   <p class="text-red-700" role="alert">
-                    {__('Something went wrong. Nothing was lost — adopting again picks up where it stopped.')}
+                    {__(
+                      'Something went wrong. Nothing was lost — adopting again picks up where it stopped.',
+                    )}
                   </p>
                 </Show>
                 <p class="text-slate-600">
-                  {__('This is reversible: a product can be handed back to WooCommerce at any time.')}
+                  {__(
+                    'This is reversible: a product can be handed back to WooCommerce at any time.',
+                  )}
                 </p>
                 {/* Said here rather than only in Settings: this is the one moment the merchant is
                     deciding to hand stock over, so it is the moment the trade-off is worth knowing.
@@ -347,14 +361,22 @@ export default function WelcomeSection(props: WelcomeProps): JSX.Element {
                     runs against is fr_FR — a text locator would assert the copy, not the behaviour,
                     and would break on any rewording. */}
                 <div class="flex flex-wrap items-center gap-2">
-                  <Button data-testid="first-run-adopt" disabled={!hposOn()} onClick={() => void adoptAll()}>
+                  <Button
+                    data-testid="first-run-adopt"
+                    disabled={!hposOn()}
+                    onClick={() => void adoptAll()}
+                  >
                     {sprintf(
                       /* translators: %d: number of products to adopt. */
                       _n('Adopt %d product', 'Adopt %d products', total()),
                       total(),
                     )}
                   </Button>
-                  <Button data-testid="first-run-decline" variant="secondary" onClick={() => void decline()}>
+                  <Button
+                    data-testid="first-run-decline"
+                    variant="secondary"
+                    onClick={() => void decline()}
+                  >
                     {__('Not now')}
                   </Button>
                 </div>
@@ -365,8 +387,47 @@ export default function WelcomeSection(props: WelcomeProps): JSX.Element {
             </Switch>
           </Step>
 
-          {/* ── 3. Land somewhere useful ────────────────────────────────────────────────── */}
-          <Step n={3} title={__('Start working')}>
+          {/* ── 3. Settings the merchant, not the host, should be answering ─────────────── */}
+          <Step
+            n={3}
+            data-testid={`first-run-step3-${decisions() > 0 ? 'outstanding' : 'settled'}`}
+            title={__('Settings that need a decision')}
+            done={0 === decisions()}
+          >
+            <Show
+              when={decisions() > 0}
+              fallback={
+                <p>
+                  {__(
+                    'Nothing outstanding — every setting InvFlux would have asked you about has an answer.',
+                  )}
+                </p>
+              }
+            >
+              <p>
+                {sprintf(
+                  /* translators: %d: number of settings still needing a decision. */
+                  _n(
+                    '%d setting still needs a decision: it has either not been answered yet, or is set to something InvFlux would advise against.',
+                    '%d settings still need a decision: each has either not been answered yet, or is set to something InvFlux would advise against.',
+                    decisions(),
+                  ),
+                  decisions(),
+                )}
+              </p>
+              {/* Deep-links to the filtered list rather than the settings page at large: the count
+                  above is only honest if the surface it opens contains exactly what it counted. */}
+              <Button
+                data-testid="first-run-decisions"
+                onClick={() => navigate('/settings?decisions=1')}
+              >
+                {__('Review those settings')}
+              </Button>
+            </Show>
+          </Step>
+
+          {/* ── 4. Land somewhere useful ────────────────────────────────────────────────── */}
+          <Step n={4} title={__('Start working')}>
             <p>
               {__(
                 'The workbench is your catalogue at a glance: what each product has on hand, what is promised to orders, and what is running low.',

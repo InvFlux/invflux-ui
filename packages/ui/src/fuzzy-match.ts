@@ -142,7 +142,11 @@ const NONE: [number, number, number] = [0xff, 0xcc, 0xdd]; // pink — no match
 const PARTIAL: [number, number, number] = [0xff, 0xee, 0xcc]; // amber — partial
 const EXACT: [number, number, number] = [0xcd, 0xed, 0xe2]; // green — strong match
 
-const lerp = (a: [number, number, number], b: [number, number, number], t: number): [number, number, number] => [
+const lerp = (
+  a: [number, number, number],
+  b: [number, number, number],
+  t: number,
+): [number, number, number] => [
   Math.round(a[0] + (b[0] - a[0]) * t),
   Math.round(a[1] + (b[1] - a[1]) * t),
   Math.round(a[2] + (b[2] - a[2]) * t),

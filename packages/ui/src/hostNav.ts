@@ -42,7 +42,9 @@ export const HostNavCtx = createContext<HostNav>();
 export const useHostNav = (): HostNav => {
   const nav = useContext(HostNavCtx);
   if (undefined === nav) {
-    throw new Error('No HostNav in context: wrap the mount in <HostNavCtx.Provider> for this host.');
+    throw new Error(
+      'No HostNav in context: wrap the mount in <HostNavCtx.Provider> for this host.',
+    );
   }
   return nav;
 };

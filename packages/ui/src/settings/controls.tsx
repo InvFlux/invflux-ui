@@ -8,6 +8,7 @@ import { Select } from '../Select';
 import { Textarea } from '../Textarea';
 import type { SettingControlProps } from './registry';
 import { settingControlRegistry } from './registry';
+import { ErrorBanner } from '../ErrorBanner';
 
 /**
  * Built-in settings controls, keyed by datatype slug, registered into
@@ -26,6 +27,8 @@ function asText(value: unknown): string {
 function BoolControl(props: SettingControlProps): JSX.Element {
   return (
     <Checkbox
+      id={props.controlId}
+      aria-describedby={props.describedBy}
       checked={props.value === true}
       disabled={props.disabled}
       onChange={(e) => props.onChange(e.currentTarget.checked)}
@@ -38,13 +41,20 @@ function NumberControl(props: SettingControlProps): JSX.Element {
     typeof props.definition.config.min === 'number' ? props.definition.config.min : undefined;
   const max = (): number | undefined =>
     typeof props.definition.config.max === 'number' ? props.definition.config.max : undefined;
+  // Without it the browser's step is 1, and it marks a decimal setting (an amount, a percentage)
+  // invalid even though the value saves correctly.
+  const step = (): number | undefined =>
+    typeof props.definition.config.step === 'number' ? props.definition.config.step : undefined;
 
   return (
     <Input
+      id={props.controlId}
+      aria-describedby={props.describedBy}
       type="number"
       class={FIELD}
       min={min()}
       max={max()}
+      step={step()}
       value={asText(props.value)}
       disabled={props.disabled}
       onInput={(e) => {
@@ -58,6 +68,8 @@ function NumberControl(props: SettingControlProps): JSX.Element {
 function TextControl(props: SettingControlProps): JSX.Element {
   return (
     <Input
+      id={props.controlId}
+      aria-describedby={props.describedBy}
       type="text"
       class={FIELD}
       value={asText(props.value)}
@@ -70,6 +82,8 @@ function TextControl(props: SettingControlProps): JSX.Element {
 function TextLongControl(props: SettingControlProps): JSX.Element {
   return (
     <Textarea
+      id={props.controlId}
+      aria-describedby={props.describedBy}
       class={FIELD}
       rows={4}
       value={asText(props.value)}
@@ -87,6 +101,8 @@ function EnumControl(props: SettingControlProps): JSX.Element {
 
   return (
     <Select
+      id={props.controlId}
+      aria-describedby={props.describedBy}
       class={FIELD}
       value={asText(props.value)}
       disabled={props.disabled}
@@ -116,6 +132,8 @@ function JsonControl(props: SettingControlProps): JSX.Element {
   return (
     <div>
       <Textarea
+        id={props.controlId}
+        aria-describedby={props.describedBy}
         class={FIELD}
         rows={6}
         invalid={invalid()}
@@ -133,7 +151,7 @@ function JsonControl(props: SettingControlProps): JSX.Element {
         }}
       />
       <Show when={invalid()}>
-        <p class="mt-1 text-xs text-red-600">{__('Invalid JSON')}</p>
+        <ErrorBanner class="mt-1 text-xs">{__('Invalid JSON')}</ErrorBanner>
       </Show>
     </div>
   );
@@ -156,7 +174,16 @@ function MultiselectControl(props: SettingControlProps): JSX.Element {
   };
 
   return (
-    <div class="flex flex-col gap-y-1">
+    // A group, not a field: each checkbox already carries its own visible label, so the setting's
+    // name belongs to the set rather than to any one of them. `for` would have to pick a member and
+    // would then mislabel it.
+    <div
+      id={props.controlId}
+      aria-describedby={props.describedBy}
+      role="group"
+      aria-labelledby={props.labelId}
+      class="flex flex-col gap-y-1"
+    >
       <For each={options()}>
         {(opt) => (
           <Checkbox
@@ -188,6 +215,7 @@ interface MetaColumnRow {
   key: string;
   type: string;
   label?: string;
+  description?: string;
 }
 
 /** Kept in lock-step with the server's validator (WorkbenchMetaColumnSettings::TYPES). */
@@ -221,7 +249,10 @@ function MetaColumnsControl(props: SettingControlProps): JSX.Element {
   // A row's own choices: the free keys plus its current key — which may no longer exist in the
   // option list (the meta key vanished from the store); keep it visible rather than losing it.
   const choicesFor = (row: MetaColumnRow): Array<{ value: string; label: string }> => {
-    const own = options().find((opt) => opt.value === row.key) ?? { value: row.key, label: row.key };
+    const own = options().find((opt) => opt.value === row.key) ?? {
+      value: row.key,
+      label: row.key,
+    };
     return [own, ...freeKeys()];
   };
 
@@ -234,29 +265,43 @@ function MetaColumnsControl(props: SettingControlProps): JSX.Element {
   const add = (): void => {
     const first = freeKeys()[0];
     if (first === undefined) return;
-    props.onChange([...rows(), { key: first.value, type: 'text', label: '' }]);
+    props.onChange([...rows(), { key: first.value, type: 'text', label: '', description: '' }]);
   };
 
   return (
-    <div class="flex flex-col gap-y-2">
+    // A group for the same reason as the multiselect: this is a row editor, not one field, and each
+    // row's own controls carry their own names.
+    <div
+      id={props.controlId}
+      aria-describedby={props.describedBy}
+      role="group"
+      aria-labelledby={props.labelId}
+      class="flex flex-col gap-y-2"
+    >
       <For each={rows()}>
         {(row, i) => (
           <div class="flex items-center gap-x-2">
             <Select
+              aria-label={__('Column key')}
               class="min-w-0 flex-[2]"
               value={row.key}
               disabled={props.disabled}
               onChange={(e) => update(i(), { key: e.currentTarget.value })}
             >
-              <For each={choicesFor(row)}>{(opt) => <option value={opt.value}>{opt.label}</option>}</For>
+              <For each={choicesFor(row)}>
+                {(opt) => <option value={opt.value}>{opt.label}</option>}
+              </For>
             </Select>
             <Select
+              aria-label={__('Column type')}
               class="min-w-0 flex-1"
               value={row.type}
               disabled={props.disabled}
               onChange={(e) => update(i(), { type: e.currentTarget.value })}
             >
-              <For each={META_COLUMN_TYPES()}>{(opt) => <option value={opt.value}>{opt.label}</option>}</For>
+              <For each={META_COLUMN_TYPES()}>
+                {(opt) => <option value={opt.value}>{opt.label}</option>}
+              </For>
             </Select>
             <Input
               type="text"
@@ -265,6 +310,14 @@ function MetaColumnsControl(props: SettingControlProps): JSX.Element {
               value={row.label ?? ''}
               disabled={props.disabled}
               onInput={(e) => update(i(), { label: e.currentTarget.value })}
+            />
+            <Input
+              type="text"
+              class="min-w-0 flex-[3]"
+              placeholder={__('Header tooltip (optional)')}
+              value={row.description ?? ''}
+              disabled={props.disabled}
+              onInput={(e) => update(i(), { description: e.currentTarget.value })}
             />
             <Button
               variant="ghost"
@@ -283,7 +336,12 @@ function MetaColumnsControl(props: SettingControlProps): JSX.Element {
         <p class="text-sm text-text-muted">{__('No custom-field columns configured.')}</p>
       </Show>
       <div>
-        <Button variant="secondary" size="sm" disabled={props.disabled || freeKeys().length === 0} onClick={add}>
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={props.disabled || freeKeys().length === 0}
+          onClick={add}
+        >
           {__('Add column')}
         </Button>
       </div>
@@ -292,8 +350,12 @@ function MetaColumnsControl(props: SettingControlProps): JSX.Element {
 }
 
 settingControlRegistry.register('bool', 'core.bool', BoolControl, { default: true });
-settingControlRegistry.register('meta-columns', 'core.meta-columns', MetaColumnsControl, { default: true });
-settingControlRegistry.register('multiselect', 'core.multiselect', MultiselectControl, { default: true });
+settingControlRegistry.register('meta-columns', 'core.meta-columns', MetaColumnsControl, {
+  default: true,
+});
+settingControlRegistry.register('multiselect', 'core.multiselect', MultiselectControl, {
+  default: true,
+});
 settingControlRegistry.register('number', 'core.number', NumberControl, { default: true });
 settingControlRegistry.register('text', 'core.text', TextControl, { default: true });
 settingControlRegistry.register('text:long', 'core.text-long', TextLongControl, { default: true });

@@ -1,3 +1,9 @@
+import {
+  keepVisibleDuringModals,
+  keepWordPressAnnouncementsAudible,
+  registerCssPropertyRules,
+  registerThemeRoot,
+} from '@invflux/ui';
 import { render } from 'solid-js/web';
 import * as solidRuntimeCore from 'solid-js';
 import * as solidRuntimeStore from 'solid-js/store';
@@ -10,6 +16,7 @@ import { setSurfaceModes, surfaceMode } from './surfaces';
 import { surfaceCatalog } from './surfaceCatalog';
 import { registerDispatchSection } from './sections/dispatch';
 import { registerProcurementSection } from './sections/procurement';
+import { registerReceivingSection } from './sections/receiving';
 import { registerEssentialsWelcome } from './sections/welcome';
 import { registerWorkbenchSection } from './sections/workbench';
 import { installPluginApi as installDispatchPluginSurface } from '@invflux/dispatch/src/plugin-api';
@@ -21,7 +28,7 @@ import { restoreSurfaceLocations } from './surfaceRouter';
 import { tabStillRoutes } from './welcomeCatalog';
 import { readBootSnapshot, seedRouteFor } from './workspacePersistence';
 import { startWpMenuSync } from './wpMenuSync';
-import { appStyleElement, appStyleSheet } from './styles/sheet';
+import { appStyleSheet } from './styles/sheet';
 
 // WordPress binding: bind the text domain the plugin registered via
 // wp_set_script_translations(), so the SPA packages never name it themselves.
@@ -40,6 +47,7 @@ declare global {
  */
 registerWorkbenchSection();
 registerProcurementSection();
+registerReceivingSection();
 registerDispatchSection();
 
 // The base install's own first-run screen, registered through the `onboarding.welcome` seam an add-on
@@ -99,7 +107,13 @@ const DEV_CONTEXT: AppContext = {
   nonce: 'dev-nonce',
   currentUser: { id: 1, name: 'Dev User' },
   // All surface caps so `vite dev` shows every surface (real caps come from PHP in wp-admin).
-  capabilities: { manageSettings: true, viewStock: true, managePurchaseOrders: true, dispatchOrders: true },
+  capabilities: {
+    manageSettings: true,
+    viewStock: true,
+    managePurchaseOrders: true,
+    manageInventory: true,
+    dispatchOrders: true,
+  },
   hasPro: true,
 };
 
@@ -125,13 +139,39 @@ function mount(): void {
   // instead of a re-render.
   const shadow = host.shadowRoot ?? host.attachShadow({ mode: 'open' });
   shadow.adoptedStyleSheets = [appStyleSheet()];
+  // Hoist the sheet's `@property` rules to the document. Custom-property registration is
+  // document-scoped, so a sheet only ever adopted by a shadow root registers none of them — and
+  // Tailwind v4's `border` resolves its style through one, so every border silently paints nothing.
+  registerCssPropertyRules(appStyleSheet());
 
-  // Light-DOM portal root (same stylesheet) for overlays that escape the shadow tree — modals and
-  // Kobalte-portalled listboxes (mirrors the per-SPA pattern).
+  // Portal root for overlays that must escape the app's shadow tree — modals and Kobalte-portalled
+  // listboxes. It is a **shadow root of its own**, not a light-DOM div: the two trees then have the
+  // same containment, so a portalled modal is styled by exactly what its in-tree twin is styled by,
+  // and wp-admin's stylesheets reach neither. That symmetry is what retires the whole light-DOM
+  // compensation layer — unlayered utilities, the mirrored `<style>`, the portal-only preflight
+  // block, and the give-wp-admin-back-its-class-names sheet.
+  // what breaks below it) · §4.5 (the cascade reasoning, and the test that catches a regression)
+  const portalHost = document.createElement('div');
+  portalHost.id = 'invflux-app-portal-root';
+  // An open menu or dialog must not hide its own overlay tree (or, through it, `<body>`) from
+  // screen readers, nor silence WordPress's announcements. See `keepVisibleDuringModals()`.
+  keepVisibleDuringModals(portalHost);
+  keepWordPressAnnouncementsAudible();
+  document.body.appendChild(portalHost);
+  const portalShadow = portalHost.shadowRoot ?? portalHost.attachShadow({ mode: 'open' });
+  // The same adopted sheet object the app root uses, so a hot CSS update reaches both.
+  portalShadow.adoptedStyleSheets = [appStyleSheet()];
+  // Mount into an element inside the shadow root rather than into the root itself: Solid's `Portal`
+  // and Kobalte both want an Element, and a wrapper gives the theme stamp somewhere to land that
+  // `:host` selectors can still see.
   const portalRoot = document.createElement('div');
-  portalRoot.id = 'invflux-app-portal-root';
-  portalRoot.appendChild(appStyleElement());
-  document.body.appendChild(portalRoot);
+  portalShadow.appendChild(portalRoot);
+
+  // Stamp the stored appearance on BOTH hosts. Not optional for the portal: Kobalte's
+  // Select/Combobox and every mounted Modal render inside it, and a root that never gets stamped
+  // resolves its tokens from the `prefers-color-scheme` fallback instead of the stored choice.
+  registerThemeRoot(host);
+  registerThemeRoot(portalHost);
 
   // Two jobs, in one capture-phase listener that runs before the HashRouter's own document listener:
   //
@@ -186,7 +226,9 @@ function mount(): void {
   // Dropping tabs whose route has gone is done here rather than in the snapshot reader, because
   // "which routes exist" is only knowable after the registrations above have run.
   const stillRoutes = (t: unknown): boolean =>
-    null !== t && 'string' === typeof (t as { path?: unknown }).path && tabStillRoutes((t as { path: string }).path);
+    null !== t &&
+    'string' === typeof (t as { path?: unknown }).path &&
+    tabStillRoutes((t as { path: string }).path);
   restoreTabs(
     (boot?.snapshot.pinned ?? []).filter(stillRoutes),
     (boot?.snapshot.open ?? []).filter(stillRoutes),

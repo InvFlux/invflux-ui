@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { describeConflicts, explainConflict } from './workbenchConflicts';
 import type { WorkbenchApplyConflict } from './workbenchGridTypes';
 
-const conflict = (reason: string, columnId = 'wac', actual: unknown = null): WorkbenchApplyConflict => ({
+const conflict = (
+  reason: string,
+  columnId = 'wac',
+  actual: unknown = null,
+): WorkbenchApplyConflict => ({
   subject_id: 906,
   column_id: columnId,
   reason,
@@ -64,7 +68,10 @@ describe('describeConflicts', () => {
       [conflict('stock_management_locked', 'stock_management', 'A stock take is in progress.')],
       labelOf,
     );
-    const without = describeConflicts([conflict('stock_management_locked', 'stock_management')], labelOf);
+    const without = describeConflicts(
+      [conflict('stock_management_locked', 'stock_management')],
+      labelOf,
+    );
 
     expect(withDetail).toContain('A stock take is in progress.');
     expect(without).toContain('busy in a stock workflow');

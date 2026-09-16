@@ -1,8 +1,9 @@
+import { ErrorBanner } from './ErrorBanner';
 import { createEffect, createMemo, createSignal, For, onCleanup, Show, type JSX } from 'solid-js';
 import { Button } from './Button';
 import { Dynamic } from 'solid-js/web';
 import { __, _n, sprintf } from '@invflux/i18n';
-import { Modal } from './Modal';
+import { Modal, ModalFooter, ModalHeader, ModalPanel } from './Modal';
 import { RequiredMark } from './RequiredMark';
 import { SegmentedControl } from './SegmentedControl';
 import { Spinner } from './Spinner';
@@ -93,7 +94,7 @@ export interface CorrectionReviewModalProps {
   /** Advisory notes shown as an always-visible banner below the tabs (e.g. governance adopt / un-govern
    *  consequences). Independent of the active tab, so the warning shows in both Per-SKU and Per-field. */
   governanceNotes?: ReviewNote[];
-  /** Portal the modal to this light-DOM root (shadow-DOM / transformed-ancestor surfaces). */
+  /** Portal the modal to this root (shadow-DOM / transformed-ancestor surfaces). */
   mount?: HTMLElement;
 }
 
@@ -160,9 +161,14 @@ function signedDelta(delta: number): string {
   return '0';
 }
 
-function formatCellValue(meta: GridColumnMeta | undefined, value: unknown, space: TaxonomySpace | undefined): string {
+function formatCellValue(
+  meta: GridColumnMeta | undefined,
+  value: unknown,
+  space: TaxonomySpace | undefined,
+): string {
   const codec = meta ? codecRegistry.resolve(meta.dataType) : null;
-  if (codec && meta) return codec.format(value, { config: meta.editorConfig, taxonomySpace: space });
+  if (codec && meta)
+    return codec.format(value, { config: meta.editorConfig, taxonomySpace: space });
   return value === null || value === undefined ? '' : String(value);
 }
 
@@ -186,8 +192,12 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
   });
   // Compact (no tabs) for a single subject × single column — a one-shot correction reads cleaner
   // without the Per-SKU/Per-field switcher. Forceable via the prop.
-  const compact = createMemo(() => props.compact ?? (props.groups.length === 1 && distinctSubjects() === 1));
-  const onlyStockChange = createMemo(() => props.groups.length === 1 && isOnHand(props.groups[0]?.columnId ?? ''));
+  const compact = createMemo(
+    () => props.compact ?? (props.groups.length === 1 && distinctSubjects() === 1),
+  );
+  const onlyStockChange = createMemo(
+    () => props.groups.length === 1 && isOnHand(props.groups[0]?.columnId ?? ''),
+  );
   const [activeTab, setActiveTab] = createSignal<'sku' | 'field'>('field');
   createEffect(() => setActiveTab(compact() || onlyStockChange() ? 'field' : 'sku'));
 
@@ -199,19 +209,43 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
   /** Per-row cascade (atp→res→ctd) for an on-hand row, computed from its base slots + delta. */
   const cascadeFor = (row: CorrectionReviewRow): SlotDeltas | null => {
     if (!row.onHand || typeof row.delta !== 'number') return null;
-    return cascadeAllocate(row.delta, row.onHand.atp, row.onHand.res, row.onHand.ctd, row.onHand.deficit);
+    return cascadeAllocate(
+      row.delta,
+      row.onHand.atp,
+      row.onHand.res,
+      row.onHand.ctd,
+      row.onHand.deficit,
+    );
   };
 
-  const dispositionSection = createMemo(() => props.groups.find((g) => g.meta?.dispositionOptions != null));
-  const negOptions = createMemo(() => dispositionSection()?.meta?.dispositionOptions?.filter((o) => o.sign === 'negative') ?? []);
-  const posOptions = createMemo(() => dispositionSection()?.meta?.dispositionOptions?.filter((o) => o.sign === 'positive') ?? []);
-  const discoveryOptions = createMemo(() => dispositionSection()?.meta?.discoveryContextOptions ?? []);
-  const hasNeg = createMemo(() => (dispositionSection()?.rows ?? []).some((r) => (r.delta ?? 0) < 0));
-  const hasPos = createMemo(() => (dispositionSection()?.rows ?? []).some((r) => (r.delta ?? 0) > 0));
+  const dispositionSection = createMemo(() =>
+    props.groups.find((g) => g.meta?.dispositionOptions != null),
+  );
+  const negOptions = createMemo(
+    () =>
+      dispositionSection()?.meta?.dispositionOptions?.filter((o) => o.sign === 'negative') ?? [],
+  );
+  const posOptions = createMemo(
+    () =>
+      dispositionSection()?.meta?.dispositionOptions?.filter((o) => o.sign === 'positive') ?? [],
+  );
+  const discoveryOptions = createMemo(
+    () => dispositionSection()?.meta?.discoveryContextOptions ?? [],
+  );
+  const hasNeg = createMemo(() =>
+    (dispositionSection()?.rows ?? []).some((r) => (r.delta ?? 0) < 0),
+  );
+  const hasPos = createMemo(() =>
+    (dispositionSection()?.rows ?? []).some((r) => (r.delta ?? 0) > 0),
+  );
 
   // Boundary warnings: a negative cascade that reaches reserved-in-cart (res) / paid-undispatched (ctd).
-  const warnRes = createMemo(() => (dispositionSection()?.rows ?? []).some((r) => (cascadeFor(r)?.res ?? 0) < 0));
-  const warnCtd = createMemo(() => (dispositionSection()?.rows ?? []).some((r) => (cascadeFor(r)?.ctd ?? 0) < 0));
+  const warnRes = createMemo(() =>
+    (dispositionSection()?.rows ?? []).some((r) => (cascadeFor(r)?.res ?? 0) < 0),
+  );
+  const warnCtd = createMemo(() =>
+    (dispositionSection()?.rows ?? []).some((r) => (cascadeFor(r)?.ctd ?? 0) < 0),
+  );
 
   // A3.5: a positive on-hand correction on a subject with NO cost basis adds stock uncosted — the
   // movement can't be valued. Non-blocking nudge to seed the cost first (seed-then-write-in values the
@@ -221,15 +255,26 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
   );
 
   const totalCount = createMemo(() => props.groups.reduce((sum, g) => sum + g.rows.length, 0));
-  const reasonSections = createMemo(() => props.groups.filter((g) => g.meta?.bulkSaveReason != null));
+  const reasonSections = createMemo(() =>
+    props.groups.filter((g) => g.meta?.bulkSaveReason != null),
+  );
   const reasonRequired = createMemo(
-    () => dispositionNeg() === 'other_write_off' || dispositionPos() === 'other_write_in' || discoveryContext() === 'other',
+    () =>
+      dispositionNeg() === 'other_write_off' ||
+      dispositionPos() === 'other_write_in' ||
+      discoveryContext() === 'other',
   );
   const requiredMissing = createMemo<CorrectionReviewGroup[]>(() => {
     const section = dispositionSection();
-    return reasonRequired() && section !== undefined && (reasons()[section.columnId] ?? '').trim() === '' ? [section] : [];
+    return reasonRequired() &&
+      section !== undefined &&
+      (reasons()[section.columnId] ?? '').trim() === ''
+      ? [section]
+      : [];
   });
-  const dispositionsMissing = createMemo(() => (hasNeg() && dispositionNeg() === '') || (hasPos() && dispositionPos() === ''));
+  const dispositionsMissing = createMemo(
+    () => (hasNeg() && dispositionNeg() === '') || (hasPos() && dispositionPos() === ''),
+  );
   const cannotApply = createMemo(() => requiredMissing().length > 0 || dispositionsMissing());
 
   // Single subject in compact mode → caption it by name/sku instead of the "N across M columns" line.
@@ -239,7 +284,13 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
     return null;
   });
 
-  type SkuCell = { delta?: number; base?: number; result?: number; oldValue?: unknown; newValue?: unknown };
+  type SkuCell = {
+    delta?: number;
+    base?: number;
+    result?: number;
+    oldValue?: unknown;
+    newValue?: unknown;
+  };
   type SkuRow = { subjectId: number; name: string; sku: string; cells: Record<string, SkuCell> };
   const reviewBySku = createMemo<SkuRow[]>(() => {
     const bySubject = new Map<number, SkuRow>();
@@ -265,7 +316,10 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
 
   function buildReason(): string {
     const entries = reasonSections()
-      .map((g) => ({ label: g.meta?.bulkSaveReason?.label ?? g.columnId, text: (reasons()[g.columnId] ?? '').trim() }))
+      .map((g) => ({
+        label: g.meta?.bulkSaveReason?.label ?? g.columnId,
+        text: (reasons()[g.columnId] ?? '').trim(),
+      }))
       .filter((e) => e.text !== '');
     if (entries.length === 0) return '';
     if (entries.length === 1) return entries[0].text;
@@ -302,7 +356,10 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
     // would move focus onto a detached button — dropping it to `<body>` and undoing the host's
     // hand-back to the grid. Only a dialog that survived the round trip (a partial apply) still has
     // a button to return to.
-    else if (!now && wasPending) queueMicrotask(() => { if (true === applyRef?.isConnected) applyRef.focus(); });
+    else if (!now && wasPending)
+      queueMicrotask(() => {
+        if (true === applyRef?.isConnected) applyRef.focus();
+      });
     return now;
   });
 
@@ -320,7 +377,9 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
 
   const tabBtnClass = (tab: 'sku' | 'field'): string =>
     `cursor-pointer rounded-t border-b-2 px-3 py-1.5 text-sm font-medium ${
-      activeTab() === tab ? 'border-primary text-text' : 'border-transparent text-text-muted hover:text-text'
+      activeTab() === tab
+        ? 'border-primary text-text'
+        : 'border-transparent text-text-muted hover:text-text'
     }`;
 
   const heading = (): string => props.title ?? __('Review changes');
@@ -335,11 +394,11 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
       closeOnBackdrop={false}
       closeOnEsc={!props.pending}
       mount={props.mount}
-      backdropClass="flex items-center justify-center bg-black/30 p-6"
       label={heading()}
     >
-      <div
-        class="relative flex max-h-[80vh] w-full max-w-3xl flex-col rounded border border-border bg-surface shadow-xl"
+      <ModalPanel
+        size="3xl"
+        class="relative"
         aria-busy={props.pending || undefined}
         onKeyDown={(e) => {
           if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -364,44 +423,52 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
             <span class="text-sm font-medium text-text">{__('Applying…')}</span>
           </div>
         </Show>
-        <div class="border-b border-border p-5">
-          <h2 class="text-lg font-semibold text-text">{heading()}</h2>
-          <Show
-            when={singleRow()}
-            fallback={
-              <p class="text-sm text-text-muted">
-                {totalCount()} {__('pending change(s) across')} {props.groups.length}{' '}
-                {__('column(s)')}
-              </p>
-            }
-          >
-            {(row) => (
-              <p class="text-sm text-text-muted">
-                {row().name}
-                <Show when={row().sku}>
-                  {' '}
-                  <span class="font-mono text-xs">{row().sku}</span>
-                </Show>
-              </p>
-            )}
-          </Show>
-        </div>
+        <ModalHeader
+          title={heading()}
+          subtitle={
+            <Show
+              when={singleRow()}
+              fallback={
+                <p>
+                  {totalCount()} {__('pending change(s) across')} {props.groups.length}{' '}
+                  {__('column(s)')}
+                </p>
+              }
+            >
+              {(row) => (
+                <p>
+                  {row().name}
+                  <Show when={row().sku}>
+                    {' '}
+                    <span class="font-mono">{row().sku}</span>
+                  </Show>
+                </p>
+              )}
+            </Show>
+          }
+        />
 
         {/* Tab switcher: hidden in compact mode (single subject × single column). */}
         <Show when={!compact()}>
-          <div class="flex gap-1 border-b border-border px-5 pt-3">
+          <div class="flex gap-1 border-b border-border px-4 pt-3">
             <button type="button" class={tabBtnClass('sku')} onClick={() => setActiveTab('sku')}>
               {__('Per-SKU')}
             </button>
-            <button type="button" class={tabBtnClass('field')} onClick={() => setActiveTab('field')}>
+            <button
+              type="button"
+              class={tabBtnClass('field')}
+              onClick={() => setActiveTab('field')}
+            >
               {__('Per-field')}
             </button>
           </div>
         </Show>
 
-        <div class="flex-1 space-y-5 overflow-auto p-5">
+        <div class="flex-1 space-y-5 overflow-auto p-4">
           <Show when={props.error}>
-            <p class="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{props.error}</p>
+            <ErrorBanner class="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm">
+              {props.error}
+            </ErrorBanner>
           </Show>
 
           {/* ── Per-SKU matrix ── */}
@@ -427,14 +494,19 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
                   <For each={reviewBySku()}>
                     {(skuRow) => (
                       <tr class="border-t border-border align-top">
-                        <td class="px-3 py-2 font-mono text-xs text-text-muted">{skuRow.sku || '—'}</td>
+                        <td class="px-3 py-2 font-mono text-xs text-text-muted">
+                          {skuRow.sku || '—'}
+                        </td>
                         <td class="px-3 py-2 text-text">{skuRow.name}</td>
                         <For each={props.groups}>
                           {(group) => {
                             const cell = (): SkuCell | undefined => skuRow.cells[group.columnId];
                             return (
                               <td class="px-3 py-2 text-right tabular-nums">
-                                <Show when={cell()} fallback={<span class="text-text-muted">—</span>}>
+                                <Show
+                                  when={cell()}
+                                  fallback={<span class="text-text-muted">—</span>}
+                                >
                                   {(c) => (
                                     <Show
                                       when={isOnHand(group.columnId) && c().delta !== undefined}
@@ -452,7 +524,12 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
                                     >
                                       <span class="text-text">
                                         {c().base}{' '}
-                                        <span classList={{ 'text-red-700': c().delta! < 0, 'text-green-700': c().delta! > 0 }}>
+                                        <span
+                                          classList={{
+                                            'text-red-700': c().delta! < 0,
+                                            'text-green-700': c().delta! > 0,
+                                          }}
+                                        >
                                           {c().delta! < 0 ? '−' : '+'} {Math.abs(c().delta!)}
                                         </span>
                                         {' = '}
@@ -477,13 +554,17 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
           <Show when={activeTab() === 'field'}>
             <For each={props.groups}>
               {(group) => {
-                const Preview = group.meta ? diffPreviewRegistry.resolve(group.meta.dataType) : null;
+                const Preview = group.meta
+                  ? diffPreviewRegistry.resolve(group.meta.dataType)
+                  : null;
                 const onHandSection = isOnHand(group.columnId);
                 return (
                   <section class="rounded border border-border">
                     <header class="flex items-center justify-between gap-3 border-b border-border bg-gray-50 px-4 py-2">
                       <span class="font-semibold text-text">
-                        {onHandSection ? __('On-hand Total') : (group.meta?.label ?? group.columnId)}
+                        {onHandSection
+                          ? __('On-hand Total')
+                          : (group.meta?.label ?? group.columnId)}
                       </span>
                       <div class="flex items-center gap-3">
                         <Show when={onHandSection}>
@@ -510,15 +591,21 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
                             <tr class="border-b border-border text-left text-xs uppercase text-text-muted">
                               <th class="px-4 py-1.5 font-semibold">{__('SKU')}</th>
                               <th class="px-4 py-1.5 font-semibold">{__('Name')}</th>
-                              <th class="px-4 py-1.5 text-right font-semibold">{__('Old value')}</th>
-                              <th class="px-4 py-1.5 text-right font-semibold">{__('New value')}</th>
+                              <th class="px-4 py-1.5 text-right font-semibold">
+                                {__('Old value')}
+                              </th>
+                              <th class="px-4 py-1.5 text-right font-semibold">
+                                {__('New value')}
+                              </th>
                             </tr>
                           </thead>
                           <tbody>
                             <For each={group.rows}>
                               {(row) => (
                                 <tr class="border-t border-border align-top">
-                                  <td class="px-4 py-2 font-mono text-xs text-text-muted">{row.sku || '—'}</td>
+                                  <td class="px-4 py-2 font-mono text-xs text-text-muted">
+                                    {row.sku || '—'}
+                                  </td>
                                   <td class="px-4 py-2 text-text">{row.name}</td>
                                   <Show
                                     when={Preview && group.meta}
@@ -575,12 +662,22 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
                               return (
                                 <>
                                   <tr class="border-t border-border align-top font-semibold">
-                                    <td class="px-4 py-2 font-mono text-xs font-normal text-text-muted">{row.sku || '—'}</td>
+                                    <td class="px-4 py-2 font-mono text-xs font-normal text-text-muted">
+                                      {row.sku || '—'}
+                                    </td>
                                     <td class="px-4 py-2 text-text">{row.name}</td>
                                     <td class="px-4 py-2 text-text">{__('Total')}</td>
-                                    <td class="px-4 py-2 text-right tabular-nums text-text">{base}</td>
-                                    <td class={`px-4 py-2 text-right tabular-nums ${deltaClass(delta)}`}>{signedDelta(delta)}</td>
-                                    <td class="px-4 py-2 text-right tabular-nums text-text">{base + delta}</td>
+                                    <td class="px-4 py-2 text-right tabular-nums text-text">
+                                      {base}
+                                    </td>
+                                    <td
+                                      class={`px-4 py-2 text-right tabular-nums ${deltaClass(delta)}`}
+                                    >
+                                      {signedDelta(delta)}
+                                    </td>
+                                    <td class="px-4 py-2 text-right tabular-nums text-text">
+                                      {base + delta}
+                                    </td>
                                   </tr>
                                   <Show when={showBreakdown()}>
                                     <For each={SLOT_LABELS}>
@@ -593,11 +690,17 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
                                               <td class="px-4 py-1" />
                                               <td class="px-4 py-1" />
                                               <td class="px-4 py-1 pl-8">{slot.label()}</td>
-                                              <td class="px-4 py-1 text-right tabular-nums">{slotBase()}</td>
-                                              <td class={`px-4 py-1 text-right tabular-nums ${deltaClass(slotDelta())}`}>
+                                              <td class="px-4 py-1 text-right tabular-nums">
+                                                {slotBase()}
+                                              </td>
+                                              <td
+                                                class={`px-4 py-1 text-right tabular-nums ${deltaClass(slotDelta())}`}
+                                              >
                                                 {signedDelta(slotDelta())}
                                               </td>
-                                              <td class="px-4 py-1 text-right tabular-nums">{slotBase() + slotDelta()}</td>
+                                              <td class="px-4 py-1 text-right tabular-nums">
+                                                {slotBase() + slotDelta()}
+                                              </td>
                                             </tr>
                                           </Show>
                                         );
@@ -614,7 +717,9 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
                       {/* Boundary warnings (negative cascade reaching cart-reserved / paid-committed). */}
                       <Show when={warnRes()}>
                         <div class="m-3 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                          {__("This removes stock that's currently in customers' carts / checkout.")}
+                          {__(
+                            "This removes stock that's currently in customers' carts / checkout.",
+                          )}
                         </div>
                       </Show>
                       <Show when={warnCtd()}>
@@ -633,7 +738,7 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
 
         {/* Shared on-hand controls: disposition (why) → discovery (how) → reason (conditional). */}
         <Show when={dispositionSection() || reasonSections().length > 0}>
-          <div class="space-y-4 border-t border-border bg-gray-50 p-5">
+          <div class="space-y-4 border-t border-border bg-gray-50 p-4">
             <Show when={dispositionSection()}>
               <div class="flex flex-wrap gap-x-10 gap-y-3">
                 <Show when={hasNeg()}>
@@ -666,7 +771,9 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
                       onChange={(v) => setDispositionPos(v)}
                       class="flex-wrap"
                     />
-                    <p class={`text-xs ${dispositionPos() === 'other_write_in' ? 'text-amber-700' : 'text-text-muted'}`}>
+                    <p
+                      class={`text-xs ${dispositionPos() === 'other_write_in' ? 'text-amber-700' : 'text-text-muted'}`}
+                    >
                       {__(
                         'Added units are valued at the current average cost — a correction records no purchase cost. For new stock at a specific cost, receive it via a purchase order.',
                       )}
@@ -717,7 +824,10 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
                     value={reasons()[section().columnId] ?? ''}
                     onInput={(e) => {
                       autoGrow(e.currentTarget);
-                      setReasons((prev) => ({ ...prev, [section().columnId]: e.currentTarget.value }));
+                      setReasons((prev) => ({
+                        ...prev,
+                        [section().columnId]: e.currentTarget.value,
+                      }));
                     }}
                   />
                 </label>
@@ -729,7 +839,7 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
         {/* Governance-change advisories: a fixed band just above the action buttons — always visible,
             independent of the Per-SKU / Per-field tab and of scroll position. */}
         <Show when={(props.governanceNotes?.length ?? 0) > 0}>
-          <div class="space-y-2 px-5 pt-4">
+          <div class="space-y-2 px-4 pt-4">
             <For each={props.governanceNotes}>
               {(note) => (
                 <div
@@ -746,7 +856,7 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
           </div>
         </Show>
 
-        <div class="flex items-center justify-between gap-2 border-t border-border p-5">
+        <ModalFooter layout="between">
           <Show when={props.onDiscard} fallback={<span />}>
             <Button
               variant="danger"
@@ -758,23 +868,15 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
             </Button>
           </Show>
           <div class="flex gap-2">
-            <Button
-              variant="secondary"
-              disabled={props.pending}
-              onClick={props.onCancel}
-            >
+            <Button variant="secondary" disabled={props.pending} onClick={props.onCancel}>
               {__('Continue editing')}
             </Button>
-            <Button
-              ref={applyRef}
-              disabled={cannotApply() || props.pending}
-              onClick={confirm}
-            >
+            <Button ref={applyRef} disabled={cannotApply() || props.pending} onClick={confirm}>
               {confirmText()}
             </Button>
           </div>
-        </div>
-      </div>
+        </ModalFooter>
+      </ModalPanel>
     </Modal>
   );
 }

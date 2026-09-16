@@ -1,5 +1,12 @@
 import { __ } from '@invflux/i18n';
-import { Button, Combobox, IconButton, SearchSelect, toast, type ComboboxOption } from '@invflux/ui';
+import {
+  Button,
+  Combobox,
+  IconButton,
+  SearchSelect,
+  toast,
+  type ComboboxOption,
+} from '@invflux/ui';
 import { useNavigate } from '@solidjs/router';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
 import { createMemo, createSignal, For, type JSX, Show } from 'solid-js';
@@ -8,13 +15,20 @@ import { useProcurement } from '../../context';
 import { createApi } from '../../lib/api';
 import { currencyOptions } from '../../lib/geo';
 import { usePortalRoot } from '../../portal';
-import type { Supplier, SuppliersResponse, SupplierProduct, SupplierProductsResponse } from '../suppliers/types';
+import type {
+  Supplier,
+  SuppliersResponse,
+  SupplierProduct,
+  SupplierProductsResponse,
+} from '../suppliers/types';
 import type { PurchaseOrder } from './types';
 
-const INPUT = 'w-full rounded border border-slate-300 px-1.5 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-primary';
+const INPUT =
+  'w-full rounded border border-slate-300 px-1.5 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-primary';
 // Header-field input matching the Combobox/SearchSelect control (h-9, same border/bg/shadow) so ETA and
 // tax rate line up with the supplier/currency pickers. The compact table INPUT above stays for line cells.
-const FIELD_INPUT = 'h-9 w-full rounded border border-border bg-surface px-2 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-primary';
+const FIELD_INPUT =
+  'h-9 w-full rounded border border-border bg-surface px-2 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-primary';
 const FIELD = 'block text-sm text-slate-700';
 
 /** A draft PO line. `subjectId` null until a catalogue product is picked. */
@@ -51,11 +65,13 @@ export function PoCreate(): JSX.Element {
     queryKey: ['procurement', 'suppliers'],
     queryFn: () => api.get<SuppliersResponse>('/procurement/suppliers'),
   }));
-  const supplier = (): Supplier | undefined => suppliers.data?.suppliers.find((s) => s.id === supplierId());
+  const supplier = (): Supplier | undefined =>
+    suppliers.data?.suppliers.find((s) => s.id === supplierId());
 
   const catalogue = createQuery(() => ({
     queryKey: ['procurement', 'suppliers', supplierId(), 'products'],
-    queryFn: () => api.get<SupplierProductsResponse>(`/procurement/suppliers/${supplierId()}/products`),
+    queryFn: () =>
+      api.get<SupplierProductsResponse>(`/procurement/suppliers/${supplierId()}/products`),
     enabled: null !== supplierId(),
   }));
   const catalogueItem = (subjectId: number): SupplierProduct | undefined =>
@@ -101,7 +117,8 @@ export function PoCreate(): JSX.Element {
 
   const lineTotal = (l: Line): number => (Number(l.qty) || 0) * (Number(l.unitCost) || 0);
   const total = createMemo(() => lines.reduce((sum, l) => sum + lineTotal(l), 0));
-  const canSave = (): boolean => null !== supplierId() && lines.some((l) => null !== l.subjectId && Number(l.qty) > 0);
+  const canSave = (): boolean =>
+    null !== supplierId() && lines.some((l) => null !== l.subjectId && Number(l.qty) > 0);
 
   const save = createMutation(() => ({
     mutationFn: () =>
@@ -114,7 +131,7 @@ export function PoCreate(): JSX.Element {
           .filter((l) => null !== l.subjectId)
           .map((l) => ({
             subject_id: l.subjectId,
-            requested_qty: '' === l.qty.trim() ? 0 : Number(l.qty),
+            qty_requested: '' === l.qty.trim() ? 0 : Number(l.qty),
             unit_cost: '' === l.unitCost.trim() ? null : l.unitCost.trim(),
           })),
       }),
@@ -163,14 +180,26 @@ export function PoCreate(): JSX.Element {
         <label class={FIELD}>
           {__('Expected (ETA)')}
           <div class="mt-1">
-            <input class={FIELD_INPUT} type="date" value={expectedAt()} onInput={(e) => setExpectedAt(e.currentTarget.value)} />
+            <input
+              class={FIELD_INPUT}
+              type="date"
+              value={expectedAt()}
+              onInput={(e) => setExpectedAt(e.currentTarget.value)}
+            />
           </div>
         </label>
         <Show when={isPro()}>
           <label class={FIELD}>
             {__('Tax rate (%)')}
             <div class="mt-1">
-              <input class={FIELD_INPUT} type="number" min="0" step="0.01" value={taxRate()} onInput={(e) => setTaxRate(e.currentTarget.value)} />
+              <input
+                class={FIELD_INPUT}
+                type="number"
+                min="0"
+                step="0.01"
+                value={taxRate()}
+                onInput={(e) => setTaxRate(e.currentTarget.value)}
+              />
             </div>
           </label>
         </Show>
@@ -178,15 +207,27 @@ export function PoCreate(): JSX.Element {
 
       <Show
         when={null !== supplierId()}
-        fallback={<p class="mt-6 text-sm text-slate-500">{__('Select a supplier to start adding lines.')}</p>}
+        fallback={
+          <p class="mt-6 text-sm text-slate-500">
+            {__('Select a supplier to start adding lines.')}
+          </p>
+        }
       >
         <table class="mt-6 w-full border-collapse text-sm">
           <thead>
             <tr>
-              <th class="border-b border-slate-200 px-3 py-2 text-left font-semibold text-slate-600">{__('Product')}</th>
-              <th class="w-24 border-b border-slate-200 px-3 py-2 text-right font-semibold text-slate-600">{__('Qty')}</th>
-              <th class="w-32 border-b border-slate-200 px-3 py-2 text-right font-semibold text-slate-600">{__('Unit cost')}</th>
-              <th class="w-32 border-b border-slate-200 px-3 py-2 text-right font-semibold text-slate-600">{__('Line total')}</th>
+              <th class="border-b border-slate-200 px-3 py-2 text-left font-semibold text-slate-600">
+                {__('Product')}
+              </th>
+              <th class="w-24 border-b border-slate-200 px-3 py-2 text-right font-semibold text-slate-600">
+                {__('Qty')}
+              </th>
+              <th class="w-32 border-b border-slate-200 px-3 py-2 text-right font-semibold text-slate-600">
+                {__('Unit cost')}
+              </th>
+              <th class="w-32 border-b border-slate-200 px-3 py-2 text-right font-semibold text-slate-600">
+                {__('Line total')}
+              </th>
               <th class="w-10 border-b border-slate-200" />
             </tr>
           </thead>
@@ -201,17 +242,39 @@ export function PoCreate(): JSX.Element {
                       onChange={(sel) => pickProduct(idx(), sel)}
                       multiple={false}
                       placeholder={__('Search the catalogue…')}
-                      emptyMessage={catalogue.isFetching ? __('Loading…') : __('No catalogue products')}
+                      emptyMessage={
+                        catalogue.isFetching ? __('Loading…') : __('No catalogue products')
+                      }
                     />
                   </td>
                   <td class="border-b border-slate-100 px-3 py-1.5">
-                    <input class={`${INPUT} text-right`} type="number" min="0" value={line.qty} onInput={(e) => setLines(idx(), 'qty', e.currentTarget.value)} />
+                    <input
+                      aria-label={__('Quantity')}
+                      class={`${INPUT} text-right`}
+                      type="number"
+                      min="0"
+                      value={line.qty}
+                      onInput={(e) => setLines(idx(), 'qty', e.currentTarget.value)}
+                    />
                   </td>
                   <td class="border-b border-slate-100 px-3 py-1.5">
-                    <input class={`${INPUT} text-right`} type="number" min="0" step={String(10 ** -costDecimals())} value={line.unitCost} onInput={(e) => setLines(idx(), 'unitCost', e.currentTarget.value)} />
+                    <input
+                      aria-label={__('Unit cost')}
+                      class={`${INPUT} text-right`}
+                      type="number"
+                      min="0"
+                      step={String(10 ** -costDecimals())}
+                      value={line.unitCost}
+                      onInput={(e) => setLines(idx(), 'unitCost', e.currentTarget.value)}
+                    />
                   </td>
                   <td class="border-b border-slate-100 px-3 py-1.5 text-right tabular-nums">
-                    <Show when={null !== line.subjectId} fallback={<span class="text-slate-300">—</span>}>{lineTotal(line).toFixed(costDecimals())}</Show>
+                    <Show
+                      when={null !== line.subjectId}
+                      fallback={<span class="text-slate-300">—</span>}
+                    >
+                      {lineTotal(line).toFixed(costDecimals())}
+                    </Show>
                   </td>
                   <td class="border-b border-slate-100 px-3 py-1.5 text-center">
                     <IconButton
@@ -231,11 +294,7 @@ export function PoCreate(): JSX.Element {
         </table>
 
         <div class="mt-2 flex items-center justify-between">
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={addLine}
-          >
+          <Button variant="secondary" size="sm" onClick={addLine}>
             {__('+ Add line')}
           </Button>
           <div class="text-sm font-semibold tabular-nums">
@@ -245,16 +304,10 @@ export function PoCreate(): JSX.Element {
       </Show>
 
       <div class="mt-6 flex gap-2">
-        <Button
-          disabled={!canSave() || save.isPending}
-          onClick={() => save.mutate()}
-        >
+        <Button disabled={!canSave() || save.isPending} onClick={() => save.mutate()}>
           {save.isPending ? __('Saving…') : __('Save purchase order')}
         </Button>
-        <Button
-          variant="ghost"
-          onClick={() => navigate('/purchase-orders')}
-        >
+        <Button variant="ghost" onClick={() => navigate('/purchase-orders')}>
           {__('Cancel')}
         </Button>
       </div>

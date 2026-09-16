@@ -1,8 +1,13 @@
 import { __ } from '@invflux/i18n';
-import { Button } from '@invflux/ui';
+import { Button, createViewportFill, ErrorBanner } from '@invflux/ui';
 import { A, useNavigate } from '@solidjs/router';
 import { createQuery } from '@tanstack/solid-query';
-import { createColumnHelper, createSolidTable, flexRender, getCoreRowModel } from '@tanstack/solid-table';
+import {
+  createColumnHelper,
+  createSolidTable,
+  flexRender,
+  getCoreRowModel,
+} from '@tanstack/solid-table';
 import { createSignal, For, type JSX, Show } from 'solid-js';
 import { StatusPill } from '../../components/StatusPill';
 import { useProcurement } from '../../context';
@@ -98,63 +103,98 @@ export function SuppliersList(): JSX.Element {
 
   const isEmpty = (): boolean => query.isSuccess && 0 === (query.data?.suppliers.length ?? 0);
 
+  // Fill from where the list starts down to the viewport bottom: a long list scrolls inside its
+  // panel, so its header and bottom edge stay on screen and the page itself never scrolls. The
+  // gutter under it is this element's own `pb-4`, inside that height.
+  let rootEl: HTMLElement | undefined;
+  const listHeight = createViewportFill(() => rootEl);
+
   return (
-    <section>
+    <section
+      ref={rootEl}
+      data-viewport-fill
+      class="flex flex-col pb-4"
+      style={{ height: listHeight() }}
+    >
       <header class="mb-4 flex items-center justify-between">
         <h1 class="text-xl font-semibold">{__('Suppliers')}</h1>
-        <Button
-          onClick={() => setShowAdd(true)}
-        >
-          {__('+ Add supplier')}
-        </Button>
+        <Button onClick={() => setShowAdd(true)}>{__('+ Add supplier')}</Button>
       </header>
 
       <Show when={query.isPending}>
         <p class="text-slate-500">{__('Loading suppliers…')}</p>
       </Show>
       <Show when={query.isError}>
-        <p class="text-red-700">{__('Failed to load suppliers.')}</p>
+        <ErrorBanner>{__('Failed to load suppliers.')}</ErrorBanner>
       </Show>
       <Show when={isEmpty()}>
         <p class="text-slate-500">{__('No suppliers yet.')}</p>
       </Show>
 
       <Show when={query.isSuccess && !isEmpty()}>
-        <table class="w-full border-collapse text-sm">
-          <thead>
-            <For each={table.getHeaderGroups()}>
-              {(hg) => (
-                <tr>
-                  <For each={hg.headers}>
-                    {(header) => (
-                      <th class="whitespace-nowrap border-b border-slate-200 px-3 py-2 text-left font-semibold text-slate-600">
-                        {flexRender(header.column.columnDef.header, header.getContext())}
-                      </th>
-                    )}
-                  </For>
-                </tr>
-              )}
-            </For>
-          </thead>
-          <tbody>
-            <For each={table.getRowModel().rows}>
-              {(row) => (
-                <tr
-                  class="cursor-pointer hover:bg-slate-50"
-                  onClick={() => navigate(`/suppliers/${row.original.id}`)}
-                >
-                  <For each={row.getVisibleCells()}>
-                    {(cell) => (
-                      <td class="border-b border-slate-100 px-3 py-2 align-top">
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                      </td>
-                    )}
-                  </For>
-                </tr>
-              )}
-            </For>
-          </tbody>
-        </table>
+        {/* `min-h-0`: lets the panel shrink below its rows and scroll them, instead of pushing the
+            section past the height it was given. A short list still hugs its rows. */}
+        <div class="min-h-0 overflow-auto rounded border border-border bg-surface">
+          <table class="w-full border-collapse text-sm">
+            <thead class="sticky top-0 z-10 bg-surface-raised">
+              <For each={table.getHeaderGroups()}>
+                {(hg) => (
+                  <tr>
+                    <For each={hg.headers}>
+                      {(header) => (
+                        <th class="whitespace-nowrap border-b border-slate-200 px-3 py-2 text-left font-semibold text-slate-600">
+                          {flexRender(header.column.columnDef.header, header.getContext())}
+                        </th>
+                      )}
+                    </For>
+                  </tr>
+                )}
+              </For>
+            </thead>
+            <tbody>
+              <For each={table.getRowModel().rows}>
+                {(row) => {
+                  const href = (): string => `/suppliers/${row.original.id}`;
+
+                  return (
+                    <tr
+                      class="cursor-pointer hover:bg-slate-50"
+                      onClick={(event) => {
+                        // The first cell is a real link now, and the row click is only an
+                        // enhancement over it. Without this guard both fire: a plain click
+                        // navigates twice, and a ctrl/middle-click opens the row in a new tab AND
+                        // navigates this one — the row losing its place as the cost of the shortcut.
+                        if ((event.target as HTMLElement).closest('a,button,input,select,label')) {
+                          return;
+                        }
+                        navigate(href());
+                      }}
+                    >
+                      <For each={row.getVisibleCells()}>
+                        {(cell, index) => (
+                          <td class="border-b border-slate-100 px-3 py-2 align-top">
+                            <Show
+                              when={index() === 0}
+                              fallback={flexRender(cell.column.columnDef.cell, cell.getContext())}
+                            >
+                              {/* The row's keyboard and assistive-tech entry point. A `<tr>` takes
+                                no focus and announces no destination, so a click handler on it is
+                                reachable by pointer only; the supplier name is the cell that names
+                                where the row goes, so it carries the link. */}
+                              <A href={href()} class="block">
+                                {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                              </A>
+                            </Show>
+                          </td>
+                        )}
+                      </For>
+                    </tr>
+                  );
+                }}
+              </For>
+            </tbody>
+          </table>
+        </div>
       </Show>
 
       <Show when={showAdd()}>

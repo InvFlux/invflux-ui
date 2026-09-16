@@ -110,10 +110,10 @@ const call = <Ctx, T>(v: T | ((ctx: Ctx) => T), ctx: Ctx): T =>
 function govern(action: EntityAction): EntityAction {
   const owner = action.owner ?? 'addon';
   if (owner === 'core') return action;
-  const wantsReserved = action.group === 'primary' || action.group === 'destructive' || action.locked;
+  const wantsReserved =
+    action.group === 'primary' || action.group === 'destructive' || action.locked;
   if (!wantsReserved) return action;
   if (typeof console !== 'undefined') {
-     
     console.warn(
       `[invflux] entity-action "${action.id}" from an add-on requested group="${action.group}"` +
         `${action.locked ? '/locked' : ''}; demoted to "secondary" (core owns primary/destructive).`,
@@ -202,8 +202,14 @@ export function createEntityActionRegistry(): EntityActionRegistry {
         regOrder(a) - regOrder(b);
 
       const rest = available.filter((a) => a !== primaryAction);
-      const secondary = rest.filter((a) => (a.group ?? 'secondary') !== 'destructive').sort(byOrder).map(resolve1);
-      const destructive = rest.filter((a) => a.group === 'destructive').sort(byOrder).map(resolve1);
+      const secondary = rest
+        .filter((a) => (a.group ?? 'secondary') !== 'destructive')
+        .sort(byOrder)
+        .map(resolve1);
+      const destructive = rest
+        .filter((a) => a.group === 'destructive')
+        .sort(byOrder)
+        .map(resolve1);
 
       return { primary: primaryAction ? resolve1(primaryAction) : null, secondary, destructive };
     },

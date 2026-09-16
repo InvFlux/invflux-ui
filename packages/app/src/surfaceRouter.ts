@@ -123,14 +123,21 @@ export function surfaceSubPath(id: string, pathname: string, search: string): st
  */
 export function interceptSurfaceLinks(container: HTMLElement, history: MemoryHistory): () => void {
   const onClick = (e: MouseEvent): void => {
-    if (e.defaultPrevented || 0 !== e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-    const a = e.composedPath().find((el): el is HTMLAnchorElement => el instanceof HTMLAnchorElement);
+    if (e.defaultPrevented || 0 !== e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)
+      return;
+    const a = e
+      .composedPath()
+      .find((el): el is HTMLAnchorElement => el instanceof HTMLAnchorElement);
     if (!a) return;
     const href = a.getAttribute('href');
     // Intra-surface (memory-router) links are single root-relative paths ('/…', never '//host' or a
     // hash link). Anything else (external, download, new-tab target) is left to normal handling.
     if (!href || !href.startsWith('/') || href.startsWith('//') || a.target) return;
-    if (a.hasAttribute('download') || (a.getAttribute('rel') ?? '').split(/\s+/).includes('external')) return;
+    if (
+      a.hasAttribute('download') ||
+      (a.getAttribute('rel') ?? '').split(/\s+/).includes('external')
+    )
+      return;
     e.preventDefault();
     e.stopImmediatePropagation();
     history.set({ value: href, replace: a.hasAttribute('replace') });

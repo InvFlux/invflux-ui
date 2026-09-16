@@ -14,6 +14,24 @@ export interface ReceivingSessionRow {
   damaged: number;
 }
 
+/**
+ * An invoice recorded against a purchase order — shape returned by `presentInvoice()`.
+ *
+ * `statedTotal` is what the supplier printed, deliberately not a sum of the lines: the two
+ * disagreeing is a fact about the document worth keeping, and computing it away would hide it.
+ */
+export interface SupplierInvoiceDto {
+  id: number;
+  reference: string;
+  currency: string;
+  /** The date on the document (`YYYY-MM-DD`), null when it carried none. */
+  invoicedAt: string | null;
+  /** When we wrote it down — ISO 8601. A different question from when it was raised. */
+  recordedAt: string | null;
+  statedTotal: string | null;
+  note: string | null;
+}
+
 /** A worker currently present in an open receiving session (seen within the presence TTL). */
 export interface ReceivingParticipant {
   name: string;
@@ -32,6 +50,10 @@ export interface PurchaseOrder {
   supplierName: string | null;
   supplierDisplay: string | null;
   stage: string;
+  /** Filed out of the working lists. Orthogonal to {@link stage}, which still says how it ended. */
+  archived: boolean;
+  /** ISO-8601 instant it was filed away, or null. */
+  archivedAt: string | null;
   lineCount: number;
   currency: string;
   /** Store base currency — the receive form shows an FX-rate field only when {@link currency} differs
@@ -45,10 +67,22 @@ export interface PurchaseOrder {
   incotermPlace: string | null;
   /** How the goods travel (carrier or service) — deliberately not the same thing as {@link incoterm}. */
   shippingMethod: string | null;
-  /** Per-order terms override; null inherits {@link supplierTerms}, and failing that the store default. */
-  termsConditions: string | null;
-  /** The supplier's standing terms — what applies when {@link termsConditions} is null. */
-  supplierTerms: string | null;
+  /** The set of terms chosen for this order; null inherits the supplier's set, then the store's. */
+  termsLineageId: number | null;
+  /**
+   * Whether this draft carries terms written for it alone instead of a set. Always false once the
+   * order is numbered: from then on it carries whatever numbering froze.
+   */
+  termsOneOff: boolean;
+  /** The text of those one-off terms — on the detail read only; absent on a listing row. */
+  termsOneOffText?: string | null;
+  /**
+   * The terms numbering fixed on this order, as the supplier reads them — on the detail read only,
+   * null before numbering. The set they came from may have a newer version; this text is not changed.
+   */
+  termsIssuedText?: string | null;
+  /** The supplier's set — what applies when the order chooses nothing. */
+  supplierTermsLineageId: number | null;
   total: string | null;
   costDecimals: number;
   exceptionFlag: boolean;
@@ -56,12 +90,16 @@ export interface PurchaseOrder {
    *  Ordered lens); null when the PO has no discrepancy or on detail responses. */
   discrepancy: { over: number; short: number } | null;
   createdAt: string | null;
-  /** Staged receiving-session WIP — rehydrates the open receive form after a reload; [] when none. */
-  receivingSession: ReceivingSessionRow[];
-  /** Staged receipt note (free text, e.g. "wrong item", mis-pick) — rehydrates with the session. */
-  receivingNote: string;
-  /** Workers present in the open session; more than one ⇒ the UI background-polls to stay in sync. */
-  receivingParticipants: ReceivingParticipant[];
+  /**
+   * Whether a delivery is being counted against this order right now.
+   *
+   * Deliberately not the staged quantities themselves: those are the receiving surface's working
+   * figures, uncommitted and nobody else's business until they become a receipt. This page needs
+   * only enough to offer the right link — join a count in progress, or start one.
+   */
+  receivingOpen: boolean;
+  /** How many people are on that count. Shown so a buyer can see the dock is busy, never who. */
+  receivingCounters: number;
 }
 
 /** `GET /procurement/purchase-orders` response envelope. */
@@ -85,18 +123,34 @@ export interface PoLine {
   gtin: string | null;
   imageUrl: string | null;
   exists: boolean;
-  requestedQty: number;
+  qtyRequested: number;
   /** What the supplier confirmed they'd ship (ASN/email) — the GR-variance baseline; null if unknown. */
-  expectedQty: number | null;
+  qtyExpected: number | null;
   qtyReceived: number;
   /** Cumulative damaged units received on earlier deliveries (rollup of receipt_lines.damaged_qty) —
    *  shown beside received-so-far. Never part of {@link qtyReceived}, which is good (saleable) only. */
-  damagedSoFar: number;
+  qtyDamagedSoFar: number;
   /** Remainder written off by a close-short finalize (recorded, not silently dropped). */
   qtyClosedShort: number;
   qtyOpen: number;
-  /** The line's own unit cost; null = inherit the catalogue price ({@link catalogUnitCost}). */
+  /**
+   * The line's own unit cost — always the **net**, after any supplier discount; null = inherit the
+   * catalogue price ({@link catalogUnitCost}). Every total and valuation reads this figure.
+   */
   unitCost: string | null;
+  /** The supplier's price before their line discount; null unless they stated one. */
+  listUnitCost: string | null;
+  /** The supplier's line discount in percent (e.g. "10.00"); null when the line has none. */
+  discountPct: string | null;
+  /**
+   * What a unit costs according to the latest supplier invoice — a **current rate, not an average**.
+   * A second invoice at a different price replaces it rather than blending with it; the blend happens
+   * downstream, across the price each goods receipt froze when it was posted. Null until an invoice
+   * says otherwise, and {@link unitCost} is never overwritten.
+   */
+  unitCostInvoiced: string | null;
+  /** How many units have been billed so far on this line, summed across every invoice recorded. */
+  qtyInvoiced: number;
   /** Draft-only: the catalogue unit price a null (inherited) cost displays faded + uses for its line
    *  total. Server-provided so the grid needs no separate catalogue lookup; null when uncatalogued. */
   catalogUnitCost: string | null;

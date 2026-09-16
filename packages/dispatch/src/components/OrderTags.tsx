@@ -1,5 +1,14 @@
 import { __, _x, _n, sprintf } from '@invflux/i18n';
-import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, type JSX } from 'solid-js';
+import {
+  For,
+  Show,
+  createEffect,
+  createMemo,
+  createSignal,
+  onCleanup,
+  onMount,
+  type JSX,
+} from 'solid-js';
 import { Dynamic } from 'solid-js/web';
 import {
   Button,
@@ -17,12 +26,13 @@ import {
   slotRegistry,
   fuzzyScore,
   matchScore,
-  tagColor,
-  tagHatch,
-  tagInk,
-  tagArchivedFill,
-  type TagColor,
   type FilterControlProps,
+  paletteInk,
+  paletteStyle,
+  paletteArchivedStyle,
+  ModalFooter,
+  ModalHeader,
+  ModalPanel,
 } from '@invflux/ui';
 import {
   useBulkAssignTagsMutation,
@@ -34,7 +44,13 @@ import {
 } from '../queries';
 import { useDispatch } from '../context';
 import { TagWriteError } from '../api';
-import type { ArchivedTagName, DispatchOrderSummary, GovernanceFlag, ManageAuthority, TagSummary } from '../types';
+import type {
+  ArchivedTagName,
+  DispatchOrderSummary,
+  GovernanceFlag,
+  ManageAuthority,
+  TagSummary,
+} from '../types';
 
 /** Named priority presets → fixed values (§2.2); gaps let admins slot custom ints. */
 const PRIORITY_PRESETS = (): { label: string; value: number }[] => [
@@ -50,19 +66,59 @@ const BEHAVIOR_FLAG_META = (): { flag: GovernanceFlag; label: string; hint: stri
   // Translate this pair together with the "Withheld" workflow-state filter that selects the orders
   // it produces: the flag names the instruction, the filter names the resulting condition, and a
   // locale that renders them from unrelated roots reads as two unrelated features.
-  { flag: 'SuppressActive', label: __('Withhold from queue'), hint: __('Carrying orders drop out of the active dispatch queue until the tag comes off.') },
+  {
+    flag: 'SuppressActive',
+    label: __('Withhold from queue'),
+    hint: __('Carrying orders drop out of the active dispatch queue until the tag comes off.'),
+  },
   // The pair reads as one decision, so they sit together: a tag that flags a problem usually wants
   // the note on the way *out* (removing it asserts the problem is settled), not on the way in.
-  { flag: 'RequireNoteOnAdd', label: __('Require a note when applied'), hint: __('Applying this tag demands a note, stamped on the order as an annotation.') },
-  { flag: 'RequireNoteOnRemove', label: __('Require a note when removed'), hint: __('Taking this tag off demands a note — the record of how the issue it flagged was resolved.') },
-  { flag: 'PromotedAffordance', label: __('Dedicated button'), hint: __('This tag earns a prominent toggle on the order, not just a menu item.') },
-  { flag: 'HidePicker', label: __('Hide from tag menu'), hint: __('Keep this tag out of the generic "+ Tag" menu — for tags with their own button.') },
+  {
+    flag: 'RequireNoteOnAdd',
+    label: __('Require a note when applied'),
+    hint: __('Applying this tag demands a note, stamped on the order as an annotation.'),
+  },
+  {
+    flag: 'RequireNoteOnRemove',
+    label: __('Require a note when removed'),
+    hint: __(
+      'Taking this tag off demands a note — the record of how the issue it flagged was resolved.',
+    ),
+  },
+  {
+    flag: 'PromotedAffordance',
+    label: __('Dedicated button'),
+    hint: __('This tag earns a prominent toggle on the order, not just a menu item.'),
+  },
+  {
+    flag: 'HidePicker',
+    label: __('Hide from tag menu'),
+    hint: __('Keep this tag out of the generic "+ Tag" menu — for tags with their own button.'),
+  },
 ];
 
 const AUTHORITY_META = (): { value: ManageAuthority; label: string; hint: string }[] => [
-  { value: 'Anyone', label: __('Anyone'), hint: __('Any dispatch operator may apply and remove this tag.') },
-  { value: 'Managed', label: __('Managed'), hint: __('Applying and removing require the tag-authority permission.') },
-  { value: 'System', label: __('System'), hint: __('Platform-managed — no one applies or removes it by hand.') },
+  {
+    value: 'Anyone',
+    label: _x('Anyone', 'order tag authority: any dispatch operator may apply and remove the tag'),
+    hint: __('Any dispatch operator may apply and remove this tag.'),
+  },
+  {
+    value: 'Managed',
+    label: _x(
+      'Managed',
+      'order tag authority: applying and removing the tag need the tag-authority permission',
+    ),
+    hint: __('Applying and removing require the tag-authority permission.'),
+  },
+  {
+    value: 'System',
+    label: _x(
+      'System',
+      'order tag authority: the platform applies and removes the tag, never a person',
+    ),
+    hint: __('Platform-managed — no one applies or removes it by hand.'),
+  },
 ];
 
 /** Whether a tag carries any Pro governance behaviour (mirrors core Tag::isGovernance). */
@@ -70,17 +126,40 @@ function isGovernanceTag(t: TagSummary): boolean {
   return t.governanceFlags.length > 0 || t.priority !== 0 || t.manageAuthority !== 'Anyone';
 }
 
-/** Whether the current user may hand-apply this tag (mirrors the server assign gate). */
-export function canApplyTag(t: TagSummary, governTags: boolean): boolean {
+/**
+ * Whether the current user may hand-apply this tag (mirrors the server assign gate).
+ *
+ * **Two axes, and they answer different questions** — the same pair the server's writer states.
+ * `governanceActive` is the *licence*: while it is false this install honours no governance field
+ * at all, so every tag is an ordinary label and this can only be true. `governTags` is the
+ * *capability*, deciding who among users of an active install may apply a restricted tag, and it
+ * is never relaxed by a lapse.
+ *
+ * Both are required parameters on purpose. They were one, and the missing licence axis is why a
+ * deactivated Pro still demanded a note to remove a tag: the client went on enforcing what the
+ * server had stopped enforcing.
+ */
+export function canApplyTag(
+  t: TagSummary,
+  governTags: boolean,
+  governanceActive: boolean,
+): boolean {
+  if (!governanceActive) return true;
   if (t.manageAuthority === 'System') return false;
   if (t.manageAuthority === 'Managed') return governTags;
   return true;
 }
 
 /** Whether the current user may hand-remove this tag (mirrors the server removal gate). */
-export function canRemoveTag(t: TagSummary, governTags: boolean): boolean {
+export function canRemoveTag(
+  t: TagSummary,
+  governTags: boolean,
+  governanceActive: boolean,
+): boolean {
+  if (!governanceActive) return true;
   if (t.manageAuthority === 'System') return false;
-  if (t.manageAuthority === 'Managed' || t.governanceFlags.includes('LockRemoval')) return governTags;
+  if (t.manageAuthority === 'Managed' || t.governanceFlags.includes('LockRemoval'))
+    return governTags;
   return true;
 }
 
@@ -114,7 +193,10 @@ function PriorityPreview(props: { value: number }): JSX.Element {
           {(p) => (
             <span
               class="px-1.5 py-0.5 text-2xs leading-none"
-              classList={{ 'bg-gray-800 text-white': props.value === p.value, 'text-gray-600': props.value !== p.value }}
+              classList={{
+                'bg-gray-800 text-white': props.value === p.value,
+                'text-gray-600': props.value !== p.value,
+              }}
             >
               {p.label}
             </span>
@@ -140,7 +222,10 @@ function AuthorityPreview(props: { value: ManageAuthority }): JSX.Element {
         {(a) => (
           <span
             class="px-1.5 py-0.5 text-2xs leading-none"
-            classList={{ 'bg-gray-800 text-white': props.value === a.value, 'text-gray-600': props.value !== a.value }}
+            classList={{
+              'bg-gray-800 text-white': props.value === a.value,
+              'text-gray-600': props.value !== a.value,
+            }}
             title={a.hint}
           >
             {a.label}
@@ -163,13 +248,19 @@ function AuthorityPreview(props: { value: ManageAuthority }): JSX.Element {
  * ship no working editor). When a control is added, removed or relabelled on the editor, update
  * this preview to match. Minor drift is harmless (it's only a picture), but avoid it.
  */
-function TagSettingsPreview(props: { flags: GovernanceFlag[]; priority: number; authority: ManageAuthority }): JSX.Element {
+function TagSettingsPreview(props: {
+  flags: GovernanceFlag[];
+  priority: number;
+  authority: ManageAuthority;
+}): JSX.Element {
   const has = (f: GovernanceFlag): boolean => props.flags.includes(f);
   return (
     <div class="pointer-events-none select-none space-y-3 opacity-60">
       {/* Behaviour */}
       <div class="space-y-1.5">
-        <div class="text-2xs font-semibold uppercase tracking-wide text-text-muted">{__('Behaviour')}</div>
+        <div class="text-2xs font-semibold uppercase tracking-wide text-text-muted">
+          {_x('Behaviour', 'order tag editor: section heading — what the tag does')}
+        </div>
         <div class="grid grid-cols-2 space-y-1.5">
           <For each={BEHAVIOR_FLAG_META()}>
             {(m) => (
@@ -187,7 +278,9 @@ function TagSettingsPreview(props: { flags: GovernanceFlag[]; priority: number; 
       </div>
       {/* Access */}
       <div class="space-y-1.5">
-        <div class="text-2xs font-semibold uppercase tracking-wide text-text-muted">{__('Access')}</div>
+        <div class="text-2xs font-semibold uppercase tracking-wide text-text-muted">
+          {_x('Access', 'order tag editor: section heading — who may apply and remove the tag')}
+        </div>
         <div class="flex flex-wrap items-center gap-2">
           <span class="text-2xs text-gray-500">{__('Who may apply / remove')}</span>
           <AuthorityPreview value={props.authority} />
@@ -215,7 +308,13 @@ function TagSettingsSlot(props: TagSettingsEditorProps): JSX.Element {
   return (
     <Show
       when={entitled() && contribution}
-      fallback={<TagSettingsPreview flags={props.flags} priority={props.priority} authority={props.authority} />}
+      fallback={
+        <TagSettingsPreview
+          flags={props.flags}
+          priority={props.priority}
+          authority={props.authority}
+        />
+      }
     >
       <Dynamic
         component={contribution!.component}
@@ -251,12 +350,7 @@ function TagSettingsSection(props: {
   const [open, setOpen] = createSignal(false);
   return (
     <div>
-      <Button
-        variant="quiet"
-        size="xs"
-        class="mt-2 gap-1"
-        onClick={() => setOpen((v) => !v)}
-      >
+      <Button variant="quiet" size="xs" class="mt-2 gap-1" onClick={() => setOpen((v) => !v)}>
         <span class="inline-block w-3">{open() ? '▾' : '▸'}</span>
         {__('Tag settings')}
         <Show when={!entitled()}>
@@ -279,14 +373,21 @@ function TagSettingsSection(props: {
   );
 }
 
-/** Whether applying this tag demands a note (governance `RequireNoteOnAdd`). */
-export function tagNeedsNote(t: TagSummary): boolean {
-  return t.governanceFlags.includes('RequireNoteOnAdd');
+/**
+ * Whether applying this tag demands a note (governance `RequireNoteOnAdd`).
+ *
+ * Asking before the request is a deliberate mirror of the server's rule, not a second policy: a
+ * prompt beats a 422 the operator has to read and retry. But a mirror has to know when the rule is
+ * in force — `governanceActive` is the licence, and without it this kept demanding notes on an
+ * install whose server had stopped requiring them.
+ */
+export function tagNeedsNote(t: TagSummary, governanceActive: boolean): boolean {
+  return governanceActive && t.governanceFlags.includes('RequireNoteOnAdd');
 }
 
 /** Whether *removing* this tag demands a note (governance `RequireNoteOnRemove`). */
-export function tagNeedsRemovalNote(t: TagSummary): boolean {
-  return t.governanceFlags.includes('RequireNoteOnRemove');
+export function tagNeedsRemovalNote(t: TagSummary, governanceActive: boolean): boolean {
+  return governanceActive && t.governanceFlags.includes('RequireNoteOnRemove');
 }
 
 /**
@@ -308,46 +409,59 @@ export function NoteModal(props: {
     if (n !== '') props.onSubmit(n);
   };
   return (
-    <Modal onClose={props.onClose} label={__('Add a note')} backdropClass="bg-black/30 flex items-center justify-center p-6">
-      <div class="w-[22rem] max-w-full rounded-lg bg-white p-4 shadow-xl">
-        <h2 class="mb-2 flex flex-wrap items-center gap-1.5 text-sm font-semibold text-gray-800">
-          <Show when={'remove' === props.purpose} fallback={<>{__('Tag')} <TagPill tag={props.tag} /> {__('needs a note')}</>}>
-            {__('Removing')} <TagPill tag={props.tag} /> {__('needs a note')}
-          </Show>
-        </h2>
-        <textarea
-          class="h-24 w-full resize-none rounded border border-gray-300 px-2 py-1 text-sm"
-          placeholder={'remove' === props.purpose
-            ? __('How was this resolved? (Ctrl+Enter to remove)')
-            : __('Why are you applying this tag? (Ctrl+Enter to apply)')}
-          value={note()}
-          onInput={(e) => setNote(e.currentTarget.value)}
-          onKeyDown={(e) => {
-            e.stopPropagation();
-            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-              e.preventDefault();
-              submit();
-            }
-          }}
-          ref={(el) => queueMicrotask(() => el.focus())}
+    <Modal onClose={props.onClose} label={__('Add a note')}>
+      <ModalPanel size="sm">
+        <ModalHeader
+          title={
+            <Show
+              when={'remove' === props.purpose}
+              fallback={
+                <>
+                  {_x(
+                    'Tag',
+                    'start of the sentence: Tag <tag name> needs a note — the tag name follows',
+                  )}{' '}
+                  <TagPill tag={props.tag} /> {__('needs a note')}
+                </>
+              }
+            >
+              {_x(
+                'Removing',
+                'start of the sentence: Removing <tag name> needs a note — the tag name follows',
+              )}{' '}
+              <TagPill tag={props.tag} /> {__('needs a note')}
+            </Show>
+          }
         />
-        <div class="mt-3 flex justify-end gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={props.onClose}
-          >
+        <div class="p-4">
+          <textarea
+            class="h-24 w-full resize-none rounded border border-gray-300 px-2 py-1 text-sm"
+            placeholder={
+              'remove' === props.purpose
+                ? __('How was this resolved? (Ctrl+Enter to remove)')
+                : __('Why are you applying this tag? (Ctrl+Enter to apply)')
+            }
+            value={note()}
+            onInput={(e) => setNote(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                submit();
+              }
+            }}
+            ref={(el) => queueMicrotask(() => el.focus())}
+          />
+        </div>
+        <ModalFooter>
+          <Button variant="ghost" size="sm" onClick={props.onClose}>
             {__('Cancel')}
           </Button>
-          <Button
-            size="sm"
-            disabled={note().trim() === ''}
-            onClick={submit}
-          >
-            {__('Apply tag')}
+          <Button size="sm" disabled={note().trim() === ''} onClick={submit}>
+            {'remove' === props.purpose ? __('Remove tag') : __('Apply tag')}
           </Button>
-        </div>
-      </div>
+        </ModalFooter>
+      </ModalPanel>
     </Modal>
   );
 }
@@ -364,25 +478,31 @@ export function NoteModal(props: {
  * outline = appliable, struck = just removed). Since the hatch is decoration a screen reader never
  * reaches, the `title` carries the same fact in words.
  */
-export function TagPill(props: { tag: TagSummary; onRemove?: () => void; count?: number; title?: string }): JSX.Element {
-  const c = (): TagColor => tagColor(props.tag.colorId);
+export function TagPill(props: {
+  tag: TagSummary;
+  onRemove?: () => void;
+  count?: number;
+  title?: string;
+}): JSX.Element {
   const archived = (): boolean => true === props.tag.archived;
   return (
     <Pill
       tone="none"
       shape="full"
-      style={{
-        'background-color': archived() ? tagArchivedFill(c()) : c().bg,
-        color: c().fg,
-        ...(archived() ? { 'background-image': tagHatch(c()) } : {}),
-      }}
-      title={props.title ?? (archived()
-        ? sprintf(__('%s — archived label, no longer affects the queue'), props.tag.name)
-        : props.tag.name)}
+      // Variables either way, so the chip re-themes with the page — the archived form included,
+      // whose fill and hatch are as theme-dependent as the pair they derive from.
+      style={archived() ? paletteArchivedStyle(props.tag.colorId) : paletteStyle(props.tag.colorId)}
+      title={
+        props.title ??
+        (archived()
+          ? sprintf(__('%s — archived label, no longer affects the queue'), props.tag.name)
+          : props.tag.name)
+      }
       onRemove={props.onRemove}
       removeLabel={sprintf(__('Remove %s'), props.tag.name)}
     >
-      {props.tag.name}{props.count !== undefined ? ` (${props.count})` : ''}
+      {props.tag.name}
+      {props.count !== undefined ? ` (${props.count})` : ''}
     </Pill>
   );
 }
@@ -393,7 +513,12 @@ export const TagChip = TagPill;
 
 /** A small colour dot for a tag (used in the assign menus). */
 function TagDot(props: { colorId: number }): JSX.Element {
-  return <span class="h-2.5 w-2.5 shrink-0 rounded-full" style={{ 'background-color': tagColor(props.colorId).bg }} />;
+  return (
+    <span
+      class="h-2.5 w-2.5 shrink-0 rounded-full"
+      style={{ 'background-color': `var(--tag-${props.colorId}-bg)` }}
+    />
+  );
 }
 
 /** Read-only pill row for queue cards. Renders nothing when there are no tags. */
@@ -414,24 +539,48 @@ export const TagChipRow = TagPillRow;
  * Reusable pill-grid tag picker — the shared surface behind the right-click
  * "Add tag" menu and the queue tag-filter. Renders tags as clickable
  * TagPill} pills in a `flex-wrap`; `selectedIds` members get a selection ring
- * (filter/multi-select), and `showCount` appends each tag's order-usage count.
+ * (filter/multi-select), and a pill may carry a number.
+ *
+ * **Which number depends on the question the surface is asking**, so the two are separate
+ * props and neither stands in for the other. Picking a tag to *apply*, `showCount` gives the
+ * tag's standing usage across every order — how established this tag is. Picking one to
+ * *filter by*, `counts` gives what each option would match under the filters already applied.
+ * They routinely disagree by an order of magnitude, and a picker wearing the wrong one reads
+ * as a bug in the filter rather than a mislabelled number.
  */
 export function TagPickerPills(props: {
   tags: TagSummary[];
   selectedIds?: Set<number>;
   onPick: (tag: TagSummary) => void;
   showCount?: boolean;
+  /**
+   * Per-option match counts keyed by tag id, as a host's resolved filter options carry them.
+   *
+   * A tag missing from the map renders `0`, never blank: an option matching nothing right now
+   * must still say so, or "no orders under these filters" becomes indistinguishable from
+   * "this tag does not exist". Pass `undefined` while the counts are still unknown — a
+   * momentarily numberless pill is honest, a stale or foreign number is not.
+   */
+  counts?: Record<string, number>;
   emptyText?: string;
 }): JSX.Element {
   return (
     <Show
       when={props.tags.length > 0}
-      fallback={<div class="px-1 py-1 text-2xs text-text-muted">{props.emptyText ?? __('No tags')}</div>}
+      fallback={
+        <div class="px-1 py-1 text-2xs text-text-muted">{props.emptyText ?? __('No tags')}</div>
+      }
     >
       <div class="flex flex-wrap gap-1.5">
         <For each={props.tags}>
           {(t) => {
             const selected = (): boolean => props.selectedIds?.has(t.id) ?? false;
+            const count = (): number | undefined =>
+              props.counts !== undefined
+                ? (props.counts[String(t.id)] ?? 0)
+                : true === props.showCount
+                  ? t.orderCount
+                  : undefined;
             return (
               <button
                 type="button"
@@ -440,7 +589,7 @@ export function TagPickerPills(props: {
                 title={selected() ? sprintf(__('%s (selected)'), t.name) : t.name}
                 onClick={() => props.onPick(t)}
               >
-                <TagPill tag={t} count={props.showCount ? t.orderCount : undefined} />
+                <TagPill tag={t} count={count()} />
               </button>
             );
           }}
@@ -455,13 +604,29 @@ export const FILTER_CONTROL_TAGS = 'tags';
 
 /**
  * The dispatch tag-filter editor — the same {@link TagPickerPills} the right-click
- * menu uses, in multi-select mode. Reads the live tag list itself (with colours +
- * counts) rather than the host's plain `{value,label}` options. `value` is the
+ * menu uses, in multi-select mode. The tag list itself comes from the live query, which is
+ * what carries colours; the host's options supply the filter-facet counts. `value` is the
  * selected tag-id strings; clicking a pill toggles it.
  */
 function TagFilterControl(props: FilterControlProps): JSX.Element {
   const tags = useTagsQuery();
   const selectedIds = createMemo(() => new Set(props.value.map((v) => Number(v))));
+  /**
+   * Facet counts as the host resolved them — `undefined` until it has any.
+   *
+   * The alternative on hand is each tag's standing usage, and it is not a stand-in: that
+   * number spans every order ever, closed ones included, so beside a queue showing one
+   * workflow state it can exceed the whole view. Self-exclusion also means these counts
+   * *rise* as the operator selects tags, which only reads correctly if the number is the
+   * faceted one throughout.
+   */
+  const facetCounts = createMemo<Record<string, number> | undefined>(() => {
+    const counted = props.options.filter((option) => option.count !== undefined);
+
+    return counted.length === 0
+      ? undefined
+      : Object.fromEntries(counted.map((option) => [option.value, option.count ?? 0]));
+  });
   const toggle = (tag: TagSummary): void => {
     const idStr = String(tag.id);
     const next = props.value.includes(idStr)
@@ -474,7 +639,7 @@ function TagFilterControl(props: FilterControlProps): JSX.Element {
       <TagPickerPills
         tags={tags.data ?? []}
         selectedIds={selectedIds()}
-        showCount
+        counts={facetCounts()}
         emptyText={__('No tags yet')}
         onPick={toggle}
       />
@@ -491,12 +656,16 @@ filterControlRegistry.register(FILTER_CONTROL_TAGS, 'dispatch.tags', TagFilterCo
 export function OrderTagsBar(props: { orderHexId: string; tags?: TagSummary[] }): JSX.Element {
   const ctx = useDispatch();
   const governTags = (): boolean => ctx.capabilities.governTags;
+  // The licence, beside the capability: they answer different questions and both are needed.
+  const governOn = (): boolean => ctx.entitlements.governanceTags;
   const allTags = useTagsQuery();
   const mutations = useOrderTagMutations(() => props.orderHexId);
   const [menuOpen, setMenuOpen] = createSignal(false);
   const [managerOpen, setManagerOpen] = createSignal(false);
   // Carries the direction too: the same modal serves both, and the copy differs.
-  const [noteFor, setNoteFor] = createSignal<{ tag: TagSummary; purpose: 'add' | 'remove' } | null>(null);
+  const [noteFor, setNoteFor] = createSignal<{ tag: TagSummary; purpose: 'add' | 'remove' } | null>(
+    null,
+  );
 
   const assignedIds = createMemo(() => new Set((props.tags ?? []).map((t) => t.id)));
   // The generic "+ Tag" menu excludes tags the user can't hand-apply (System /
@@ -505,8 +674,8 @@ export function OrderTagsBar(props: { orderHexId: string; tags?: TagSummary[] })
     (allTags.data ?? []).filter(
       (t) =>
         !assignedIds().has(t.id) &&
-        !t.governanceFlags.includes('HidePicker') &&
-        canApplyTag(t, governTags()),
+        !(governOn() && t.governanceFlags.includes('HidePicker')) &&
+        canApplyTag(t, governTags(), governOn()),
     ),
   );
   // Tags with a dedicated affordance (PromotedAffordance), e.g. Parked — surfaced
@@ -516,15 +685,16 @@ export function OrderTagsBar(props: { orderHexId: string; tags?: TagSummary[] })
   const buttonTags = createMemo(() =>
     (allTags.data ?? []).filter(
       (t) =>
+        governOn() &&
         t.governanceFlags.includes('PromotedAffordance') &&
         !assignedIds().has(t.id) &&
-        canApplyTag(t, governTags()),
+        canApplyTag(t, governTags(), governOn()),
     ),
   );
 
   /** Apply a tag: if it demands a note, open the note modal first; else assign directly. */
   const applyTag = (t: TagSummary): void => {
-    if (tagNeedsNote(t)) {
+    if (tagNeedsNote(t, governOn())) {
       setNoteFor({ tag: t, purpose: 'add' });
       return;
     }
@@ -533,7 +703,7 @@ export function OrderTagsBar(props: { orderHexId: string; tags?: TagSummary[] })
 
   /** Remove a tag: one that demands an explanation on the way out asks for it first. */
   const removeTag = (t: TagSummary): void => {
-    if (tagNeedsRemovalNote(t)) {
+    if (tagNeedsRemovalNote(t, governOn())) {
       setNoteFor({ tag: t, purpose: 'remove' });
       return;
     }
@@ -546,7 +716,7 @@ export function OrderTagsBar(props: { orderHexId: string; tags?: TagSummary[] })
         {(t) => (
           <TagPill
             tag={t}
-            onRemove={canRemoveTag(t, governTags()) ? () => removeTag(t) : undefined}
+            onRemove={canRemoveTag(t, governTags(), governOn()) ? () => removeTag(t) : undefined}
           />
         )}
       </For>
@@ -555,12 +725,15 @@ export function OrderTagsBar(props: { orderHexId: string; tags?: TagSummary[] })
           Once applied they vanish here — the chip above carries the tag + removal. */}
       <For each={buttonTags()}>
         {(t) => {
-          const c = (): TagColor => tagColor(t.colorId);
           return (
             <button
               type="button"
-              class="inline-flex cursor-pointer items-center gap-1 rounded-full border border-dashed px-2 py-1 text-2xs font-medium leading-none opacity-70 transition hover:opacity-100"
-              style={{ 'border-color': tagInk(c()), color: tagInk(c()) }}
+              /* Filled, not an outline on nothing. Unapplied, these are *controls* — the one
+                 affordance on the header strip that does something rather than reporting it — and a
+                 transparent dashed ring reads as an empty slot instead. The dashes still carry
+                 "not applied yet"; the surface carries "this is a button". */
+              class="inline-flex cursor-pointer items-center gap-1 rounded-full border border-dashed bg-surface px-2 py-1 text-2xs font-medium leading-none opacity-70 transition hover:opacity-100"
+              style={{ 'border-color': paletteInk(t.colorId), color: paletteInk(t.colorId) }}
               title={sprintf(__('Apply %s'), t.name)}
               onClick={() => applyTag(t)}
             >
@@ -573,7 +746,7 @@ export function OrderTagsBar(props: { orderHexId: string; tags?: TagSummary[] })
       <div class="relative">
         <button
           type="button"
-          class="inline-flex cursor-pointer items-center gap-1 rounded-full border border-dashed border-gray-300 px-2 py-1 text-2xs text-gray-500 hover:border-gray-400 hover:text-gray-700"
+          class="inline-flex cursor-pointer items-center gap-1 rounded-full border border-dashed border-gray-300 bg-surface px-2 py-1 text-2xs text-gray-500 hover:border-gray-400 hover:text-gray-700"
           onClick={() => setMenuOpen((v) => !v)}
         >
           {__('+ Tag')}
@@ -581,10 +754,12 @@ export function OrderTagsBar(props: { orderHexId: string; tags?: TagSummary[] })
         <Show when={menuOpen()}>
           {/* click-away backdrop */}
           <div class="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
-          <div class="absolute left-0 top-full z-20 mt-1 max-h-64 w-52 overflow-y-auto rounded-md border border-gray-200 bg-white py-1 shadow-lg">
+          <div class="absolute left-0 top-full z-20 mt-1 max-h-64 w-52 overflow-y-auto rounded-md border border-gray-200 bg-surface py-1 shadow-lg">
             <For
               each={assignable()}
-              fallback={<div class="px-3 py-1.5 text-2xs text-text-muted">{__('No more tags')}</div>}
+              fallback={
+                <div class="px-3 py-1.5 text-2xs text-text-muted">{__('No more tags')}</div>
+              }
             >
               {(t) => (
                 <button
@@ -598,7 +773,9 @@ export function OrderTagsBar(props: { orderHexId: string; tags?: TagSummary[] })
                   <TagDot colorId={t.colorId} />
                   <span class="truncate">{t.name}</span>
                   <Show when={isGovernanceTag(t)}>
-                    <span class="ml-auto text-2xs text-text-muted" title={__('Governance tag')}>⚑</span>
+                    <span class="ml-auto text-2xs text-text-muted" title={__('Governance tag')}>
+                      ⚑
+                    </span>
                   </Show>
                 </button>
               )}
@@ -765,7 +942,12 @@ export function TagManagerModal(props: { onClose: () => void }): JSX.Element {
     const c = collision();
     if (!c) return null;
     return c.archived
-      ? sprintf(__('An archived tag is already named "%s". Restore it instead of creating a second one — it still has its settings and its history.'), c.name)
+      ? sprintf(
+          __(
+            'An archived tag is already named "%s". Restore it instead of creating a second one — it still has its settings and its history.',
+          ),
+          c.name,
+        )
       : sprintf(__('A tag is already named "%s".'), c.name);
   });
 
@@ -801,126 +983,132 @@ export function TagManagerModal(props: { onClose: () => void }): JSX.Element {
   };
 
   return (
-    <Modal onClose={props.onClose} label={__('Manage tags')} backdropClass="bg-black/30 flex items-center justify-center p-6">
-      <div class="w-[26rem] max-w-full rounded-lg bg-white p-5 shadow-xl">
-        <div class="mb-3 flex items-center justify-between">
-          <h2 class="text-sm font-semibold text-gray-800">{__('Manage order tags')}</h2>
-          <Button
-            variant="quiet"
-            size="xs"
-            aria-label={__('Close')}
-            onClick={props.onClose}
-          >
-            ×
-          </Button>
-        </div>
-
-        {/* Create */}
-        <div class="mb-4 rounded-md border border-gray-200 p-3">
-          <div class="mb-2 flex items-center gap-2">
-            <input
-              ref={nameInputEl}
-              class="min-w-0 flex-1 rounded border border-gray-300 px-2 text-sm"
-              placeholder={__('New tag name')}
-              value={newName()}
-              onInput={(e) => setNewName(e.currentTarget.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') create();
-              }}
-            />
-            <Button
-              size="sm"
-              disabled={query() === '' || admin.create.isPending || addDisabledReason() !== null}
-              title={addDisabledReason() ?? undefined}
-              onClick={create}
-            >
-              {__('Add')}
+    <Modal onClose={props.onClose} label={__('Manage tags')}>
+      <ModalPanel size="md">
+        <ModalHeader
+          title={__('Manage order tags')}
+          actions={
+            <Button variant="quiet" size="xs" aria-label={__('Close')} onClick={props.onClose}>
+              ×
             </Button>
+          }
+        />
+        <div class="p-4">
+          {/* Create */}
+          <div class="mb-4 rounded-md border border-gray-200 p-3">
+            <div class="mb-2 flex items-center gap-2">
+              <input
+                ref={nameInputEl}
+                class="min-w-0 flex-1 rounded border border-gray-300 px-2 text-sm"
+                placeholder={__('New tag name')}
+                value={newName()}
+                onInput={(e) => setNewName(e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') create();
+                }}
+              />
+              <Button
+                size="sm"
+                disabled={query() === '' || admin.create.isPending || addDisabledReason() !== null}
+                title={addDisabledReason() ?? undefined}
+                onClick={create}
+              >
+                {__('Add')}
+              </Button>
+            </div>
+
+            <Show when={addDisabledReason()}>
+              {(reason) => <p class="-mt-1 mb-2 text-2xs text-amber-700">{reason()}</p>}
+            </Show>
+            <Show when={error()}>
+              <p class="-mt-1 mb-2 text-2xs text-rose-600">{error()}</p>
+            </Show>
+
+            <PaletteSwatchPicker
+              value={newColorId()}
+              onPick={setNewColorId}
+              ariaLabel={__('Tag colour')}
+            />
+
+            {/* Tag settings (Pro): behaviour + access beyond a plain label. */}
+            <TagSettingsSection
+              flags={newFlags()}
+              priority={newPriority()}
+              authority={newAuthority()}
+              onFlags={setNewFlags}
+              onPriority={setNewPriority}
+              onAuthority={setNewAuthority}
+            />
           </div>
 
-          <Show when={addDisabledReason()}>
-            {(reason) => <p class="-mt-1 mb-2 text-2xs text-amber-700">{reason()}</p>}
-          </Show>
-          <Show when={error()}>
-            <p class="-mt-1 mb-2 text-2xs text-rose-600">{error()}</p>
-          </Show>
+          {/* Existing / matching */}
+          <div class="max-h-72 space-y-1.5 overflow-y-auto">
+            <h3 class="sticky top-0 z-10 bg-surface pb-1 text-2xs font-semibold uppercase tracking-wide text-text-muted">
+              {filtering() ? __('Matching tags') : __('Existing tags')}
+            </h3>
+            <For
+              each={liveMatches()}
+              fallback={
+                <p class="py-2 text-center text-xs text-text-muted">
+                  {filtering() ? __('No tag matches that name.') : __('No tags yet.')}
+                </p>
+              }
+            >
+              {(t) => <TagManagerRow tag={t} query={query()} />}
+            </For>
 
-          <PaletteSwatchPicker value={newColorId()} onPick={setNewColorId} ariaLabel={__('Tag colour')} />
+            {/* Archived — folded, and only loaded when opened. */}
+            <Show when={(archivedNames.data ?? []).length > 0}>
+              <div class="mt-2 rounded-md bg-gray-50 p-2">
+                <button
+                  type="button"
+                  class="flex w-full cursor-pointer items-center justify-between text-2xs font-semibold uppercase tracking-wide text-text-muted hover:text-gray-600"
+                  aria-expanded={showArchived()}
+                  onClick={() => setShowArchived((v) => !v)}
+                >
+                  <span>
+                    {filtering() ? __('Matching archived tags') : __('Archived tags')}
+                    {` (${filtering() ? archivedMatches().length : (archivedNames.data ?? []).length})`}
+                  </span>
+                  <span aria-hidden="true">{showArchived() ? '▾' : '▸'}</span>
+                </button>
 
-          {/* Tag settings (Pro): behaviour + access beyond a plain label. */}
-          <TagSettingsSection
-            flags={newFlags()}
-            priority={newPriority()}
-            authority={newAuthority()}
-            onFlags={setNewFlags}
-            onPriority={setNewPriority}
-            onAuthority={setNewAuthority}
-          />
-        </div>
-
-        {/* Existing / matching */}
-        <div class="max-h-72 space-y-1.5 overflow-y-auto">
-          <h3 class="sticky top-0 z-10 bg-white pb-1 text-2xs font-semibold uppercase tracking-wide text-text-muted">
-            {filtering() ? __('Matching tags') : __('Existing tags')}
-          </h3>
-          <For
-            each={liveMatches()}
-            fallback={
-              <p class="py-2 text-center text-xs text-text-muted">
-                {filtering() ? __('No tag matches that name.') : __('No tags yet.')}
-              </p>
-            }
-          >
-            {(t) => <TagManagerRow tag={t} query={query()} />}
-          </For>
-
-          {/* Archived — folded, and only loaded when opened. */}
-          <Show when={(archivedNames.data ?? []).length > 0}>
-            <div class="mt-2 rounded-md bg-gray-50 p-2">
-              <button
-                type="button"
-                class="flex w-full cursor-pointer items-center justify-between text-2xs font-semibold uppercase tracking-wide text-text-muted hover:text-gray-600"
-                aria-expanded={showArchived()}
-                onClick={() => setShowArchived((v) => !v)}
-              >
-                <span>
-                  {filtering() ? __('Matching archived tags') : __('Archived tags')}
-                  {` (${filtering() ? archivedMatches().length : (archivedNames.data ?? []).length})`}
-                </span>
-                <span aria-hidden="true">{showArchived() ? '▾' : '▸'}</span>
-              </button>
-
-              <Show when={showArchived()}>
-                <div class="mt-1.5 space-y-1.5">
-                  <Show
-                    when={!archivedTags.isPending}
-                    fallback={<p class="py-2 text-center text-xs text-text-muted">{__('Loading…')}</p>}
-                  >
-                    <For
-                      each={(archivedTags.data ?? []).filter(
-                        (t) => !filtering() || archivedMatches().some((m) => m.id === t.id),
-                      )}
+                <Show when={showArchived()}>
+                  <div class="mt-1.5 space-y-1.5">
+                    <Show
+                      when={!archivedTags.isPending}
                       fallback={
-                        <p class="py-2 text-center text-xs text-text-muted">
-                          {filtering() ? __('No archived tag matches that name.') : __('None.')}
-                        </p>
+                        <p class="py-2 text-center text-xs text-text-muted">{__('Loading…')}</p>
                       }
                     >
-                      {(t) => (
-                        <ArchivedTagRow
-                          tag={t}
-                          query={query()}
-                          highlighted={collision()?.archived === true && collision()?.id === t.id}
-                        />
-                      )}
-                    </For>
-                  </Show>
-                </div>
-              </Show>
-            </div>
-          </Show>
+                      <For
+                        each={(archivedTags.data ?? []).filter(
+                          (t) => !filtering() || archivedMatches().some((m) => m.id === t.id),
+                        )}
+                        fallback={
+                          <p class="py-2 text-center text-xs text-text-muted">
+                            {filtering()
+                              ? __('No archived tag matches that name.')
+                              : _x('None.', 'archived order tags list: there are none')}
+                          </p>
+                        }
+                      >
+                        {(t) => (
+                          <ArchivedTagRow
+                            tag={t}
+                            query={query()}
+                            highlighted={collision()?.archived === true && collision()?.id === t.id}
+                          />
+                        )}
+                      </For>
+                    </Show>
+                  </div>
+                </Show>
+              </div>
+            </Show>
+          </div>
         </div>
-      </div>
+      </ModalPanel>
     </Modal>
   );
 }
@@ -931,18 +1119,29 @@ export function TagManagerModal(props: { onClose: () => void }): JSX.Element {
  * Read-only apart from Restore. An archived tag is out of circulation — renaming or recolouring one
  * in place would be editing something the merchant cannot see the effects of; bring it back first.
  */
-function ArchivedTagRow(props: { tag: TagSummary; query: string; highlighted?: boolean }): JSX.Element {
+function ArchivedTagRow(props: {
+  tag: TagSummary;
+  query: string;
+  highlighted?: boolean;
+}): JSX.Element {
   const admin = useTagAdminMutations();
   return (
     <div
       class="flex items-center gap-2 py-0.5"
-      classList={{ 'rounded border border-amber-300 bg-amber-50 px-2 py-1.5': true === props.highlighted }}
+      classList={{
+        'rounded border border-amber-300 bg-amber-50 px-2 py-1.5': true === props.highlighted,
+      }}
     >
       <TagPill tag={props.tag} />
       <span class="min-w-0 flex-1 truncate text-xs text-gray-500">
         <HighlightMatch text={props.tag.name} query={props.query} />
         <Show when={undefined !== props.tag.orderCount}>
-          <span class="ml-1 text-text-muted">{sprintf(_n('%d order', '%d orders', props.tag.orderCount ?? 0), props.tag.orderCount ?? 0)}</span>
+          <span class="ml-1 text-text-muted">
+            {sprintf(
+              _n('%d order', '%d orders', props.tag.orderCount ?? 0),
+              props.tag.orderCount ?? 0,
+            )}
+          </span>
         </Show>
       </span>
       <Button
@@ -997,7 +1196,12 @@ function TagManagerRow(props: { tag: TagSummary; query?: string }): JSX.Element 
         {/* Render the tag exactly as it appears on an order (live preview of the
             edited name/colour) — quicker to identify by width + colour + text.
             Clicking it opens the colour picker. */}
-        <button type="button" class="shrink-0 cursor-pointer" aria-label={__('Change colour')} onClick={() => setEditingColor((v) => !v)}>
+        <button
+          type="button"
+          class="shrink-0 cursor-pointer"
+          aria-label={__('Change colour')}
+          onClick={() => setEditingColor((v) => !v)}
+        >
           <TagPill tag={{ ...props.tag, name: name().trim() === '' ? props.tag.name : name() }} />
         </button>
         {/* Renaming is behind a pencil rather than living in an always-editable input. Two reasons,
@@ -1068,12 +1272,14 @@ function TagManagerRow(props: { tag: TagSummary; query?: string }): JSX.Element 
           type="button"
           class={iconButtonClass('xs', true, 'w-auto shrink-0 px-1.5 text-rose-500')}
           onClick={() => admin.remove.mutate(props.tag.id)}
-          title={__('Retire tag (hidden from the picker; existing orders keep it, and history stays readable)')}
+          title={__(
+            'Retire tag (hidden from the picker; existing orders keep it, and history stays readable)',
+          )}
         >
-          {__('Retire')}
+          {_x('Retire', 'button: retire an order tag — hidden from the picker, orders keep it')}
         </button>
         <Show when={editingColor()}>
-          <div class="absolute right-2 top-full z-30 mt-1 rounded-md border border-gray-200 bg-white p-2 shadow-lg">
+          <div class="absolute right-2 top-full z-30 mt-1 rounded-md border border-gray-200 bg-surface p-2 shadow-lg">
             <PaletteSwatchPicker
               ariaLabel={__('Tag colour')}
               value={props.tag.colorId}
@@ -1115,6 +1321,8 @@ function TagManagerRow(props: { tag: TagSummary; query?: string }): JSX.Element 
 export function BulkTagAssign(props: { orderIds: string[]; onDone?: () => void }): JSX.Element {
   const ctx = useDispatch();
   const governTags = (): boolean => ctx.capabilities.governTags;
+  // The licence, beside the capability: they answer different questions and both are needed.
+  const governOn = (): boolean => ctx.entitlements.governanceTags;
   const allTags = useTagsQuery();
   const bulk = useBulkAssignTagsMutation();
   const [open, setOpen] = createSignal(false);
@@ -1122,7 +1330,9 @@ export function BulkTagAssign(props: { orderIds: string[]; onDone?: () => void }
   // Same apply-gate + picker-hide as the per-order menus.
   const bulkAssignable = createMemo(() =>
     (allTags.data ?? []).filter(
-      (t) => !t.governanceFlags.includes('HidePicker') && canApplyTag(t, governTags()),
+      (t) =>
+        !(governOn() && t.governanceFlags.includes('HidePicker')) &&
+        canApplyTag(t, governTags(), governOn()),
     ),
   );
 
@@ -1135,7 +1345,7 @@ export function BulkTagAssign(props: { orderIds: string[]; onDone?: () => void }
   // A note-required tag opens the note modal first (one shared batch note stamped per order).
   const pick = (t: TagSummary): void => {
     setOpen(false);
-    if (tagNeedsNote(t)) {
+    if (tagNeedsNote(t, governOn())) {
       setNoteFor(t);
       return;
     }
@@ -1155,7 +1365,7 @@ export function BulkTagAssign(props: { orderIds: string[]; onDone?: () => void }
       </Button>
       <Show when={open()}>
         <div class="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-        <div class="absolute left-0 top-full z-20 mt-1 max-h-64 w-60 overflow-y-auto rounded-md border border-gray-200 bg-white p-2 shadow-lg">
+        <div class="absolute left-0 top-full z-20 mt-1 max-h-64 w-60 overflow-y-auto rounded-md border border-gray-200 bg-surface p-2 shadow-lg">
           <TagPickerPills tags={bulkAssignable()} showCount onPick={pick} />
         </div>
       </Show>
@@ -1192,14 +1402,16 @@ export function RowContextMenu(props: {
 }): JSX.Element {
   const ctx = useDispatch();
   const governTags = (): boolean => ctx.capabilities.governTags;
+  // The licence, beside the capability: they answer different questions and both are needed.
+  const governOn = (): boolean => ctx.entitlements.governanceTags;
   const allTags = useTagsQuery();
   const assignedIds = createMemo(() => new Set((props.order.tags ?? []).map((t) => t.id)));
   const assignable = createMemo(() =>
     (allTags.data ?? []).filter(
       (t) =>
         !assignedIds().has(t.id) &&
-        !t.governanceFlags.includes('HidePicker') &&
-        canApplyTag(t, governTags()),
+        !(governOn() && t.governanceFlags.includes('HidePicker')) &&
+        canApplyTag(t, governTags(), governOn()),
     ),
   );
 
@@ -1219,9 +1431,16 @@ export function RowContextMenu(props: {
   return (
     <>
       {/* click-away backdrop */}
-      <div class="fixed inset-0 z-40" onClick={props.onClose} onContextMenu={(e) => { e.preventDefault(); props.onClose(); }} />
       <div
-        class="fixed z-50 w-[240px] overflow-hidden rounded-md border border-gray-200 bg-white py-1 text-sm shadow-xl"
+        class="fixed inset-0 z-40"
+        onClick={props.onClose}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          props.onClose();
+        }}
+      />
+      <div
+        class="fixed z-50 w-[240px] overflow-hidden rounded-md border border-gray-200 bg-surface py-1 text-sm shadow-xl"
         style={{ left: `${left()}px`, top: `${top()}px` }}
       >
         <div class="px-3 py-1 text-2xs font-medium uppercase tracking-wide text-text-muted">

@@ -49,6 +49,10 @@ export const _nx = (
 export const sprintf = (format: string, ...args: (string | number)[]): string =>
   wp()?.sprintf(format, ...args) ?? fallbackSprintf(format, ...args);
 
+// Unused, and kept on purpose: this file's job is to mirror the `wp.i18n` global's surface so the
+// ESM build can resolve `@wordpress/i18n`. A shim that omits the members nobody happens to call yet
+// is a *partial* shim — a trap for whoever next reaches for a function the real API has. Fidelity
+// to the mirrored interface, not a claim that anything uses this.
 export const isRTL = (): boolean => wp()?.isRTL() ?? false;
 
 export const setLocaleData = (data: Record<string, unknown>, domain?: string): void =>

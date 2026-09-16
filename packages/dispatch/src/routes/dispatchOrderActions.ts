@@ -1,4 +1,4 @@
-import { __ } from '@invflux/i18n';
+import { __, _x } from '@invflux/i18n';
 import { entityActionRegistry, type EntityActionContext, TruckIcon } from '@invflux/ui';
 
 /**
@@ -25,13 +25,18 @@ export interface DispatchOrderDetailContext extends EntityActionContext {
   /** Open the confirm-ship modal (core, Essentials). */
   openShip: () => void;
 
-  // ── Contract read by add-on actions (e.g. the paid "Ship staged") ───────────────
+  // ── Contract read by add-on actions (e.g. the paid partial-ship action) ─────────
   /** Order hex id — add-on REST calls are keyed by hex (`…/orders/{hexId}/shipments`). */
   hexId: string;
   /** Structural: some lines are staged and others still open, so a partial ship is possible. */
   canPartialShip: boolean;
   /** The staged lines (label + staged qty), for an add-on's partial-ship confirm preview. */
   stagedLines: { label: string; qty: number }[];
+  /**
+   * Units still to send across the whole order (ordered − corrected − shipped, per line), so a
+   * partial-ship action can say how much of the order it covers: "3 of 7 units".
+   */
+  outstandingUnits: number;
   /** Refresh the order detail after an add-on mutation (host owns its own query invalidation). */
   onDone: () => void;
 }
@@ -55,7 +60,12 @@ export function registerDispatchOrderActions(): void {
     group: 'primary',
     locked: true,
     isAvailable: (c) => 'Shipped' !== c.status,
-    disabledReason: (c) => (!c.canShip ? c.blockedReason : c.shipPending ? __('Shipping…') : undefined),
+    disabledReason: (c) =>
+      !c.canShip
+        ? c.blockedReason
+        : c.shipPending
+          ? _x('Shipping…', 'button while busy: the order is being shipped')
+          : undefined,
     run: (c) => c.openShip(),
   });
 }

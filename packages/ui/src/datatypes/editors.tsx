@@ -17,10 +17,15 @@ import { codecRegistry, editRegistry } from './registry';
  * committing (type-strict, §11.10.1). `align`/`inputmode` are the only per-datatype differences:
  * numeric types right-align with a numeric/decimal inputmode, text left-aligns.
  */
-function makeInputEditor(opts: { align: 'left' | 'right'; inputmode?: 'numeric' | 'decimal' }): (props: EditProps) => JSX.Element {
+function makeInputEditor(opts: {
+  align: 'left' | 'right';
+  inputmode?: 'numeric' | 'decimal';
+}): (props: EditProps) => JSX.Element {
   return (props: EditProps) => {
     let ref: HTMLInputElement | undefined;
-    const initial = props.initialText ?? (props.value === null || props.value === undefined ? '' : String(props.value));
+    const initial =
+      props.initialText ??
+      (props.value === null || props.value === undefined ? '' : String(props.value));
 
     onMount(() => {
       ref?.focus();
@@ -33,7 +38,10 @@ function makeInputEditor(opts: { align: 'left' | 'right'; inputmode?: 'numeric' 
       const codec = codecRegistry.resolve(props.column.dataType);
       const raw = ref?.value ?? '';
       const parsed = codec
-        ? codec.parse(raw, { config: props.column.editorConfig, taxonomySpace: props.ctx.taxonomySpace })
+        ? codec.parse(raw, {
+            config: props.column.editorConfig,
+            taxonomySpace: props.ctx.taxonomySpace,
+          })
         : raw;
       if (parsed === null) {
         props.onCancel(); // invalid → revert
@@ -44,6 +52,7 @@ function makeInputEditor(opts: { align: 'left' | 'right'; inputmode?: 'numeric' 
 
     return (
       <input
+        aria-label={props.column.label}
         ref={ref}
         // `text` + numeric/decimal inputmode (not `number`) so the arrow keys move the text caret
         // like a normal spreadsheet editor rather than nudging a spinner; the codec validates on commit.
@@ -106,6 +115,7 @@ function BoolEditor(props: EditProps) {
 
   return (
     <select
+      aria-label={props.column.label}
       ref={ref}
       class="block h-full w-full border-0 bg-surface px-2 py-2 outline-none ring-2 ring-inset ring-blue-500"
       value={initial}
@@ -160,6 +170,7 @@ function EnumEditor(props: EditProps): JSX.Element {
 
   return (
     <select
+      aria-label={props.column.label}
       ref={ref}
       class="block h-full w-full border-0 bg-surface px-2 py-2 outline-none ring-2 ring-inset ring-blue-500"
       value={initial}
@@ -188,8 +199,20 @@ function EnumEditor(props: EditProps): JSX.Element {
   );
 }
 
-editRegistry.register('number', 'core.number-input', makeInputEditor({ align: 'right', inputmode: 'numeric' }), { default: true });
-editRegistry.register('decimal', 'core.decimal-input', makeInputEditor({ align: 'right', inputmode: 'decimal' }), { default: true });
-editRegistry.register('text', 'core.text-input', makeInputEditor({ align: 'left' }), { default: true });
+editRegistry.register(
+  'number',
+  'core.number-input',
+  makeInputEditor({ align: 'right', inputmode: 'numeric' }),
+  { default: true },
+);
+editRegistry.register(
+  'decimal',
+  'core.decimal-input',
+  makeInputEditor({ align: 'right', inputmode: 'decimal' }),
+  { default: true },
+);
+editRegistry.register('text', 'core.text-input', makeInputEditor({ align: 'left' }), {
+  default: true,
+});
 editRegistry.register('bool', 'core.bool-select', BoolEditor, { default: true });
 editRegistry.register('enum', 'core.enum-select', EnumEditor, { default: true });

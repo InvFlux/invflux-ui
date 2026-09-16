@@ -14,13 +14,80 @@
 
 @theme {
   /* ── Brand ─────────────────────────────────────────────────────────────── */
-  --color-primary:       oklch(56.5% 0.22 264);
-  --color-primary-hover: oklch(50%   0.22 264);
+  --color-primary: oklch(56.5% 0.22 264);
+  --color-primary-hover: oklch(50% 0.22 264);
 
-  /* ── Surfaces ──────────────────────────────────────────────────────────── */
-  --color-surface:        #ffffff;
-  --color-surface-raised: #f8fafc;
-  --color-border:         #e2e8f0;
+  /* ── Surfaces ──────────────────────────────────────────────────────────────
+     THREE steps, and the order between them is the point: `ground` is the page
+     itself, `surface` is a panel resting on it, `raised` is a band inside a panel
+     (a fold heading, a table header, a hovered menu item). Structure comes from
+     those steps before it comes from borders — a border is the highest-contrast,
+     least flexible tool we have, and repeated down a dense operational screen it
+     reads as a spreadsheet. Given a ground, a plain white card separates itself
+     with no line drawn at all.
+
+     `ground` is a *step*, never a colour: in dark mode it is the darkest of the
+     three, not the lightest, because what has to survive the theme is the
+     relationship — page recedes, panel advances. Anchored per slot rather than
+     inverted arithmetically, for the reason the ramp below documents at length.
+
+     `raised` steps AWAY from the panel, in whichever direction the theme leaves
+     room — down in light, where white admits none upward, and up in dark. So it
+     is the lightest of the three there and the DARKEST here, and it must clear
+     the ground as well as the panel: a band is not always inside a panel (an
+     order's line table is bands on the bare ground) and one that landed between
+     the two disappeared against whichever it met.
+
+     HOW FAR is not a matter of taste, because the system already contains its own
+     answer. `ground` against `surface` is 1.096:1 in light and 1.082:1 in dark,
+     and nobody has ever failed to see a card sitting on the page — so that is the
+     smallest step this system is known to carry, and any surface boundary weaker
+     than it is one we have evidence people do not see. `raised` twice shipped
+     below it: `#f8fafc` sat BETWEEN ground and surface at 1.03 from the ground,
+     and `#e9eef5` cleared the panel but came to 1.064 from the ground, which was
+     reported as "no contrast" the day after it landed. It is now 1.181 from the
+     ground and 1.294 from the panel; dark's is 1.185 / 1.282. Measure a new value
+     against BOTH neighbours and keep both above the card's own step. */
+  --color-ground: #f1f5f9;
+  --color-surface: #ffffff;
+  --color-surface-raised: #dbe3ee;
+
+  /* Hover is a STATE, not a level, and it needs its own tone because the two are solved against
+     opposite requirements. A surface level has to hold a boundary that is always on screen, so it
+     is measured at rest and wants distance. A hover tone is transient, arrives under the cursor
+     that asked for it, and is read against the element's own previous colour a fraction of a second
+     earlier — so the same distance that makes a good band makes hover feel like the row was
+     replaced rather than lit.
+
+     Reusing `raised` for both is what produced that: `hover:bg-surface-raised` on a panel is the
+     full 1.294 step, and it only became too much when `raised` was moved out to clear the ground.
+     One rung of the ladder cannot be tuned for two jobs at once.
+
+     Placed BETWEEN `surface` and `raised`, which makes it the same tone in both directions: a
+     `surface` item darkens INTO it, a `raised` item (a fold heading band) lightens INTO it. That is
+     not a coincidence to preserve for its own sake, but it is the reason one token suffices where
+     the obvious design needs two, and hover therefore lands on one shade everywhere.
+
+     Balanced rather than centred, since contrast is a ratio: 1.144 from the panel and 1.131 from
+     the band, so neither direction gets the weaker half. Both clear the card's own 1.096 step —
+     the smallest this system is known to carry — so hover stays visible while staying below every
+     structural boundary. Dark is 1.089 / 1.092 against its own pair.
+
+     It does NOT clear the ground (1.044), and does not need to: hover lands on a panel or a band,
+     never on the bare page. An item that sits directly on `ground` and wants a hover needs its own
+     answer measured there — do not reach for this one. */
+  --color-surface-hover: #ecf0f6;
+
+  --color-border: #e2e8f0;
+
+  /* A rule that has to read where `--color-border` cannot: ON the band.
+     `--color-border` is solved against the panel — a hairline on white, which is the whole point of
+     it, since a border is the highest-contrast tool here and a dense screen full of them reads as a
+     spreadsheet. But `raised` moved past it: measured, `#e2e8f0` on `#dbe3ee` is **1.049**, and the
+     "border" is in fact LIGHTER than the band it divides. Doubling the width of that is a thicker
+     invisible line. Use this for a rule between two bands (the separator stacking a page's fold
+     sections); keep `--color-border` for anything meeting a panel. */
+  --color-border-strong: #cbd5e1;
 
   /* The host's own chrome border, for a surface embedded *inside* a host screen rather than
      occupying its own page. Kept as a named token rather than a bare literal in the embedding
@@ -38,18 +105,27 @@
      written in rather than by what they meant. Two shades were doing one job.
 
      So there is one secondary grey. What *is* semantically distinct — "this value was not authored
-     here" (inherited, defaulted, or host-owned) — is carried by **italic**, and structurally by the
-     grid's `data-inherited` / `data-readonly` attributes. Provenance is not a brightness.
+     here" (inherited, defaulted, or host-owned) — is carried by **italic in that same grey**: the
+     `inherited` utility, and structurally the grid's `data-inherited` / `data-readonly` attributes.
+     The grey is the token, never a fade: an `opacity` or a colour-mix toward transparent lands
+     below the floor this token is solved to.
 
-     Do not add a lighter level. Nothing lighter than `muted` passes AA (it sits at 4.76:1, and the
-     floor is 4.50), so a paler grey can only be a regression wearing a token's name. For weaker
-     emphasis reach for size or weight; for "not authored here" reach for italic. */
-  --color-text:       #1e293b;  /* 14.63:1 on surface, 13.98:1 on raised */
-  --color-text-muted: #64748b;  /*  4.76:1 / 4.55:1 — the AA floor; nothing lighter is available */
+     Do not add a lighter level. `muted` is at the AA floor on the DEEPEST surface it can land on,
+     so a paler grey can only be a regression wearing a token's name. For weaker emphasis reach for
+     size or weight; for "not authored here" reach for `inherited`.
+
+     Solved against all three surfaces, not against white. It was `#64748b`, chosen when `surface`
+     and `surface-raised` were the only two and measured at 4.76 / 4.55 — both true, and both beside
+     the point once a `ground` existed: the same ink was 4.34:1 there, below the floor, on the
+     largest area of the page. Whatever the deepest surface is has to be the one that decides —
+     so this moves whenever `--color-surface-raised` does, and the pair is solved together. */
+  --color-text: #1e293b; /* 14.63 surface · 13.35 ground · 11.31 raised */
+  --color-text-muted: #57647a; /*  5.98 · 5.46 · 4.63 — the floor is 4.50, and `raised` sets it */
 
   /* ── Type ──────────────────────────────────────────────────────────────── */
-  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-               "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
   /* ONE step below Tailwind's `text-xs` (12px), and — as with the greys above — deliberately not
@@ -78,22 +154,721 @@
      where the numbers are local and mean nothing outside that component.
 
      In-page — above the surface's own content, below anything that must clear the host. */
-  --z-index-menu-backdrop:  60;   /* full-viewport click-away catcher under an open menu */
-  --z-index-menu:           61;
-  --z-index-submenu:        62;
+  --z-index-menu-backdrop: 60; /* full-viewport click-away catcher under an open menu */
+  --z-index-menu: 61;
+  --z-index-submenu: 62;
 
-  /* Above the host — WordPress fixes `#wpadminbar` at 99999, and these overlays are portalled into
-     `document.body` (see the app's `portalRoot`), so they compete with it directly rather than
-     from inside the SPA's own stacking context. Hence the 100000 base: it is not a magic big
-     number, it is 99999 + 1.
+  /* Above the host — WordPress fixes `#wpadminbar` at 99999. These overlays portal into a second
+     shadow root whose HOST is a direct child of `document.body` (the app's `portalRoot` sits inside
+     that shadow), and it is the host that participates in the document's stacking context. So these
+     values compete with the admin bar directly rather than from inside the SPA's own context, and
+     the 100000 base is not a magic big number: it is 99999 + 1.
 
-     The order within this ladder is load-bearing: a popover opened from inside a modal must paint
-     over that modal, and a toast must be visible whatever is open — including over a modal, which
-     is why it sits at the top rather than at its former 100 (a toast raised from a modal was
-     painting *behind* the modal's own full-viewport backdrop, so it was seen only after the modal
-     closed, if at all). */
-  --z-index-modal:      100000;
-  --z-index-popover:    100001;   /* combobox / dropdown surfaces, which may open over a modal */
-  --z-index-preview:    100002;   /* transient, pointer-following: the thumbnail zoom */
-  --z-index-toast:      100003;
+     The order within this ladder is load-bearing. A popover opened from inside a modal must paint
+     over that modal. A toast must be visible whatever is open, which is why it sits at the TOP of
+     the ladder and not among the in-page values: a toast below the modal layer is painted behind
+     that modal's own full-viewport backdrop, so it is seen only once the modal closes, if at all. */
+  --z-index-modal: 100000;
+  --z-index-popover: 100001; /* combobox / dropdown surfaces, which may open over a modal */
+  --z-index-preview: 100002; /* transient, pointer-following: the thumbnail zoom */
+  --z-index-toast: 100003;
+}
+
+/* ── Tag palette, as variables ─────────────────────────────────────────────────
+   The 24 AA-tuned `(background, foreground)` pairs, reachable from CSS.
+
+   They live here rather than only in `tagPalette.ts` because a pill's colour is
+   applied as an INLINE style — it is data, chosen at runtime, so there is no class
+   to name it — and an inline style cannot answer a media query. Left in JS, every
+   tag and status pill would have kept its light colours on a dark page, which is
+   the one thing the fixed-palette rule was chosen to make possible: give the pairs
+   a dark variant ONCE, centrally, instead of per tag.
+
+   Outside `@theme` deliberately: Tailwind emits theme variables it can see used,
+   and it cannot see a `var()` assembled in TypeScript. */
+:root,
+:host {
+  --tag-0-bg: rgb(231, 231, 231);
+  --tag-0-fg: rgb(70, 70, 70);
+  --tag-1-bg: rgb(182, 207, 245);
+  --tag-1-fg: rgb(13, 52, 114);
+  --tag-2-bg: rgb(152, 215, 228);
+  --tag-2-fg: rgb(13, 59, 68);
+  --tag-3-bg: rgb(227, 215, 255);
+  --tag-3-fg: rgb(61, 24, 142);
+  --tag-4-bg: rgb(251, 211, 224);
+  --tag-4-fg: rgb(113, 26, 54);
+  --tag-5-bg: rgb(242, 178, 168);
+  --tag-5-fg: rgb(138, 28, 10);
+  --tag-6-bg: rgb(117, 117, 117);
+  --tag-6-fg: rgb(255, 255, 255);
+  --tag-7-bg: rgb(30, 83, 184);
+  --tag-7-fg: rgb(255, 255, 255);
+  --tag-8-bg: rgb(0, 114, 134);
+  --tag-8-fg: rgb(255, 255, 255);
+  --tag-9-bg: rgb(120, 88, 195);
+  --tag-9-fg: rgb(255, 255, 255);
+  --tag-10-bg: rgb(194, 24, 91);
+  --tag-10-fg: rgb(255, 255, 255);
+  --tag-11-bg: rgb(217, 48, 37);
+  --tag-11-fg: rgb(255, 255, 255);
+  --tag-12-bg: rgb(255, 200, 175);
+  --tag-12-fg: rgb(122, 46, 11);
+  --tag-13-bg: rgb(255, 222, 181);
+  --tag-13-fg: rgb(122, 71, 6);
+  --tag-14-bg: rgb(251, 233, 131);
+  --tag-14-fg: rgb(89, 76, 5);
+  --tag-15-bg: rgb(253, 237, 193);
+  --tag-15-fg: rgb(104, 78, 7);
+  --tag-16-bg: rgb(198, 236, 182);
+  --tag-16-fg: rgb(20, 89, 13);
+  --tag-17-bg: rgb(166, 217, 210);
+  --tag-17-fg: rgb(4, 78, 70);
+  --tag-18-bg: rgb(255, 117, 55);
+  --tag-18-fg: rgb(84, 36, 14);
+  --tag-19-bg: rgb(255, 173, 70);
+  --tag-19-fg: rgb(99, 62, 4);
+  --tag-20-bg: rgb(235, 219, 222);
+  --tag-20-fg: rgb(102, 46, 55);
+  --tag-21-bg: rgb(204, 166, 172);
+  --tag-21-fg: rgb(82, 29, 40);
+  --tag-22-bg: rgb(66, 215, 195);
+  --tag-22-fg: rgb(32, 33, 36);
+  --tag-23-bg: rgb(63, 167, 22);
+  --tag-23-fg: rgb(28, 48, 8);
+
+  /* Archived fill, one per pair (generated) — each entry's own `bg`, drained
+       halfway toward its own luminance. A variable rather than a value computed at
+       render time, for the reason the pairs are: an inline style cannot answer a
+       media query, so a fill derived in JS painted the LIGHT theme's colour under
+       this block's ink. Draining in linear light leaves luminance where it was, so
+       the `fg` above still clears AA over the drained fill exactly as it does over
+       the live one. `tagPalette.test.ts` re-derives this table from the pairs. */
+  --tag-0-archived-bg: rgb(231, 231, 231);
+  --tag-1-archived-bg: rgb(194, 206, 226);
+  --tag-2-archived-bg: rgb(181, 210, 217);
+  --tag-3-archived-bg: rgb(224, 218, 239);
+  --tag-4-archived-bg: rgb(237, 216, 223);
+  --tag-5-archived-bg: rgb(219, 186, 181);
+  --tag-6-archived-bg: rgb(117, 117, 117);
+  --tag-7-archived-bg: rgb(67, 86, 146);
+  --tag-8-archived-bg: rgb(74, 109, 120);
+  --tag-9-archived-bg: rgb(114, 98, 159);
+  --tag-10-archived-bg: rgb(156, 74, 96);
+  --tag-11-archived-bg: rgb(176, 89, 87);
+  --tag-12-archived-bg: rgb(235, 206, 195);
+  --tag-13-archived-bg: rgb(242, 225, 206);
+  --tag-14-archived-bg: rgb(242, 232, 190);
+  --tag-15-archived-bg: rgb(246, 237, 217);
+  --tag-16-archived-bg: rgb(212, 231, 205);
+  --tag-17-archived-bg: rgb(188, 212, 208);
+  --tag-18-archived-bg: rgb(214, 140, 121);
+  --tag-19-archived-bg: rgb(226, 182, 146);
+  --tag-20-archived-bg: rgb(229, 221, 222);
+  --tag-21-archived-bg: rgb(190, 171, 174);
+  --tag-22-archived-bg: rgb(148, 205, 194);
+  --tag-23-archived-bg: rgb(114, 157, 107);
+
+  /* Outline ink, one per pair (generated) — the member that contrasts with THIS
+       theme's page, for the affordances that draw on the page instead of painting a
+       chip: the picker's outline pills and the annotation rows. Solved per theme
+       because the answer inverts: on white it is the saturated member, on the dark
+       ground the pale one. Left in JS it was solved against white always, which put
+       all 24 between 1.24:1 and 3.90:1 on a dark page — the picker was a grid of
+       invisible outlines. Entry 22 names its ink outright in both blocks: its usable
+       member is a neutral, so the pick would render `Bright green` as a plain
+       near-black button here and a near-white one there. */
+  --tag-0-ink: rgb(70, 70, 70);
+  --tag-1-ink: rgb(13, 52, 114);
+  --tag-2-ink: rgb(13, 59, 68);
+  --tag-3-ink: rgb(61, 24, 142);
+  --tag-4-ink: rgb(113, 26, 54);
+  --tag-5-ink: rgb(138, 28, 10);
+  --tag-6-ink: rgb(117, 117, 117);
+  --tag-7-ink: rgb(30, 83, 184);
+  --tag-8-ink: rgb(0, 114, 134);
+  --tag-9-ink: rgb(120, 88, 195);
+  --tag-10-ink: rgb(194, 24, 91);
+  --tag-11-ink: rgb(217, 48, 37);
+  --tag-12-ink: rgb(122, 46, 11);
+  --tag-13-ink: rgb(122, 71, 6);
+  --tag-14-ink: rgb(89, 76, 5);
+  --tag-15-ink: rgb(104, 78, 7);
+  --tag-16-ink: rgb(20, 89, 13);
+  --tag-17-ink: rgb(4, 78, 70);
+  --tag-18-ink: rgb(84, 36, 14);
+  --tag-19-ink: rgb(99, 62, 4);
+  --tag-20-ink: rgb(102, 46, 55);
+  --tag-21-ink: rgb(82, 29, 40);
+  --tag-22-ink: rgb(21, 101, 90);
+  --tag-23-ink: rgb(28, 48, 8);
+}
+
+/* ── Dark theme ────────────────────────────────────────────────────────────────
+   Re-points the SAME variables the light theme defines, rather than giving any
+   component a `dark:` variant. Tailwind v4 compiles every palette utility to
+   `var(--color-…)`, so the ~1000 hardcoded utilities in this SPA already resolve
+   through the table below and all move at once. There is no `dark:` anywhere here
+   and there should not be: a variant per site is a thousand chances to miss one.
+
+   These rules sit OUTSIDE `@theme`, which is what makes them win — `@theme`
+   compiles into `@layer theme`, the lowest layer, so an unlayered rule beats it
+   with no specificity contest.
+
+   TWO ROOTS, ONE SELECTOR. Each SPA renders in a shadow root, and its overlays —
+   Kobalte's Select and Combobox, every `mount`-ed Modal — portal into a SECOND
+   shadow root of their own. Both must adopt this sheet: `:host` then matches each
+   of them and one selector themes both. An overlay root that does not adopt it
+   resolves its tokens from `:root` instead and stays light on a dark page — the
+   symptom is that root reporting `--color-surface: #ffffff` while the app root
+   reports the dark value. Never theme via `:root` to paper over that: `:root` is
+   wp-admin's document element, not ours.
+
+   THE RAMP IS INVERTED, NOT RECOLOURED. Tailwind's scale runs light surface (50)
+   to dark ink (900), so flipping it preserves the contrast RELATIONSHIPS the
+   components were written against: `bg-amber-50 text-amber-800` stays a readable
+   warning, now light-on-dark. Lightness is anchored PER SLOT rather than mapped
+   from the light value, because one linear inversion cannot serve both ends — dark
+   enough for shade-50 to read as a tint drags shade-700 down with it until the ink
+   no longer clears AA. Measured: the linear version regressed every `-700/100`
+   pair below 4.5:1 while light passed at 4.5–6.6. Chroma tracks the new lightness,
+   since the chroma that is pleasant as pale ink glows as a dark fill. */
+
+@media (prefers-color-scheme: dark) {
+  /* `auto` is the default, and an UNSTAMPED root counts as auto: if the script that
+     stamps `data-theme` never runs, a dark-OS user still gets dark rather than a
+     light page the rest of their desktop contradicts. */
+  :host([data-theme='auto']),
+  :host(:not([data-theme])) {
+    /* Surfaces — a dark slate ground, never pure black: #000 under light text is
+       the classic halation complaint, and it leaves nothing for a raised surface
+       to sit above. */
+    --color-ground: oklch(16% 0.012 264);
+    --color-surface: oklch(20.5% 0.012 264);
+    /* 1.185 from `surface`, 1.282 from `ground` — the same two-sided rule the light block
+       states, solved in the direction dark leaves room. */
+    --color-surface-raised: oklch(27% 0.014 264);
+    /* Between the two, as in light — see that block for why hover is its own tone. 1.089 from
+       `surface`, 1.092 from `raised`. */
+    --color-surface-hover: oklch(24% 0.013 264);
+    --color-border: oklch(32% 0.016 264);
+    /* Lighter than the band, for the same reason light's is darker: away from the surface it lands on. */
+    --color-border-strong: oklch(42% 0.02 264);
+
+    /* Text — the same two levels as light, and again `muted` is the floor. */
+    --color-text: oklch(93% 0.008 264);
+    --color-text-muted: oklch(72% 0.014 264);
+
+    /* Brand — unchanged from light, deliberately. Lifting it for the dark ground
+       was the obvious move and it broke the thing that matters: components pair
+       `bg-primary` with a hardcoded `text-white`, and a lighter brand drops that
+       pair from 4.81:1 to 2.73:1. The button's legibility outranks its vibrance. */
+    --color-primary: oklch(56.5% 0.22 264);
+    --color-primary-hover: oklch(50% 0.22 264);
+
+    /* ── Tag pairs (generated) ────────────────────────────────────────────────
+       Each chip keeps its DISTANCE FROM THE PAGE, not a fixed darkness. The light
+       palette encodes prominence in contrast — a pale chip reads as incidental
+       against white, a saturated one as important — and a first pass that mapped
+       every entry to one dark lightness threw that away: all 24 collapsed to the
+       same value, and to nearly the value of the page behind them. Solving each
+       chip to the contrast it had against white preserves the ordering AND the
+       magnitude (drift ≤ 0.06), so a quiet tag stays quiet. Ink is solved the same
+       way, keeping each chip's own legibility, floored at AA. */
+    --tag-0-bg: rgb(41, 41, 41);
+    --tag-0-fg: rgb(188, 188, 188);
+    --tag-1-bg: rgb(16, 57, 118);
+    --tag-1-fg: rgb(192, 214, 248);
+    --tag-2-bg: rgb(19, 65, 74);
+    --tag-2-fg: rgb(160, 224, 237);
+    --tag-3-bg: rgb(46, 0, 155);
+    --tag-3-fg: rgb(219, 207, 247);
+    --tag-4-bg: rgb(98, 9, 38);
+    --tag-4-fg: rgb(240, 190, 206);
+    --tag-5-bg: rgb(124, 33, 19);
+    --tag-5-fg: rgb(248, 166, 152);
+    --tag-6-bg: rgb(130, 130, 130);
+    --tag-6-fg: rgb(24, 24, 24);
+    --tag-7-bg: rgb(125, 162, 234);
+    --tag-7-fg: rgb(22, 22, 22);
+    --tag-8-bg: rgb(0, 158, 185);
+    --tag-8-fg: rgb(23, 23, 23);
+    --tag-9-bg: rgb(150, 126, 208);
+    --tag-9-fg: rgb(23, 23, 23);
+    --tag-10-bg: rgb(236, 101, 154);
+    --tag-10-fg: rgb(23, 23, 23);
+    --tag-11-bg: rgb(224, 85, 76);
+    --tag-11-fg: rgb(22, 22, 22);
+    --tag-12-bg: rgb(101, 31, 0);
+    --tag-12-fg: rgb(245, 172, 139);
+    --tag-13-bg: rgb(67, 37, 0);
+    --tag-13-fg: rgb(244, 146, 23);
+    --tag-14-bg: rgb(47, 41, 2);
+    --tag-14-fg: rgb(208, 178, 12);
+    --tag-15-bg: rgb(47, 35, 2);
+    --tag-15-fg: rgb(217, 163, 15);
+    --tag-16-bg: rgb(22, 51, 11);
+    --tag-16-fg: rgb(83, 217, 30);
+    --tag-17-bg: rgb(24, 65, 60);
+    --tag-17-fg: rgb(11, 217, 190);
+    --tag-18-bg: rgb(166, 52, 0);
+    --tag-18-fg: rgb(245, 211, 195);
+    --tag-19-bg: rgb(103, 58, 0);
+    --tag-19-fg: rgb(247, 174, 61);
+    --tag-20-bg: rgb(68, 38, 44);
+    --tag-20-fg: rgb(225, 188, 194);
+    --tag-21-bg: rgb(114, 65, 73);
+    --tag-21-fg: rgb(242, 218, 223);
+    --tag-22-bg: rgb(17, 78, 70);
+    --tag-22-fg: rgb(241, 242, 243);
+    --tag-23-bg: rgb(44, 117, 15);
+    --tag-23-fg: rgb(205, 244, 190);
+
+    /* Archived fill, one per pair (generated) — each entry's own `bg`, drained
+       halfway toward its own luminance. A variable rather than a value computed at
+       render time, for the reason the pairs are: an inline style cannot answer a
+       media query, so a fill derived in JS painted the LIGHT theme's colour under
+       this block's ink. Draining in linear light leaves luminance where it was, so
+       the `fg` above still clears AA over the drained fill exactly as it does over
+       the live one. `tagPalette.test.ts` re-derives this table from the pairs. */
+    --tag-0-archived-bg: rgb(41, 41, 41);
+    --tag-1-archived-bg: rgb(43, 58, 94);
+    --tag-2-archived-bg: rgb(44, 62, 67);
+    --tag-3-archived-bg: rgb(47, 32, 117);
+    --tag-4-archived-bg: rgb(78, 34, 43);
+    --tag-5-archived-bg: rgb(100, 52, 49);
+    --tag-6-archived-bg: rgb(130, 130, 130);
+    --tag-7-archived-bg: rgb(145, 162, 202);
+    --tag-8-archived-bg: rgb(104, 151, 166);
+    --tag-9-archived-bg: rgb(145, 133, 178);
+    --tag-10-archived-bg: rgb(198, 127, 151);
+    --tag-11-archived-bg: rgb(185, 111, 108);
+    --tag-12-archived-bg: rgb(82, 44, 37);
+    --tag-13-archived-bg: rgb(57, 41, 29);
+    --tag-14-archived-bg: rgb(44, 41, 27);
+    --tag-15-archived-bg: rgb(42, 36, 24);
+    --tag-16-archived-bg: rgb(35, 48, 32);
+    --tag-17-archived-bg: rgb(45, 62, 59);
+    --tag-18-archived-bg: rgb(135, 75, 65);
+    --tag-19-archived-bg: rgb(88, 64, 48);
+    --tag-20-archived-bg: rgb(58, 43, 45);
+    --tag-21-archived-bg: rgb(98, 72, 76);
+    --tag-22-archived-bg: rgb(51, 74, 70);
+    --tag-23-archived-bg: rgb(79, 110, 74);
+
+    /* Outline ink, one per pair (generated) — the member that contrasts with THIS
+       theme's page, for the affordances that draw on the page instead of painting a
+       chip: the picker's outline pills and the annotation rows. Solved per theme
+       because the answer inverts: on white it is the saturated member, on the dark
+       ground the pale one. Left in JS it was solved against white always, which put
+       all 24 between 1.24:1 and 3.90:1 on a dark page — the picker was a grid of
+       invisible outlines. Entry 22 names its ink outright in both blocks: its usable
+       member is a neutral, so the pick would render `Bright green` as a plain
+       near-black button here and a near-white one there. */
+    --tag-0-ink: rgb(188, 188, 188);
+    --tag-1-ink: rgb(192, 214, 248);
+    --tag-2-ink: rgb(160, 224, 237);
+    --tag-3-ink: rgb(219, 207, 247);
+    --tag-4-ink: rgb(240, 190, 206);
+    --tag-5-ink: rgb(248, 166, 152);
+    --tag-6-ink: rgb(130, 130, 130);
+    --tag-7-ink: rgb(125, 162, 234);
+    --tag-8-ink: rgb(0, 158, 185);
+    --tag-9-ink: rgb(150, 126, 208);
+    --tag-10-ink: rgb(236, 101, 154);
+    --tag-11-ink: rgb(224, 85, 76);
+    --tag-12-ink: rgb(245, 172, 139);
+    --tag-13-ink: rgb(244, 146, 23);
+    --tag-14-ink: rgb(208, 178, 12);
+    --tag-15-ink: rgb(217, 163, 15);
+    --tag-16-ink: rgb(83, 217, 30);
+    --tag-17-ink: rgb(11, 217, 190);
+    --tag-18-ink: rgb(245, 211, 195);
+    --tag-19-ink: rgb(247, 174, 61);
+    --tag-20-ink: rgb(225, 188, 194);
+    --tag-21-ink: rgb(242, 218, 223);
+    --tag-22-ink: rgb(66, 214, 194);
+    --tag-23-ink: rgb(205, 244, 190);
+
+    /* ── Palette ramps (generated — see the note above) ── */
+    /* Chroma raised from the generated 0.016. The ramp solved each shade for its LIGHTNESS
+       against the dark page and let chroma follow, which works from 100 up and collapses at 50:
+       a `-50` is a tint, and 0.016 chroma at 24.5% lightness is a neutral wearing a hue's name.
+       Measured against the neutral band it has to differ from, `bg-amber-50` separated by 22 rgb
+       units in dark where light separates by 39; at 0.045 it separates by 42, and lightness — so
+       every contrast the ramp was solved for — does not move (1.197 vs ground either way).
+       EVERY OTHER `-50` IN THIS BLOCK HAS THE SAME DEFECT (red 0.009, blue 0.010, green 0.013,
+       emerald 0.015); they are unfixed because only this one has been checked on a real page. */
+    --color-amber-50: oklch(24.5% 0.045 95.277);
+    --color-amber-100: oklch(28.5% 0.044 95.617);
+    --color-amber-200: oklch(35% 0.092 95.746);
+    --color-amber-300: oklch(43% 0.135 91.605);
+    --color-amber-400: oklch(53% 0.159 84.429);
+    --color-amber-500: oklch(63% 0.166 70.08);
+    --color-amber-600: oklch(71.5% 0.165 58.318);
+    --color-amber-700: oklch(79% 0.155 48.998);
+    --color-amber-800: oklch(85% 0.134 46.201);
+    --color-amber-900: oklch(90% 0.112 45.904);
+    --color-blue-50: oklch(24.5% 0.01 254.604);
+    --color-blue-100: oklch(28.5% 0.024 255.585);
+    --color-blue-200: oklch(35% 0.045 254.128);
+    --color-blue-300: oklch(43% 0.084 251.813);
+    --color-blue-400: oklch(53% 0.139 254.624);
+    --color-blue-500: oklch(63% 0.189 259.815);
+    --color-blue-600: oklch(71.5% 0.225 262.881);
+    --color-blue-700: oklch(79% 0.231 264.376);
+    --color-blue-800: oklch(85% 0.194 265.638);
+    --color-blue-900: oklch(90% 0.146 265.522);
+    --color-emerald-50: oklch(24.5% 0.015 166.113);
+    --color-emerald-100: oklch(28.5% 0.038 163.051);
+    --color-emerald-200: oklch(35% 0.071 164.15);
+    --color-emerald-300: oklch(43% 0.114 164.978);
+    --color-emerald-500: oklch(63% 0.15 162.48);
+    --color-emerald-600: oklch(71.5% 0.133 163.225);
+    --color-emerald-700: oklch(79% 0.112 165.612);
+    --color-emerald-800: oklch(85% 0.093 166.913);
+    --color-gray-50: oklch(24.5% 0.001 247.839);
+    --color-gray-100: oklch(28.5% 0.002 264.542);
+    --color-gray-200: oklch(35% 0.005 264.531);
+    --color-gray-300: oklch(43% 0.008 258.338);
+    --color-gray-400: oklch(53% 0.019 261.325);
+    --color-gray-500: oklch(63% 0.024 264.364);
+    --color-gray-600: oklch(71.5% 0.028 256.802);
+    --color-gray-700: oklch(79% 0.032 259.733);
+    --color-gray-800: oklch(85% 0.032 256.848);
+    --color-gray-900: oklch(90% 0.034 264.665);
+    --color-green-50: oklch(24.5% 0.013 155.826);
+    --color-green-100: oklch(28.5% 0.033 156.743);
+    --color-green-300: oklch(43% 0.12 154.449);
+    --color-green-600: oklch(71.5% 0.179 149.214);
+    --color-green-700: oklch(79% 0.147 150.069);
+    --color-green-800: oklch(85% 0.116 151.328);
+    --color-green-900: oklch(90% 0.095 152.535);
+    --color-lime-50: oklch(24.5% 0.023 120.757);
+    --color-lime-100: oklch(28.5% 0.049 122.328);
+    --color-lime-200: oklch(35% 0.097 124.321);
+    --color-lime-300: oklch(43% 0.157 126.665);
+    --color-lime-600: oklch(71.5% 0.2 131.684);
+    --color-lime-700: oklch(79% 0.157 131.589);
+    --color-lime-800: oklch(85% 0.124 130.933);
+    --color-indigo-50: oklch(24.5% 0.013 272.314);
+    --color-indigo-100: oklch(28.5% 0.025 272.788);
+    --color-indigo-200: oklch(35% 0.05 274.039);
+    --color-indigo-600: oklch(71.5% 0.241 276.966);
+    --color-indigo-700: oklch(79% 0.228 277.023);
+    --color-indigo-800: oklch(85% 0.191 277.366);
+    --color-purple-200: oklch(35% 0.048 306.703);
+    --color-red-50: oklch(24.5% 0.009 17.38);
+    --color-red-100: oklch(28.5% 0.024 17.717);
+    --color-red-200: oklch(35% 0.048 18.334);
+    --color-red-300: oklch(43% 0.091 19.571);
+    --color-red-400: oklch(53% 0.161 22.216);
+    --color-red-500: oklch(63% 0.21 25.331);
+    --color-red-600: oklch(71.5% 0.225 27.325);
+    --color-red-700: oklch(79% 0.203 27.518);
+    --color-red-800: oklch(85% 0.173 26.899);
+    --color-red-900: oklch(90% 0.141 25.723);
+    --color-rose-500: oklch(63% 0.218 16.439);
+    --color-rose-600: oklch(71.5% 0.233 17.585);
+    --color-rose-700: oklch(79% 0.211 16.935);
+    --color-sky-50: oklch(24.5% 0.009 236.62);
+    --color-sky-100: oklch(28.5% 0.019 236.824);
+    --color-sky-200: oklch(35% 0.044 230.902);
+    --color-sky-800: oklch(85% 0.107 240.79);
+    --color-slate-50: oklch(24.5% 0.002 247.858);
+    --color-slate-100: oklch(28.5% 0.005 247.896);
+    --color-slate-200: oklch(35% 0.01 255.508);
+    --color-slate-300: oklch(43% 0.018 252.894);
+    --color-slate-400: oklch(53% 0.034 256.788);
+    --color-slate-500: oklch(63% 0.041 257.417);
+    --color-slate-600: oklch(71.5% 0.04 257.281);
+    --color-slate-700: oklch(79% 0.042 257.287);
+    --color-slate-800: oklch(85% 0.04 260.031);
+    --color-slate-900: oklch(90% 0.042 265.755);
+    --color-teal-50: oklch(24.5% 0.01 180.72);
+    --color-teal-200: oklch(35% 0.074 180.426);
+    --color-teal-800: oklch(85% 0.076 188.216);
+    --color-violet-50: oklch(24.5% 0.012 293.756);
+    --color-violet-100: oklch(28.5% 0.021 294.588);
+    --color-violet-200: oklch(35% 0.044 293.283);
+    --color-violet-300: oklch(43% 0.089 293.571);
+    --color-violet-400: oklch(53% 0.156 293.541);
+    --color-violet-500: oklch(63% 0.22 292.717);
+    --color-violet-600: oklch(71.5% 0.259 293.009);
+    --color-violet-700: oklch(79% 0.257 292.581);
+    --color-yellow-100: oklch(28.5% 0.053 103.193);
+    --color-yellow-200: oklch(35% 0.099 101.54);
+    --color-yellow-800: oklch(85% 0.111 61.907);
+  }
+}
+
+:host([data-theme='dark']) {
+  /* Surfaces — a dark slate ground, never pure black: #000 under light text is
+       the classic halation complaint, and it leaves nothing for a raised surface
+       to sit above. */
+  --color-ground: oklch(16% 0.012 264);
+  --color-surface: oklch(20.5% 0.012 264);
+  /* 1.185 from `surface`, 1.282 from `ground` — see the light block's note. */
+  --color-surface-raised: oklch(27% 0.014 264);
+  /* Between the two, as in light — see that block. 1.089 from `surface`, 1.092 from `raised`. */
+  --color-surface-hover: oklch(24% 0.013 264);
+  --color-border: oklch(32% 0.016 264);
+  /* Lighter than the band, for the same reason light's is darker: away from the surface it lands on. */
+  --color-border-strong: oklch(42% 0.02 264);
+
+  /* Text — the same two levels as light, and again `muted` is the floor. */
+  --color-text: oklch(93% 0.008 264);
+  --color-text-muted: oklch(72% 0.014 264);
+
+  /* Brand — unchanged from light, deliberately. Lifting it for the dark ground
+       was the obvious move and it broke the thing that matters: components pair
+       `bg-primary` with a hardcoded `text-white`, and a lighter brand drops that
+       pair from 4.81:1 to 2.73:1. The button's legibility outranks its vibrance. */
+  --color-primary: oklch(56.5% 0.22 264);
+  --color-primary-hover: oklch(50% 0.22 264);
+
+  /* ── Tag pairs (generated) ────────────────────────────────────────────────
+       Each chip keeps its DISTANCE FROM THE PAGE, not a fixed darkness. The light
+       palette encodes prominence in contrast — a pale chip reads as incidental
+       against white, a saturated one as important — and a first pass that mapped
+       every entry to one dark lightness threw that away: all 24 collapsed to the
+       same value, and to nearly the value of the page behind them. Solving each
+       chip to the contrast it had against white preserves the ordering AND the
+       magnitude (drift ≤ 0.06), so a quiet tag stays quiet. Ink is solved the same
+       way, keeping each chip's own legibility, floored at AA. */
+  --tag-0-bg: rgb(41, 41, 41);
+  --tag-0-fg: rgb(188, 188, 188);
+  --tag-1-bg: rgb(16, 57, 118);
+  --tag-1-fg: rgb(192, 214, 248);
+  --tag-2-bg: rgb(19, 65, 74);
+  --tag-2-fg: rgb(160, 224, 237);
+  --tag-3-bg: rgb(46, 0, 155);
+  --tag-3-fg: rgb(219, 207, 247);
+  --tag-4-bg: rgb(98, 9, 38);
+  --tag-4-fg: rgb(240, 190, 206);
+  --tag-5-bg: rgb(124, 33, 19);
+  --tag-5-fg: rgb(248, 166, 152);
+  --tag-6-bg: rgb(130, 130, 130);
+  --tag-6-fg: rgb(24, 24, 24);
+  --tag-7-bg: rgb(125, 162, 234);
+  --tag-7-fg: rgb(22, 22, 22);
+  --tag-8-bg: rgb(0, 158, 185);
+  --tag-8-fg: rgb(23, 23, 23);
+  --tag-9-bg: rgb(150, 126, 208);
+  --tag-9-fg: rgb(23, 23, 23);
+  --tag-10-bg: rgb(236, 101, 154);
+  --tag-10-fg: rgb(23, 23, 23);
+  --tag-11-bg: rgb(224, 85, 76);
+  --tag-11-fg: rgb(22, 22, 22);
+  --tag-12-bg: rgb(101, 31, 0);
+  --tag-12-fg: rgb(245, 172, 139);
+  --tag-13-bg: rgb(67, 37, 0);
+  --tag-13-fg: rgb(244, 146, 23);
+  --tag-14-bg: rgb(47, 41, 2);
+  --tag-14-fg: rgb(208, 178, 12);
+  --tag-15-bg: rgb(47, 35, 2);
+  --tag-15-fg: rgb(217, 163, 15);
+  --tag-16-bg: rgb(22, 51, 11);
+  --tag-16-fg: rgb(83, 217, 30);
+  --tag-17-bg: rgb(24, 65, 60);
+  --tag-17-fg: rgb(11, 217, 190);
+  --tag-18-bg: rgb(166, 52, 0);
+  --tag-18-fg: rgb(245, 211, 195);
+  --tag-19-bg: rgb(103, 58, 0);
+  --tag-19-fg: rgb(247, 174, 61);
+  --tag-20-bg: rgb(68, 38, 44);
+  --tag-20-fg: rgb(225, 188, 194);
+  --tag-21-bg: rgb(114, 65, 73);
+  --tag-21-fg: rgb(242, 218, 223);
+  --tag-22-bg: rgb(17, 78, 70);
+  --tag-22-fg: rgb(241, 242, 243);
+  --tag-23-bg: rgb(44, 117, 15);
+  --tag-23-fg: rgb(205, 244, 190);
+
+  /* Archived fill, one per pair (generated) — each entry's own `bg`, drained
+       halfway toward its own luminance. A variable rather than a value computed at
+       render time, for the reason the pairs are: an inline style cannot answer a
+       media query, so a fill derived in JS painted the LIGHT theme's colour under
+       this block's ink. Draining in linear light leaves luminance where it was, so
+       the `fg` above still clears AA over the drained fill exactly as it does over
+       the live one. `tagPalette.test.ts` re-derives this table from the pairs. */
+  --tag-0-archived-bg: rgb(41, 41, 41);
+  --tag-1-archived-bg: rgb(43, 58, 94);
+  --tag-2-archived-bg: rgb(44, 62, 67);
+  --tag-3-archived-bg: rgb(47, 32, 117);
+  --tag-4-archived-bg: rgb(78, 34, 43);
+  --tag-5-archived-bg: rgb(100, 52, 49);
+  --tag-6-archived-bg: rgb(130, 130, 130);
+  --tag-7-archived-bg: rgb(145, 162, 202);
+  --tag-8-archived-bg: rgb(104, 151, 166);
+  --tag-9-archived-bg: rgb(145, 133, 178);
+  --tag-10-archived-bg: rgb(198, 127, 151);
+  --tag-11-archived-bg: rgb(185, 111, 108);
+  --tag-12-archived-bg: rgb(82, 44, 37);
+  --tag-13-archived-bg: rgb(57, 41, 29);
+  --tag-14-archived-bg: rgb(44, 41, 27);
+  --tag-15-archived-bg: rgb(42, 36, 24);
+  --tag-16-archived-bg: rgb(35, 48, 32);
+  --tag-17-archived-bg: rgb(45, 62, 59);
+  --tag-18-archived-bg: rgb(135, 75, 65);
+  --tag-19-archived-bg: rgb(88, 64, 48);
+  --tag-20-archived-bg: rgb(58, 43, 45);
+  --tag-21-archived-bg: rgb(98, 72, 76);
+  --tag-22-archived-bg: rgb(51, 74, 70);
+  --tag-23-archived-bg: rgb(79, 110, 74);
+
+  /* Outline ink, one per pair (generated) — the member that contrasts with THIS
+       theme's page, for the affordances that draw on the page instead of painting a
+       chip: the picker's outline pills and the annotation rows. Solved per theme
+       because the answer inverts: on white it is the saturated member, on the dark
+       ground the pale one. Left in JS it was solved against white always, which put
+       all 24 between 1.24:1 and 3.90:1 on a dark page — the picker was a grid of
+       invisible outlines. Entry 22 names its ink outright in both blocks: its usable
+       member is a neutral, so the pick would render `Bright green` as a plain
+       near-black button here and a near-white one there. */
+  --tag-0-ink: rgb(188, 188, 188);
+  --tag-1-ink: rgb(192, 214, 248);
+  --tag-2-ink: rgb(160, 224, 237);
+  --tag-3-ink: rgb(219, 207, 247);
+  --tag-4-ink: rgb(240, 190, 206);
+  --tag-5-ink: rgb(248, 166, 152);
+  --tag-6-ink: rgb(130, 130, 130);
+  --tag-7-ink: rgb(125, 162, 234);
+  --tag-8-ink: rgb(0, 158, 185);
+  --tag-9-ink: rgb(150, 126, 208);
+  --tag-10-ink: rgb(236, 101, 154);
+  --tag-11-ink: rgb(224, 85, 76);
+  --tag-12-ink: rgb(245, 172, 139);
+  --tag-13-ink: rgb(244, 146, 23);
+  --tag-14-ink: rgb(208, 178, 12);
+  --tag-15-ink: rgb(217, 163, 15);
+  --tag-16-ink: rgb(83, 217, 30);
+  --tag-17-ink: rgb(11, 217, 190);
+  --tag-18-ink: rgb(245, 211, 195);
+  --tag-19-ink: rgb(247, 174, 61);
+  --tag-20-ink: rgb(225, 188, 194);
+  --tag-21-ink: rgb(242, 218, 223);
+  --tag-22-ink: rgb(66, 214, 194);
+  --tag-23-ink: rgb(205, 244, 190);
+
+  /* ── Palette ramps (generated — see the note above) ── */
+  /* Chroma hand-raised from the generated 0.016 — same reason as the block above. */
+  --color-amber-50: oklch(24.5% 0.045 95.277);
+  --color-amber-100: oklch(28.5% 0.044 95.617);
+  --color-amber-200: oklch(35% 0.092 95.746);
+  --color-amber-300: oklch(43% 0.135 91.605);
+  --color-amber-400: oklch(53% 0.159 84.429);
+  --color-amber-500: oklch(63% 0.166 70.08);
+  --color-amber-600: oklch(71.5% 0.165 58.318);
+  --color-amber-700: oklch(79% 0.155 48.998);
+  --color-amber-800: oklch(85% 0.134 46.201);
+  --color-amber-900: oklch(90% 0.112 45.904);
+  --color-blue-50: oklch(24.5% 0.01 254.604);
+  --color-blue-100: oklch(28.5% 0.024 255.585);
+  --color-blue-200: oklch(35% 0.045 254.128);
+  --color-blue-300: oklch(43% 0.084 251.813);
+  --color-blue-400: oklch(53% 0.139 254.624);
+  --color-blue-500: oklch(63% 0.189 259.815);
+  --color-blue-600: oklch(71.5% 0.225 262.881);
+  --color-blue-700: oklch(79% 0.231 264.376);
+  --color-blue-800: oklch(85% 0.194 265.638);
+  --color-blue-900: oklch(90% 0.146 265.522);
+  --color-emerald-50: oklch(24.5% 0.015 166.113);
+  --color-emerald-100: oklch(28.5% 0.038 163.051);
+  --color-emerald-200: oklch(35% 0.071 164.15);
+  --color-emerald-300: oklch(43% 0.114 164.978);
+  --color-emerald-500: oklch(63% 0.15 162.48);
+  --color-emerald-600: oklch(71.5% 0.133 163.225);
+  --color-emerald-700: oklch(79% 0.112 165.612);
+  --color-emerald-800: oklch(85% 0.093 166.913);
+  --color-gray-50: oklch(24.5% 0.001 247.839);
+  --color-gray-100: oklch(28.5% 0.002 264.542);
+  --color-gray-200: oklch(35% 0.005 264.531);
+  --color-gray-300: oklch(43% 0.008 258.338);
+  --color-gray-400: oklch(53% 0.019 261.325);
+  --color-gray-500: oklch(63% 0.024 264.364);
+  --color-gray-600: oklch(71.5% 0.028 256.802);
+  --color-gray-700: oklch(79% 0.032 259.733);
+  --color-gray-800: oklch(85% 0.032 256.848);
+  --color-gray-900: oklch(90% 0.034 264.665);
+  --color-green-50: oklch(24.5% 0.013 155.826);
+  --color-green-100: oklch(28.5% 0.033 156.743);
+  --color-green-300: oklch(43% 0.12 154.449);
+  --color-green-600: oklch(71.5% 0.179 149.214);
+  --color-green-700: oklch(79% 0.147 150.069);
+  --color-green-800: oklch(85% 0.116 151.328);
+  --color-green-900: oklch(90% 0.095 152.535);
+  --color-lime-50: oklch(24.5% 0.023 120.757);
+  --color-lime-100: oklch(28.5% 0.049 122.328);
+  --color-lime-200: oklch(35% 0.097 124.321);
+  --color-lime-300: oklch(43% 0.157 126.665);
+  --color-lime-600: oklch(71.5% 0.2 131.684);
+  --color-lime-700: oklch(79% 0.157 131.589);
+  --color-lime-800: oklch(85% 0.124 130.933);
+  --color-indigo-50: oklch(24.5% 0.013 272.314);
+  --color-indigo-100: oklch(28.5% 0.025 272.788);
+  --color-indigo-200: oklch(35% 0.05 274.039);
+  --color-indigo-600: oklch(71.5% 0.241 276.966);
+  --color-indigo-700: oklch(79% 0.228 277.023);
+  --color-indigo-800: oklch(85% 0.191 277.366);
+  --color-purple-200: oklch(35% 0.048 306.703);
+  --color-red-50: oklch(24.5% 0.009 17.38);
+  --color-red-100: oklch(28.5% 0.024 17.717);
+  --color-red-200: oklch(35% 0.048 18.334);
+  --color-red-300: oklch(43% 0.091 19.571);
+  --color-red-400: oklch(53% 0.161 22.216);
+  --color-red-500: oklch(63% 0.21 25.331);
+  --color-red-600: oklch(71.5% 0.225 27.325);
+  --color-red-700: oklch(79% 0.203 27.518);
+  --color-red-800: oklch(85% 0.173 26.899);
+  --color-red-900: oklch(90% 0.141 25.723);
+  --color-rose-500: oklch(63% 0.218 16.439);
+  --color-rose-600: oklch(71.5% 0.233 17.585);
+  --color-rose-700: oklch(79% 0.211 16.935);
+  --color-sky-50: oklch(24.5% 0.009 236.62);
+  --color-sky-100: oklch(28.5% 0.019 236.824);
+  --color-sky-200: oklch(35% 0.044 230.902);
+  --color-sky-800: oklch(85% 0.107 240.79);
+  --color-slate-50: oklch(24.5% 0.002 247.858);
+  --color-slate-100: oklch(28.5% 0.005 247.896);
+  --color-slate-200: oklch(35% 0.01 255.508);
+  --color-slate-300: oklch(43% 0.018 252.894);
+  --color-slate-400: oklch(53% 0.034 256.788);
+  --color-slate-500: oklch(63% 0.041 257.417);
+  --color-slate-600: oklch(71.5% 0.04 257.281);
+  --color-slate-700: oklch(79% 0.042 257.287);
+  --color-slate-800: oklch(85% 0.04 260.031);
+  --color-slate-900: oklch(90% 0.042 265.755);
+  --color-teal-50: oklch(24.5% 0.01 180.72);
+  --color-teal-200: oklch(35% 0.074 180.426);
+  --color-teal-800: oklch(85% 0.076 188.216);
+  --color-violet-50: oklch(24.5% 0.012 293.756);
+  --color-violet-100: oklch(28.5% 0.021 294.588);
+  --color-violet-200: oklch(35% 0.044 293.283);
+  --color-violet-300: oklch(43% 0.089 293.571);
+  --color-violet-400: oklch(53% 0.156 293.541);
+  --color-violet-500: oklch(63% 0.22 292.717);
+  --color-violet-600: oklch(71.5% 0.259 293.009);
+  --color-violet-700: oklch(79% 0.257 292.581);
+  --color-yellow-100: oklch(28.5% 0.053 103.193);
+  --color-yellow-200: oklch(35% 0.099 101.54);
+  --color-yellow-800: oklch(85% 0.111 61.907);
+}
+
+/* ── Inherited values ──────────────────────────────────────────────────────────
+   A figure shown in place of one nobody has stated yet — the ordered quantity
+   standing in for an unconfirmed one, the price a line already stands at, a total
+   worked out from either. It is real enough to read and to sum, and it must still
+   look like it can be overwritten.
+
+   Italic in the secondary grey, and the grey is the token rather than a fade:
+   `--color-text-muted` is solved to the AA floor on every surface, where `opacity`
+   or a mix toward transparent lands under it — and opacity would also fade a whole
+   cell's background and borders along with its text. The one cost of a fixed
+   colour: it replaces the text's own, so an inherited value does not keep a
+   warning hue. Reach for this class wherever a value is shown in place of one
+   nobody stated, so the convention stays one rule. */
+@utility inherited {
+  font-style: italic;
+  color: var(--color-text-muted);
 }

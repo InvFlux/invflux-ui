@@ -168,6 +168,13 @@ export interface WorkbenchCapabilities {
   onhandCorrect: boolean;
   /** Edit WC catalogue data (e.g. grouped product members via the Type drill-down). */
   editProducts: boolean;
+  /**
+   * Manage store-wide settings — gates renaming a column in the picker.
+   *
+   * Optional, absent meaning "no". A rename changes what the whole store reads, unlike every other
+   * control beside it, so it answers to the settings capability rather than the workbench's own.
+   */
+  manageSettings?: boolean;
 }
 
 /** Role a registered component plays for a datatype (§5.4). Codecs are not merchant-choosable. */
@@ -182,6 +189,11 @@ export interface WorkbenchContext {
   entitlements?: WorkbenchEntitlements;
   /** Per-datatype merchant choice of component, `{ dataType: { role: componentId } }` (§5.5). */
   componentChoices?: Record<string, Partial<Record<ComponentRole, string>>>;
+  /**
+   * How many apply requests a large save may have in flight at once — the merchant's setting,
+   * passed through to the shared grid. Absent ⇒ the grid's default.
+   */
+  applyConcurrency?: number;
 }
 
 /** Pro/Scale UI affordances the bootstrap advertises. Absent ⇒ treat every flag as `false` (Essentials). */

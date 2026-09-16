@@ -25,14 +25,14 @@ Builds are reproducible — dependency versions are pinned in `package-lock.json
 
 Two packages are buildable entry points; the rest are sources they consume.
 
-| Package | |
-| --- | --- |
-| `app` | the unified admin application — one entry point, code-split per screen |
-| `product-tab` | the Inventory tab on a WooCommerce product |
-| `ui` | shared components |
-| `workbench`, `dispatch`, `procurement`, `admin` | per-screen sources, consumed by `app` |
-| `i18n` | translation helpers over `@wordpress/i18n` |
-| `build` | the shared Vite configuration factory every surface calls |
+| Package                                         |                                                                        |
+| ----------------------------------------------- | ---------------------------------------------------------------------- |
+| `app`                                           | the unified admin application — one entry point, code-split per screen |
+| `product-tab`                                   | the Inventory tab on a WooCommerce product                             |
+| `ui`                                            | shared components                                                      |
+| `workbench`, `dispatch`, `procurement`, `admin` | per-screen sources, consumed by `app`                                  |
+| `i18n`                                          | translation helpers over `@wordpress/i18n`                             |
+| `build`                                         | the shared Vite configuration factory every surface calls              |
 
 ## Other commands
 

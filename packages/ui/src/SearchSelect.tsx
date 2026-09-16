@@ -35,13 +35,24 @@ export interface SearchSelectProps {
    * existing consumers.
    */
   fuzzy?: boolean;
+  /**
+   * Highlight the first option so Enter accepts it without pressing Down. Implied by
+   * {@link SearchSelectProps.fuzzy} (ranking the options is only useful if the top one is reachable),
+   * and available on its own for a picker whose list Kobalte filters — a name typeahead where the
+   * operator's next keystroke is Enter, not an arrow.
+   *
+   * Off by default because it changes what Enter means on an untouched list: with nothing typed, the
+   * first option is whatever happens to sort first, and Enter picks it rather than doing nothing.
+   * That is right for a picker and wrong for a control where a stray Enter should be inert.
+   */
+  firstOptionFocus?: boolean;
   /** Seed the search text on mount (fuzzy mode) — e.g. the character that opened a grid cell editor;
    *  the option list filters to it and the next keystrokes append. */
   initialQuery?: string;
   /** Message shown when no option matches (enables opening on an empty collection). */
   emptyMessage?: string;
   /**
-   * Portal target for the listbox. In the shadow-DOM SPA, pass the light-DOM `portalRoot`
+   * Portal target for the listbox. In the shadow-DOM SPA, pass the shared `portalRoot`
    * (which carries the SPA stylesheet AND is whitelisted by the host click-interceptor); without
    * it Kobalte portals to `document.body`, where options render unstyled and their clicks are
    * swallowed by the interceptor. See arch-ui-principles §3.9.8.
@@ -63,12 +74,14 @@ const ITEM =
  * Single-select, searchable dropdown built on `@kobalte/core/combobox`. Reads like a native
  * `<select>` when unfocused — the chosen value fills the input, **no chip** — filters on type,
  * and Kobalte owns click/keyboard/ARIA/dismiss. Opt into {@link SearchSelectProps.fuzzy} for
- * ranked fuzzy matching + highlighting + first-option auto-select.
+ * ranked fuzzy matching + highlighting, or {@link SearchSelectProps.firstOptionFocus} for the
+ * Enter-accepts-the-top-match half on its own.
  *
  * Wrap-don't-reach: per arch-ui-principles §4.2, SPAs use this, never `@kobalte/core` directly.
  */
 export function SearchSelect(props: SearchSelectProps): JSX.Element {
-  const selected = (): SearchSelectOption | null => props.options.find((o) => o.value === props.value) ?? null;
+  const selected = (): SearchSelectOption | null =>
+    props.options.find((o) => o.value === props.value) ?? null;
   const ctxMount = usePortalRootOptional();
   let inputRef: HTMLInputElement | undefined;
 
@@ -84,7 +97,11 @@ export function SearchSelect(props: SearchSelectProps): JSX.Element {
     scored.sort((a, b) => b.score - a.score);
     return scored.map((s) => s.option);
   });
-  const firstKey = (): string | undefined => (props.fuzzy ? displayedOptions()[0]?.value : undefined);
+  // Only fuzzy mode can name the first key: it pre-filters, so its own list IS what's on screen.
+  // Left undefined otherwise, which tells the helper to read Kobalte's filtered collection instead.
+  const firstKey = (): string | undefined =>
+    props.fuzzy ? displayedOptions()[0]?.value : undefined;
+  const wantsFirstFocus = (): boolean => props.fuzzy === true || props.firstOptionFocus === true;
 
   onMount(() => {
     if (props.autoFocus && !props.disabled) inputRef?.focus();
@@ -127,11 +144,18 @@ export function SearchSelect(props: SearchSelectProps): JSX.Element {
         </Combobox.Item>
       )}
     >
-      <Show when={props.fuzzy}>
-        <KobalteComboboxFirstFocus firstKey={firstKey} />
+      <Show when={wantsFirstFocus()}>
+        <KobalteComboboxFirstFocus firstKey={props.fuzzy ? firstKey : undefined} />
       </Show>
-      <Combobox.Control aria-label={props.ariaLabel} class={`${props.controlClass ?? CONTROL} ${props.class ?? ''}`}>
-        <Combobox.Input ref={inputRef} aria-label={props.ariaLabel} class="h-7 min-w-0 flex-1 border-0 bg-transparent p-0 text-sm outline-none placeholder:text-text-muted focus:ring-0" />
+      <Combobox.Control
+        aria-label={props.ariaLabel}
+        class={`${props.controlClass ?? CONTROL} ${props.class ?? ''}`}
+      >
+        <Combobox.Input
+          ref={inputRef}
+          aria-label={props.ariaLabel}
+          class="h-7 min-w-0 flex-1 border-0 bg-transparent p-0 text-sm outline-none placeholder:text-text-muted focus:ring-0"
+        />
         <Combobox.Trigger aria-label={props.ariaLabel} class="shrink-0 text-text-muted">
           <Combobox.Icon>▾</Combobox.Icon>
         </Combobox.Trigger>

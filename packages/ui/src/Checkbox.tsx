@@ -29,12 +29,18 @@ export function Checkbox(props: CheckboxProps): JSX.Element {
     <input {...rest} type={local.radio ? 'radio' : 'checkbox'} class={checkboxClass(local.class)} />
   );
 
-  return <>{local.label === undefined ? (
-    box()
-  ) : (
-    <label class={`inline-flex cursor-pointer items-center gap-2 text-sm text-text ${local.wrapperClass ?? ''}`.trim()}>
-      {box()}
-      {local.label}
-    </label>
-  )}</>;
+  return (
+    <>
+      {local.label === undefined ? (
+        box()
+      ) : (
+        <label
+          class={`inline-flex cursor-pointer items-center gap-2 text-sm text-text ${local.wrapperClass ?? ''}`.trim()}
+        >
+          {box()}
+          {local.label}
+        </label>
+      )}
+    </>
+  );
 }

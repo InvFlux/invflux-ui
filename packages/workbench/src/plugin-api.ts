@@ -79,10 +79,29 @@ export type WorkbenchPluginApi = PluginApi<WorkbenchBridge>;
  */
 export function installPluginApi(): WorkbenchPluginApi {
   return installSharedPluginApi<WorkbenchBridge>('workbench', {
-    solid: { createSignal, createMemo, createEffect, onMount, onCleanup, Show, For, Switch, Match, Dynamic },
+    solid: {
+      createSignal,
+      createMemo,
+      createEffect,
+      onMount,
+      onCleanup,
+      Show,
+      For,
+      Switch,
+      Match,
+      Dynamic,
+    },
     ui: {
-      Button, IconButton, Input, Select, Textarea, Checkbox, Pill, Spinner,
-      Combobox, Modal,
+      Button,
+      IconButton,
+      Input,
+      Select,
+      Textarea,
+      Checkbox,
+      Pill,
+      Spinner,
+      Combobox,
+      Modal,
     },
     toast,
   });

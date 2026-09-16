@@ -1,13 +1,22 @@
 import { __ } from '@invflux/i18n';
 import { surfaceSettingsRegistry, useSurface } from '@invflux/ui';
-import { HashRouter, MemoryRouter, type MemoryHistory, Route, useSearchParams } from '@solidjs/router';
-import { QueryClient, type QueryClient as QueryClientType, QueryClientProvider } from '@tanstack/solid-query';
+import { MemoryRouter, type MemoryHistory, Route, useSearchParams } from '@solidjs/router';
+import {
+  QueryClient,
+  type QueryClient as QueryClientType,
+  QueryClientProvider,
+} from '@tanstack/solid-query';
 import { createSignal, onCleanup, type ParentProps, Show } from 'solid-js';
-import { DEFAULT_PER_PAGE, DispatchSettingsPanel, parsePerPage } from './components/DispatchSettings';
+import {
+  DEFAULT_PER_PAGE,
+  DispatchSettingsPanel,
+  parsePerPage,
+} from './components/DispatchSettings';
 import { TagManagerModal } from './components/OrderTags';
 import { DispatchCtx } from './context';
 import { ListStoreCtx, createListStore } from './listStore';
 import { PortalCtx } from './portal';
+import { WorkingSetProvider } from './useWorkingSet';
 import { OrderList } from './routes/OrderList';
 import { OrderDetail } from './routes/OrderDetail';
 import type { DispatchContext } from './types';
@@ -21,14 +30,16 @@ import type { DispatchContext } from './types';
  * has no settings. Everything the panel touches (`per_page`, the tag manager) is surface-wide, and
  * lives under this router either way.
  *
- * Standalone there is no shell and no gear, so nothing registers and the queue's own header +
- * settings modal serve instead — the same {@link DispatchSettingsPanel}, in a local container.
+ * The shell is always there: `DispatchSection` is the only mount of this app and it always supplies
+ * the history, so `useSurface()` never comes back empty here.
  */
 function DispatchSurface(props: ParentProps) {
   const surface = useSurface();
   const [searchParams, setSearchParams] = useSearchParams();
   const [tagManagerOpen, setTagManagerOpen] = createSignal(false);
 
+  // Guarded rather than asserted: the context is optional by type, and a surface mounted outside a
+  // shell would otherwise register a panel under an id no gear reads.
   if (surface) {
     onCleanup(
       surfaceSettingsRegistry.register({
@@ -38,8 +49,12 @@ function DispatchSurface(props: ParentProps) {
         label: () => __('Settings'),
         component: (panelProps) => (
           <DispatchSettingsPanel
-            perPage={parsePerPage(typeof searchParams.per_page === 'string' ? searchParams.per_page : undefined)}
-            onPerPage={(n) => setSearchParams({ per_page: n === DEFAULT_PER_PAGE ? undefined : String(n) })}
+            perPage={parsePerPage(
+              typeof searchParams.per_page === 'string' ? searchParams.per_page : undefined,
+            )}
+            onPerPage={(n) =>
+              setSearchParams({ per_page: n === DEFAULT_PER_PAGE ? undefined : String(n) })
+            }
             onManageTags={() => {
               panelProps.onRequestClose();
               setTagManagerOpen(true);
@@ -69,16 +84,14 @@ interface AppProps {
   context: DispatchContext;
   portalRoot: HTMLElement;
   /**
-   * Embedded mode (unified app): when the host passes a
-   * `MemoryHistory`, the internal list/detail router runs on it instead of a `HashRouter`, so it no
-   * longer contends with the shell's own hash router. The shell owns this history and bridges its
-   * location to the browser hash for the *active* surface (deep-link + share); keep-alive falls out
-   * because the history object persists across tab switches. Standalone (absent) keeps the HashRouter.
+   * The internal list/detail history, owned by the app shell — **required**.
    *
-   * (`Route` defs must be inline children of each router — solid-router only reads `Route` elements,
-   * not a wrapper component — hence the duplication across the two branches.)
+   * Running on the shell's `MemoryHistory` rather than a router of its own is what keeps this
+   * surface from contending with the shell's hash router; the shell bridges that location to the
+   * browser hash for the *active* surface (deep-link + share), and keep-alive falls out because the
+   * history object survives a tab switch.
    */
-  history?: MemoryHistory;
+  history: MemoryHistory;
   /** Shared QueryClient from the host (embedded); cache then survives leaving/returning the surface. */
   queryClient?: QueryClientType;
 }
@@ -91,22 +104,16 @@ export function App(props: AppProps) {
       <DispatchCtx.Provider value={props.context}>
         <ListStoreCtx.Provider value={listStore}>
           <PortalCtx.Provider value={props.portalRoot}>
-            <Show
-              when={props.history}
-              fallback={
-                <HashRouter root={DispatchSurface}>
-                  <Route path="/" component={OrderList} />
-                  <Route path="/:hexId" component={OrderDetail} />
-                </HashRouter>
-              }
-            >
-              {(history) => (
-                <MemoryRouter history={history()} root={DispatchSurface}>
-                  <Route path="/" component={OrderList} />
-                  <Route path="/:hexId" component={OrderDetail} />
-                </MemoryRouter>
-              )}
-            </Show>
+            {/*
+              Above the router on purpose: the replicated set has to outlive the queue route, or
+              opening an order throws it away and coming back rebuilds it from scratch.
+            */}
+            <WorkingSetProvider>
+              <MemoryRouter history={props.history} root={DispatchSurface}>
+                <Route path="/" component={OrderList} />
+                <Route path="/:hexId" component={OrderDetail} />
+              </MemoryRouter>
+            </WorkingSetProvider>
           </PortalCtx.Provider>
         </ListStoreCtx.Provider>
       </DispatchCtx.Provider>

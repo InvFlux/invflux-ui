@@ -13,6 +13,7 @@ import './datatypes/editors';
 import './datatypes/drilldowns';
 import './filters-builtins';
 import './settings/controls';
+import './settings/presetNumberControl';
 
 export type { StageCode, StockConcerns, DispatchUser, OrderViewer } from './types';
 export { StockConcernBits } from './types';
@@ -34,33 +35,48 @@ export { SearchSelectAsync } from './SearchSelectAsync';
 export type { SearchSelectAsyncProps } from './SearchSelectAsync';
 export { SearchMultiSelect } from './SearchMultiSelect';
 export type { SearchMultiSelectOption, SearchMultiSelectProps } from './SearchMultiSelect';
-export { PortalCtx, usePortalRoot, usePortalRootOptional } from './portal';
+export {
+  PortalCtx,
+  keepVisibleDuringModals,
+  keepWordPressAnnouncementsAudible,
+  usePortalRoot,
+  usePortalRootOptional,
+} from './portal';
 export { HostNavCtx, useHostNav } from './hostNav';
 export type { HostNav } from './hostNav';
 export { wordpressHostNav } from './host/wordpress';
-export { ContextCard } from './ContextCard';
-export type { ContextCardProps } from './ContextCard';
+export { ContextCard, ContextCardPanel } from './ContextCard';
+export type { ContextCardProps, ContextCardPanelProps } from './ContextCard';
 export { ContextCardBar } from './ContextCardBar';
 export type { ContextCardBarProps, ContextCardDescriptor } from './ContextCardBar';
 export {
   Timeline,
+  EventTime,
   FallbackTimelineRow,
   timelineRowRegistry,
   formatRelative as formatRelativeTime,
   formatWallClock,
+  formatEventTime,
+  timelineTimeMode,
+  toggleTimelineTimeMode,
 } from './Timeline';
-export type { TimelineEvent, TimelineRowComponent, TimelineRowProps } from './Timeline';
+export type {
+  TimelineEvent,
+  TimelineRowComponent,
+  TimelineRowProps,
+  TimelineTimeMode,
+} from './Timeline';
 export { AnnotationsPanel, TagTogglePicker } from './AnnotationsPanel';
 export type { AnnotationsPanelProps, ComposerTag, NoteTagDelta } from './AnnotationsPanel';
 // Importing AnnotationTimelineRow also registers it against the `annotation`/`annotation.note`
 // timeline slugs (side effect), so interleaved note events render in any SPA's Timeline.
 export { AnnotationTimelineRow, TagDeltaPills, TagDeltaChips } from './AnnotationTimelineRow';
-export type { AnnotationTimelinePayload, TagPillResolver, TagChipResolver } from './AnnotationTimelineRow';
-export {
-  diffTokens,
-  isThreadDeleted,
-  latestLiveVersion,
-} from './annotations';
+export type {
+  AnnotationTimelinePayload,
+  TagPillResolver,
+  TagChipResolver,
+} from './AnnotationTimelineRow';
+export { diffTokens, isThreadDeleted, latestLiveVersion } from './annotations';
 export type {
   AnnotationThread,
   AnnotationVersion,
@@ -69,7 +85,21 @@ export type {
   DiffSegment,
 } from './annotations';
 export { isTypingTarget } from './keyboard';
-export { TAG_PALETTE, TAG_PALETTE_DISPLAY_ORDER, TAG_PALETTE_DISPLAY_COLUMNS, paletteStyle, tagColor, tagInk, tagHatch, tagArchivedFill, contrastRatio, relativeLuminance, type TagColor } from './tagPalette';
+export {
+  TAG_PALETTE,
+  TAG_PALETTE_DISPLAY_ORDER,
+  TAG_PALETTE_DISPLAY_COLUMNS,
+  TAG_HATCH_IMAGE,
+  paletteStyle,
+  paletteArchivedStyle,
+  paletteInk,
+  tagColor,
+  tagInk,
+  tagArchivedFill,
+  contrastRatio,
+  relativeLuminance,
+  type TagColor,
+} from './tagPalette';
 export {
   WC_ORDER_STATUS_COLOR,
   WC_ORDER_STATUS_FALLBACK_COLOR,
@@ -83,15 +113,51 @@ export type { PaletteSwatchPickerProps } from './PaletteSwatchPicker';
 export type { ComboboxOption, ComboboxProps } from './Combobox';
 export { StagePill } from './StagePill';
 export { StockConcernBadge } from './StockConcernBadge';
+export type { InboundCover, InboundPo } from './StockConcernBadge';
 export { ViewerBadge } from './ViewerBadge';
-export { FeatureGate } from './FeatureGate';
+export { FeatureGate, UPGRADE_ROUTE } from './FeatureGate';
 export type { FeatureGateProps } from './FeatureGate';
 export { FoldingSection } from './FoldingSection';
 export type { FoldingSectionProps } from './FoldingSection';
 export { createFold, FoldChevron } from './fold';
 export type { Fold, FoldOptions } from './fold';
-export { ESC_LOCAL_ATTR, Modal } from './Modal';
-export type { ModalProps } from './Modal';
+export {
+  ESC_LOCAL_ATTR,
+  Modal,
+  MODAL_BAR_TINT,
+  ModalDragHandle,
+  ModalFooter,
+  ModalHeader,
+  ModalPanel,
+} from './Modal';
+export type {
+  ModalAlign,
+  ModalDragHandleProps,
+  ModalFooterLayout,
+  ModalFooterProps,
+  ModalHeaderProps,
+  ModalPanelProps,
+  ModalPanelSize,
+  ModalProps,
+} from './Modal';
+export { ThemeSwitcher } from './ThemeSwitcher';
+export { registerCssPropertyRules } from './cssProperties';
+export {
+  currentThemeMode,
+  cycleThemeMode,
+  registerThemeRoot,
+  setThemeMode,
+  THEME_MODES,
+  type ThemeMode,
+} from './theme';
+export {
+  containsAcrossShadow,
+  deepActiveElement,
+  focusableWithin,
+  FOCUSABLE_SELECTOR,
+  isVisibleFocusable,
+  restoreFocusTo,
+} from './focusUtils';
 /* ── Atomic primitives ──────────────────────────────────────────────────────
    The suite every surface builds on, so no page hand-rolls a <button>/<input>
    (and drifts). `primitives` exposes the same vocabulary as bare class-builder
@@ -108,6 +174,8 @@ export { Textarea } from './Textarea';
 export type { TextareaProps } from './Textarea';
 export { Checkbox } from './Checkbox';
 export type { CheckboxProps } from './Checkbox';
+export { ErrorBanner } from './ErrorBanner';
+export type { ErrorBannerProps } from './ErrorBanner';
 export { Pill } from './Pill';
 export type { PillProps, PillTone, PillVariant, PillSize, PillShape } from './Pill';
 export { Spinner } from './Spinner';
@@ -129,8 +197,11 @@ export {
   PackageIcon,
   CloseIcon,
   ArchiveIcon,
+  HourglassIcon,
+  InfoIcon,
 } from './icons';
 export type { IconProps, IconComponent } from './icons';
+export { Hint } from './Hint';
 export type { SpinnerProps, SpinnerSize } from './Spinner';
 export {
   buttonClass,
@@ -158,14 +229,13 @@ export type { ProductLink } from './productActionsMenu';
 export { ThumbnailZoom } from './ThumbnailZoom';
 export type { ThumbnailZoomProps } from './ThumbnailZoom';
 export { SegmentedControl } from './SegmentedControl';
-export type {
-  SegmentedControlProps,
-  SegmentedControlOption,
-} from './SegmentedControl';
+export type { SegmentedControlProps, SegmentedControlOption } from './SegmentedControl';
 export { Switch } from './Switch';
 export type { SwitchProps } from './Switch';
 export { ConfirmModal } from './ConfirmModal';
 export type { ConfirmModalProps, ConfirmModalVariant } from './ConfirmModal';
+export { ColumnPicker } from './ColumnPicker';
+export type { PickableColumn } from './ColumnPicker';
 export { RequiredMark } from './RequiredMark';
 export { ProPill } from './ProPill';
 export type { ProPillProps } from './ProPill';
@@ -182,6 +252,12 @@ export { cascadeAllocate } from './onHandCascade';
 export type { SlotDeltas } from './onHandCascade';
 export { ToastRegion } from './ToastRegion';
 export { toast, toasts, DEFAULT_TOAST_DURATION } from './toast';
+export { createSearchFailure } from './searchFailure';
+export { orderTaxonomyValues } from './taxonomyOrder';
+// One operator intent to submit a goods receipt. Shared, because both receiving surfaces mint one:
+// the purchase-order reception form and the standalone receiving surface.
+export { mintReceiptKey } from './receiptKey';
+export type { SearchFailure, SearchFailureTracker } from './searchFailure';
 export type { Toast, ToastOptions, ToastVariant } from './toast';
 
 // Shared, SPA-agnostic datatype component registries: register a `dataType` slug's
@@ -228,10 +304,15 @@ export type { SettingControl, SettingControlProps, SettingMeta } from './setting
 export { createSlotRegistry, slotRegistry } from './slots';
 export type { SlotContribution, SlotRegistry } from './slots';
 export { createSurfaceSettingsRegistry, surfaceSettingsRegistry } from './surfaceSettings';
-export type { SurfaceSettingsPanel, SurfaceSettingsPanelProps, SurfaceSettingsRegistry } from './surfaceSettings';
+export type {
+  SurfaceSettingsPanel,
+  SurfaceSettingsPanelProps,
+  SurfaceSettingsRegistry,
+} from './surfaceSettings';
 export { SettingsSection } from './SettingsSection';
 export type { SettingsSectionProps } from './SettingsSection';
 export { SurfaceCtx, useSurface } from './surfaceCtx';
+export { PaneActiveCtx, usePaneActive } from './paneActive';
 export type { SurfaceContext } from './surfaceCtx';
 export { createDragReorder } from './dragReorder';
 export type { DragReorder } from './dragReorder';
@@ -243,9 +324,17 @@ export {
   FILTER_CONTROL_NUMERIC_IDS,
   FILTER_CONTROL_RANGE,
   FILTER_CONTROL_DATERANGE,
+  describeConstraint,
 } from './filters';
-export type { FilterControl, FilterControlProps, FilterDescriptor } from './filters';
+export type {
+  FilterConstraint,
+  FilterControl,
+  FilterControlProps,
+  FilterDescriptor,
+  FilterQuery,
+} from './filters';
 export { FilterBar } from './FilterBar';
+export { cancelPendingShortcut, noteKeystroke, runWhenTypingStops } from './keyBurst';
 export type { FilterBarProps } from './FilterBar';
 export {
   gridFiltersToDescriptors,
@@ -257,13 +346,19 @@ export {
   deleteFilterModifierParams,
 } from './filterBridge';
 export type { GridFilterMeta, GridFilterBridgeOptions } from './filterBridge';
+export { SavedFilterControl } from './SavedFilterControl';
+export type { SavedFilterControlProps } from './SavedFilterControl';
 export { FilterModeToggle } from './FilterModeToggle';
 export type { FilterModeToggleProps } from './FilterModeToggle';
 export { FilterScopePicker } from './FilterScopePicker';
 export type { FilterScopePickerProps } from './FilterScopePicker';
 export { createBulkActionRegistry, bulkActionRegistry } from './bulk-actions';
 export type { BulkAction, BulkActionContext, BulkActionRegistry } from './bulk-actions';
-export { createEntityActionRegistry, entityActionRegistry, DEFAULT_PRIMARY_WEIGHT } from './entity-actions';
+export {
+  createEntityActionRegistry,
+  entityActionRegistry,
+  DEFAULT_PRIMARY_WEIGHT,
+} from './entity-actions';
 export type {
   ActionGroup,
   EntityAction,
@@ -312,8 +407,19 @@ export type { GenericColumnDeps } from './grid/genericColumn';
 export { parseSpreadsheetTsv } from './excel-tsv-parser';
 // Shared paste → map → resolve → preview → commit import wizard (Procurement + Workbench).
 export { ImportWizard } from './ImportWizard';
-export type { ImportField, ImportWizardProps, MappedRow, ResolvedRow, ImportRowStatus } from './ImportWizard';
-export { parseImportFile, fetchImportAliases, learnImportAlias, saveImportAliases } from './import-file';
+export type {
+  ImportField,
+  ImportWizardProps,
+  MappedRow,
+  ResolvedRow,
+  ImportRowStatus,
+} from './ImportWizard';
+export {
+  parseImportFile,
+  fetchImportAliases,
+  learnImportAlias,
+  saveImportAliases,
+} from './import-file';
 export type { ImportFileTransport, ImportAliasMap } from './import-file';
 export { COMMON_ALIASES, normalizeAlias, parseAliasCsv, serializeAliases } from './import-aliases';
 export { assertShape } from './assertShape';
@@ -336,6 +442,7 @@ export type {
   WorkbenchRow,
   WorkbenchPage,
   WorkbenchHandles,
+  SelectedCellRef,
   RowPatch,
   ReorderStatus,
   DirtyEdit,
@@ -346,9 +453,12 @@ export type {
   WorkbenchApplyConflict,
   WorkbenchApplyResponse,
 } from './workbenchGridTypes';
+export { partitionApplyRows } from './grid/applyPartition';
+export type { ApplyPartition, ApplyRowShape } from './grid/applyPartition';
 export { useDirtyCells, pendingCellKey } from './grid/useDirtyCells';
 export type { DirtyCellsStore } from './grid/useDirtyCells';
 export { pollingTransport, useLiveUpdates } from './liveUpdates';
+export { createViewportFill } from './viewportFill';
 export type {
   LiveUpdatesTransport,
   LiveUpdatesTransportConfig,

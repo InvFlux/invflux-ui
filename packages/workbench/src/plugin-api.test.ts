@@ -17,7 +17,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * primitive is actually wired into `installPluginApi`'s `ui` object and reaches `window.invflux`.
  */
 const ATOMICS = vi.hoisted(
-  () => ['Button', 'IconButton', 'Input', 'Select', 'Textarea', 'Checkbox', 'Pill', 'Spinner'] as const,
+  () =>
+    ['Button', 'IconButton', 'Input', 'Select', 'Textarea', 'Checkbox', 'Pill', 'Spinner'] as const,
 );
 
 vi.mock('@invflux/ui', async () => {

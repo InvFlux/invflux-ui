@@ -6,6 +6,8 @@ import { SearchSelectAsync } from '../SearchSelectAsync';
 import type { DrilldownProps } from './registry';
 import { drilldownRegistry } from './registry';
 import { iconButtonClass } from '../primitives';
+import { ErrorBanner } from '../ErrorBanner';
+import { createSearchFailure } from '../searchFailure';
 
 /**
  * Built-in per-cell drill-down components (§11.7), keyed by datatype slug and registered into
@@ -133,9 +135,7 @@ function ConstituentsDrilldown(props: DrilldownProps) {
   const data = (): ConstituentsDetail | null =>
     isConstituentsDetail(props.detail) ? props.detail : null;
   const kindLabel = (kind: string): string =>
-    kind === 'variation'
-      ? __('Variation')
-      : __('Product');
+    kind === 'variation' ? __('Variation') : __('Product');
 
   // Editable iff the host wired a save callback AND this is a grouped product.
   const editable = (): boolean => props.save !== undefined && data()?.parent_type === 'grouped';
@@ -145,7 +145,12 @@ function ConstituentsDrilldown(props: DrilldownProps) {
 
   const dirty = createMemo(() => {
     const orig = (data()?.constituents ?? []).map((c) => c.post_id).join(',');
-    return orig !== members().map((c) => c.post_id).join(',');
+    return (
+      orig !==
+      members()
+        .map((c) => c.post_id)
+        .join(',')
+    );
   });
 
   // …but never on top of unsaved edits. Any refetch — a window-focus revalidation, an invalidation
@@ -172,19 +177,33 @@ function ConstituentsDrilldown(props: DrilldownProps) {
   const [searching, setSearching] = createSignal(false);
   const [saving, setSaving] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
+  const searchFailed = createSearchFailure();
 
   let searchSeq = 0;
   const onSearch = async (text: string): Promise<void> => {
     const q = text.trim();
     if (!props.searchOptions || q === '') {
       setOptions([]);
+      searchFailed.clear();
       return;
     }
     const seq = ++searchSeq;
     setSearching(true);
     try {
       const res = await props.searchOptions(q);
-      if (seq === searchSeq) setOptions(res);
+      if (seq === searchSeq) {
+        setOptions(res);
+        searchFailed.clear();
+      }
+    } catch (e: unknown) {
+      // Previously uncaught. The caller invokes this as `void onSearch(t)`, so a rejection became
+      // an unhandled promise rejection AND skipped `setOptions` — leaving the PREVIOUS query's
+      // results on screen under the new text. Showing stale matches as if they answered what was
+      // just typed is worse than showing none.
+      if (seq === searchSeq) {
+        setOptions([]);
+        searchFailed.record(e);
+      }
     } finally {
       if (seq === searchSeq) setSearching(false);
     }
@@ -242,9 +261,7 @@ function ConstituentsDrilldown(props: DrilldownProps) {
     <div class="min-w-80 space-y-3">
       <Show
         when={members().length > 0}
-        fallback={
-          <p class="text-sm text-text-muted">{__('No constituent products.')}</p>
-        }
+        fallback={<p class="text-sm text-text-muted">{__('No constituent products.')}</p>}
       >
         <Show
           when={editable()}
@@ -295,7 +312,8 @@ function ConstituentsDrilldown(props: DrilldownProps) {
                     }}
                     onDrop={(event) => {
                       event.preventDefault();
-                      const sourceId = draggingId() ?? Number(event.dataTransfer?.getData('text/plain'));
+                      const sourceId =
+                        draggingId() ?? Number(event.dataTransfer?.getData('text/plain'));
                       if (sourceId && sourceId !== c.post_id) reorder(sourceId, c.post_id);
                       setDraggingId(null);
                       setDropTargetId(null);
@@ -336,20 +354,17 @@ function ConstituentsDrilldown(props: DrilldownProps) {
               onSearch={(t) => void onSearch(t)}
               loading={searching()}
               placeholder={__('Search products to add…')}
-              emptyMessage={__('Type to search products')}
+              emptyMessage={searchFailed.line() ?? __('Type to search products')}
               ariaLabel={__('Add a member product')}
               autoFocusFirst
               highlight
             />
           </Show>
           <Show when={error()}>
-            <p class="text-sm text-red-700">{error()}</p>
+            <ErrorBanner class="text-sm">{error()}</ErrorBanner>
           </Show>
           <div class="flex justify-end">
-            <Button
-              disabled={!dirty() || saving()}
-              onClick={() => void onSave()}
-            >
+            <Button disabled={!dirty() || saving()} onClick={() => void onSave()}>
               {saving() ? __('Saving…') : __('Save members')}
             </Button>
           </div>

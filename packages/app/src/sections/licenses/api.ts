@@ -131,9 +131,7 @@ export function createLicensesApi(context: Pick<AppContext, 'apiRoot' | 'nonce'>
   // is available at every call site without each one re-deriving it from the slug.
   async function request<T>(method: 'GET' | 'POST', route: string, body?: unknown): Promise<T> {
     try {
-      return method === 'GET'
-        ? await api.get<T>(ns(route))
-        : await api.post<T>(ns(route), body);
+      return method === 'GET' ? await api.get<T>(ns(route)) : await api.post<T>(ns(route), body);
     } catch (error) {
       if (error instanceof BaseApiError && !(error instanceof ApiError)) {
         throw new ApiError(error.status, error.body);

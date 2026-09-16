@@ -34,6 +34,98 @@
  */
 const RADIUS_RE = /(?:^|\s)rounded(?:-\S+)?(?=\s|$)/;
 
+/**
+ * Does a caller's `extra` already decide the ink?
+ *
+ * The same trap as {@link RADIUS_RE}, and it drew blood the same way. `ICON_BUTTON_BASE` emits
+ * `text-text-muted`; `Pill`'s dismiss `×` asks for `text-current` so it takes the chip's own
+ * foreground, because a chip's background is a runtime colour and a fixed grey vanishes on half of
+ * them. Two `color:` utilities, equal specificity, resolved by stylesheet order — and the grey won.
+ * Measured on a live page: `#a0a5ae` on a `#ec185b` tag, **1.08:1**. The comment claiming the
+ * override worked had been sitting above it since the affordance was written.
+ *
+ * A caller that names the ink owns its hover too, so both base declarations stand down together —
+ * a base hover colour under a caller's own colour is the same coin flip one state later.
+ *
+ * Matched by exclusion rather than by listing colours: Tailwind gains colours constantly and gains
+ * non-colour `text-*` utilities almost never, so the closed set is the one below. Variants count
+ * (`hover:text-current` decides the ink as much as `text-current` does), and an arbitrary value is
+ * read as a colour only when it looks like one — `text-[11px]` is a size.
+ */
+const TEXT_NOT_A_COLOR = new Set([
+  'xs',
+  '2xs',
+  'sm',
+  'base',
+  'lg',
+  'xl',
+  '2xl',
+  '3xl',
+  '4xl',
+  '5xl',
+  '6xl',
+  '7xl',
+  '8xl',
+  '9xl',
+  'left',
+  'center',
+  'right',
+  'justify',
+  'start',
+  'end',
+  'wrap',
+  'nowrap',
+  'balance',
+  'pretty',
+  'ellipsis',
+  'clip',
+]);
+const TEXT_UTILITY_RE = /(?:^|\s)(?:[\w[\]().-]+:)*text-(\S+)/g;
+
+function namesInk(extra: string | undefined): boolean {
+  if (undefined === extra) return false;
+  for (const [, value] of extra.matchAll(TEXT_UTILITY_RE)) {
+    if (value.startsWith('[')) {
+      if (/^\[(?:#|rgb|hsl|oklch|lab|color-mix|var\()/.test(value)) return true;
+      continue;
+    }
+    if (!TEXT_NOT_A_COLOR.has(value)) return true;
+  }
+
+  return false;
+}
+
+/**
+ * Does a caller's `extra` already decide the hover background?
+ *
+ * The third face of the same trap as {@link RADIUS_RE} and {@link namesInk}, and the one with the
+ * most call sites able to hit it: nearly every variant here ends in a `hover:bg-*`, so a caller
+ * that wants a semantic hover — a lime "stage this", a red "give it back" — emits a second
+ * `background-color` at equal specificity, and which one wins is decided by stylesheet order
+ * rather than by the caller. Not a rule that can be worked around with `!` either, since that
+ * would then beat `disabled:` too.
+ *
+ * `iconButtonClass`'s own `danger` flag was already doing this: the base emits
+ * `hover:bg-surface-raised` and `danger` adds `hover:bg-red-50`, both, on every destructive glyph.
+ *
+ * So the base stands down when the caller speaks, exactly as it does for radius and ink. Matched
+ * loosely on purpose — any variant prefix (`sm:hover:bg-…`, `group-hover:bg-…`) is still a caller
+ * deciding a hover fill, and the safe reading of an ambiguous case is to let the caller win.
+ */
+const HOVER_BG_RE = /(?:^|\s)(?:[\w[\]().-]+:)*hover:bg-\S+/;
+
+function namesHoverBg(extra: string | undefined): boolean {
+  return undefined !== extra && HOVER_BG_RE.test(extra);
+}
+
+/** Strip a `hover:bg-*` out of a builder's own class string, for when the caller supplies one. */
+function withoutHoverBg(classes: string): string {
+  return classes
+    .replace(/(?:^|\s)(?:[\w[\]().-]+:)*hover:bg-\S+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /** Join class fragments, dropping empties. Caller classes go last so they win on equal specificity. */
 export function cx(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(' ');
@@ -42,14 +134,7 @@ export function cx(...parts: (string | false | null | undefined)[]): string {
 /* ─────────────────────────────── Button ─────────────────────────────── */
 
 export type ButtonVariant =
-  | 'primary'
-  | 'secondary'
-  | 'danger'
-  | 'warning'
-  | 'success'
-  | 'ghost'
-  | 'quiet'
-  | 'link';
+  'primary' | 'secondary' | 'danger' | 'warning' | 'success' | 'ghost' | 'quiet' | 'link';
 export type ButtonSize = 'xs' | 'sm' | 'md';
 
 const BUTTON_BASE =
@@ -133,10 +218,13 @@ export function buttonClass(
   eagerFocusRing = false,
   weight: ButtonWeight = 'solid',
 ): string {
+  const tone =
+    ('outline' === weight ? BUTTON_OUTLINE[variant] : undefined) ?? BUTTON_VARIANT[variant];
+
   return cx(
     BUTTON_BASE,
     RADIUS_RE.test(extra ?? '') ? '' : 'rounded',
-    ('outline' === weight ? BUTTON_OUTLINE[variant] : undefined) ?? BUTTON_VARIANT[variant],
+    namesHoverBg(extra) ? withoutHoverBg(tone) : tone,
     'link' === variant || 'quiet' === variant ? LINK_SIZE[size] : BUTTON_SIZE[size],
     eagerFocusRing ? FOCUS_RING_EAGER : '',
     extra,
@@ -148,10 +236,13 @@ export function buttonClass(
 export type IconButtonSize = 'xs' | 'sm' | 'md';
 
 const ICON_BUTTON_BASE =
-  'inline-flex items-center justify-center text-text-muted cursor-pointer transition-colors ' +
-  'hover:bg-surface-raised hover:text-text ' +
+  'inline-flex items-center justify-center cursor-pointer transition-colors ' +
+  'hover:bg-surface-raised ' +
   'focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ' +
   'disabled:cursor-not-allowed disabled:opacity-50';
+
+/** The default ink, emitted only when the caller has not named one — see {@link namesInk}. */
+const ICON_BUTTON_INK = 'text-text-muted hover:text-text';
 
 const ICON_BUTTON_SIZE: Record<IconButtonSize, string> = {
   xs: 'h-5 w-5 p-0.5 text-xs',
@@ -160,12 +251,25 @@ const ICON_BUTTON_SIZE: Record<IconButtonSize, string> = {
 };
 
 /** Square icon-only button. `danger` recolours the hover for destructive glyphs (×, trash). */
-export function iconButtonClass(size: IconButtonSize = 'sm', danger = false, extra?: string): string {
+export function iconButtonClass(
+  size: IconButtonSize = 'sm',
+  danger = false,
+  extra?: string,
+): string {
+  // `danger` names a hover fill of its own, so it stands the base's down the same way a caller's
+  // `extra` does — otherwise every destructive glyph ships two competing hover backgrounds.
+  const base = danger || namesHoverBg(extra) ? withoutHoverBg(ICON_BUTTON_BASE) : ICON_BUTTON_BASE;
+
   return cx(
-    ICON_BUTTON_BASE,
+    base,
+    namesInk(extra) ? '' : ICON_BUTTON_INK,
     RADIUS_RE.test(extra ?? '') ? '' : 'rounded',
     ICON_BUTTON_SIZE[size],
-    danger ? 'hover:bg-red-50 hover:text-red-600' : '',
+    danger && !namesHoverBg(extra)
+      ? 'hover:bg-red-50 hover:text-red-600'
+      : danger
+        ? 'hover:text-red-600'
+        : '',
     extra,
   );
 }
@@ -192,7 +296,7 @@ export function menuItemClass(active = false, disabled = false, extra?: string):
     'flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors',
     disabled
       ? 'cursor-not-allowed text-text-muted opacity-60'
-      : cx('cursor-pointer text-text hover:bg-surface-raised', active ? 'bg-surface-raised' : ''),
+      : cx('cursor-pointer text-text hover:bg-surface-hover', active ? 'bg-surface-hover' : ''),
     extra,
   );
 }
@@ -269,9 +373,22 @@ export function checkboxClass(extra?: string): string {
  * Pill tones. `none` emits no colour classes at all — for a pill whose colour comes from a
  * runtime palette via `style` (the tag chips, whose colour is per-tag data, not a design choice).
  */
+/**
+ * `lime` is **pending a good change** — the thing is under way and going well, but has not landed:
+ * an order line staged (the stock is picked and in the box) the way WooCommerce's own `processing`
+ * status means it. `success` is the landing itself. Note what that makes lime NOT: it is not a
+ * weaker `success`, and it is not `warning` either — nothing is wrong and nobody is being asked to
+ * intervene, which is the distinction `warning` carries.
+ *
+ * The two greens are meant to be read together along one row as a progression, which is why they
+ * sit at opposite ends of green rather than beside each other: lime is yellow-green (hue ~125),
+ * `success` is emerald, blue-green (hue ~164). A hue between them would read as a rendering
+ * inconsistency rather than as two states.
+ */
 export type PillTone =
   | 'neutral'
   | 'info'
+  | 'lime'
   | 'success'
   | 'warning'
   | 'danger'
@@ -288,6 +405,7 @@ const PILL_BASE = 'inline-flex items-center gap-1 font-medium leading-none white
 const PILL_SOFT: Record<PillTone, string> = {
   neutral: 'bg-gray-100 text-text-muted',
   info: 'bg-blue-100 text-blue-700',
+  lime: 'bg-lime-100 text-lime-800',
   success: 'bg-emerald-100 text-emerald-700',
   warning: 'bg-amber-100 text-amber-800',
   danger: 'bg-red-100 text-red-700',
@@ -300,6 +418,7 @@ const PILL_SOFT: Record<PillTone, string> = {
 const PILL_OUTLINE: Record<PillTone, string> = {
   neutral: 'border border-border bg-surface text-text-muted',
   info: 'border border-blue-200 bg-blue-50 text-blue-700',
+  lime: 'border border-lime-200 bg-lime-50 text-lime-800',
   success: 'border border-emerald-200 bg-emerald-50 text-emerald-700',
   warning: 'border border-amber-200 bg-amber-50 text-amber-700',
   danger: 'border border-red-200 bg-red-50 text-red-700',
@@ -312,6 +431,7 @@ const PILL_OUTLINE: Record<PillTone, string> = {
 const PILL_SOLID: Record<PillTone, string> = {
   neutral: 'bg-text-muted text-white',
   info: 'bg-blue-600 text-white',
+  lime: 'bg-lime-600 text-white',
   success: 'bg-emerald-600 text-white',
   warning: 'bg-amber-500 text-white',
   danger: 'bg-red-600 text-white',
@@ -403,19 +523,31 @@ interface VariantStyle {
  * above it is padding on the row container (`pt-1` on the shell's, `pt-2` on a surface's), which is
  * the only version that keeps every label on one baseline — an offset on the active tab alone drops
  * its text relative to its neighbours, and the row then reads as misaligned rather than as tabbed.
+ *
+ * **The active label is `text-blue-900`, not `text-primary`, and that is not a lapse back into
+ * naming a colour.** `--color-primary` is one value in both themes on purpose — lifting it for the
+ * dark ground breaks every `bg-primary` surface carrying hardcoded white text — so as ink it cannot
+ * answer to two different grounds, and it was under AA on three of the four active looks: measured
+ * 3.67:1 / 3.06:1 (light / dark) on the filled tab, and 4.81:1 / 3.73:1 unfilled. The label is
+ * 14px at weight 500, so the floor is 4.5:1, not the 3:1 large-text one.
+ *
+ * The ramp slots *are* themed here — inverted, so `blue-900` is navy on white and a pale blue on
+ * the dark ground — which is exactly the property that lets one literal serve both: 7.91:1 / 10.12:1
+ * filled, 10.37:1 / 12.33:1 unfilled. A `dark:` variant would have been the other way to fix it and
+ * is the one this stylesheet does not use anywhere.
  */
 const VARIANTS: Record<NavTabVariant, VariantStyle> = {
   surface: {
     base: 'shrink-0 border-b-2 px-2 py-2.5 text-sm font-medium transition-colors',
     inactive: 'border-transparent text-slate-500 hover:text-slate-800',
-    active: 'border-primary text-primary uppercase bg-primary/10 rounded-t',
-    activeDirty: 'border-primary text-primary uppercase rounded-t',
+    active: 'border-primary text-blue-900 uppercase bg-primary/20 rounded-t',
+    activeDirty: 'border-primary text-blue-900 uppercase rounded-t',
   },
   section: {
     base: 'shrink-0 border-b-2 px-3 py-1.5 text-xs font-medium transition-colors',
     inactive: 'border-transparent text-slate-500 hover:text-slate-800',
-    active: 'border-primary text-primary uppercase bg-primary/5 rounded-t',
-    activeDirty: 'border-primary text-primary uppercase rounded-t',
+    active: 'border-primary text-blue-900 uppercase bg-primary/5 rounded-t',
+    activeDirty: 'border-primary text-blue-900 uppercase rounded-t',
   },
 };
 

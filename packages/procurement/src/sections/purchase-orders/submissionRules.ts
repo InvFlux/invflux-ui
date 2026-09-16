@@ -21,7 +21,7 @@ export function effectiveCost(line: PoLine): number | null {
 
 /** Why this line would be pruned at submission, or null when it survives. */
 export function pruneReason(line: PoLine): PruneReason | null {
-  if (line.requestedQty <= 0) return 'zero_qty';
+  if (line.qtyRequested <= 0) return 'zero_qty';
   const c = effectiveCost(line);
   return null === c || c <= 0 ? 'no_price' : null;
 }

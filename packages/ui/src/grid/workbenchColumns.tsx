@@ -20,7 +20,7 @@
 
 import { Show, type JSX } from 'solid-js';
 import { createColumnHelper, type ColumnDef } from '@tanstack/solid-table';
-import { __, sprintf } from '@invflux/i18n';
+import { __, _x, sprintf } from '@invflux/i18n';
 import type { WorkbenchRow } from '../workbenchGridTypes';
 import type { GridColumnMeta } from '../types';
 import type { HostNav } from '../hostNav';
@@ -91,7 +91,9 @@ function unmanagedStockCell(hostQty: string | null, untracked: boolean): JSX.Ele
       }`}
       title={
         untracked
-          ? __('Stock management is disabled for this product — enable it to manage stock in InvFlux')
+          ? __(
+              'Stock management is disabled for this product — enable it to manage stock in InvFlux',
+            )
           : __(
               // Deliberately does not name the plugin: the row carries `external`, not *which*
               // external — most often WooCommerce itself, but it can be ATUM or another. Printing
@@ -174,7 +176,9 @@ export function buildWorkbenchColumns(
           readOnly
           tabindex={-1}
           class="pointer-events-none rounded-sm"
-          classList={{ 'outline outline-2 outline-offset-1 outline-blue-500': isAnchorRow(info.row.id) }}
+          classList={{
+            'outline outline-2 outline-offset-1 outline-blue-500': isAnchorRow(info.row.id),
+          }}
           aria-label={__('Select row')}
           checked={info.row.getIsSelected()}
         />
@@ -194,12 +198,30 @@ export function buildWorkbenchColumns(
         const displayName = (): string =>
           displayNameOf(row, String(stagedValue(row.subjectId, 'name', info.getValue()) ?? ''));
         return (
-          <div class={`flex items-center ${foldState() !== 'none' ? '-ml-2' : ''} ${indented ? 'pl-3' : ''}`}>
+          <div
+            class={`flex items-center ${foldState() !== 'none' ? '-ml-2' : ''} ${indented ? 'pl-3' : ''}`}
+          >
             {/* Collapse/expand caret for a grouping parent (variations); host owns the fold state. */}
             <Show when={foldState() !== 'none'}>
               <button
                 type="button"
-                class={iconButtonClass('xs', false, '-ml-1 h-4 w-4 shrink-0')}
+                // Violet marks family structure across the workbench — this caret, the
+                // variable/variation type glyphs, and the bring-in/hide chip. The hue says
+                // "this concerns the parent/variation relationship", which is why it is NOT
+                // the blue of a filter chip: those narrow the result set, these describe it.
+                // 500, not 600: this caret is a ~10px glyph, and at 600 it reads as merely
+                // "dark" rather than as the family hue. Standalone marks (this, the type
+                // glyphs) take 500; violet TEXT on a violet tint takes 700, where contrast
+                // against the tint is the constraint instead.
+                // The `!`s are load-bearing: `iconButtonClass` already sets `text-text-muted`
+                // plus `hover:text-text`, and two utilities for the same property resolve by
+                // STYLESHEET order, not by the order they appear in the class string — so a
+                // plainly appended `text-violet-600` does not reliably win.
+                class={iconButtonClass(
+                  'xs',
+                  false,
+                  '-ml-1 h-4 w-4 shrink-0 text-violet-500! hover:text-violet-600!',
+                )}
                 aria-label={foldState() === 'collapsed' ? __('Expand') : __('Collapse')}
                 aria-expanded={foldState() === 'expanded'}
                 onClick={(e) => {
@@ -220,7 +242,7 @@ export function buildWorkbenchColumns(
               const suppress = deps.suppressLinkKinds;
               const links = suppress
                 ? (row.links ?? []).filter((l) => !suppress.includes(l.kind))
-                : row.links ?? [];
+                : (row.links ?? []);
               const items = buildProductActionItems({
                 links,
                 subjectId: row.subjectId,
@@ -241,7 +263,9 @@ export function buildWorkbenchColumns(
                     trigger={
                       <>
                         {displayName()}
-                        <span class="text-2xs text-text-muted" aria-hidden="true">▾</span>
+                        <span class="text-2xs text-text-muted" aria-hidden="true">
+                          ▾
+                        </span>
                       </>
                     }
                     items={items}
@@ -259,10 +283,19 @@ export function buildWorkbenchColumns(
       enableSorting: true,
       /* translators: SKU = Stock Keeping Unit; keep "SKU" or use the local term (fr: UGS). */
       header: __('SKU'),
-      cell: (info) =>
-        scalarCell(info.row.original, 'sku', info.getValue(), 'font-mono text-xs text-text-muted', (v) =>
-          String(v ?? '').trim() === '' ? '—' : String(v),
-        ),
+      cell: (info) => {
+        // A specified SKU reads in the default (darker) text colour; an inherited one carries no
+        // colour of its own so the grid's inherited wash (muted + italic) shows through — the two are
+        // then distinguishable by colour, not only by the italic.
+        const inherited = info.row.original.inherited?.includes('sku') ?? false;
+        return scalarCell(
+          info.row.original,
+          'sku',
+          info.getValue(),
+          inherited ? 'font-mono text-xs' : 'font-mono text-xs text-text',
+          (v) => (String(v ?? '').trim() === '' ? '—' : String(v)),
+        );
+      },
     }),
 
     ch.accessor('imageUrl', {
@@ -271,11 +304,15 @@ export function buildWorkbenchColumns(
       header: __('Image'),
       cell: (info) => {
         const url = info.getValue();
-        return <>{url ? (
-          <img src={url} alt="" class="h-10 w-10 rounded object-cover" loading="lazy" />
-        ) : (
-          emDash()
-        )}</>;
+        return (
+          <>
+            {url ? (
+              <img src={url} alt="" class="h-10 w-10 rounded object-cover" loading="lazy" />
+            ) : (
+              emDash()
+            )}
+          </>
+        );
       },
     }),
 
@@ -356,7 +393,10 @@ export function buildWorkbenchColumns(
     ch.accessor('reorderThreshold', {
       id: 'reorder_threshold',
       enableSorting: true,
-      header: __('Reorder'),
+      header: _x(
+        'Reorder',
+        'column header: the reorder threshold, the stock level that triggers a reorder',
+      ),
       meta: { align: 'right' },
       cell: (info) =>
         scalarCell(info.row.original, 'reorder_threshold', info.getValue(), 'tabular-nums', (v) =>
@@ -434,7 +474,12 @@ const SLOT_CLASS: Record<StockSlot, string> = {
  * `delta` is an accessor so the cell stays reactive to the staged
  * correction; a 0 delta renders the bare value.
  */
-function deltaCell(fmt: (n: number) => string, base: number, delta: () => number, baseClass: string): JSX.Element {
+function deltaCell(
+  fmt: (n: number) => string,
+  base: number,
+  delta: () => number,
+  baseClass: string,
+): JSX.Element {
   return (
     <Show when={delta() !== 0} fallback={<span class={baseClass}>{fmt(base)}</span>}>
       <span class={baseClass} title={`${fmt(base)} → ${fmt(base + delta())}`}>
@@ -471,55 +516,58 @@ export function buildStockColumns(
     const cls = SLOT_CLASS[slot];
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const def: ColumnDef<WorkbenchRow, any> = ch.accessor((row) => workbenchValueFor(row, meta.id), {
-      id: meta.id,
-      header: meta.label,
-      enableSorting: meta.sortable,
-      meta: { align: 'right' },
-      cell: (info) => {
-        const row = info.row.original;
-        if (row.stockManaged === false) {
-          // The only figure available for an unmanaged subject is the host store's own, and it
-          // would otherwise sit under a header naming an InvFlux concept (ATP) that it does not
-          // measure. Labelling it is the difference between reporting another system's number and
-          // appearing to report ours; the other slots have no counterpart at all, hence the dash.
-          // Only a TRULY untracked product ('none') empties its cell. For 'external' the figure
-          // is another plugin's and is the operative availability, so it stays visible — hiding a
-          // number the merchant relies on is the worse error. Undefined (older payload) also shows,
-          // so a missing field never silently swallows data.
-          return unmanagedStockCell(
-            'atp' === slot && null != row.wcStock ? fmt(row.wcStock) : null,
-            'none' === row.stockManagement,
-          );
-        }
-        const base = Number(info.getValue() ?? 0);
-        if (!isAggregate) return <span class={cls}>{fmt(base)}</span>;
+    const def: ColumnDef<WorkbenchRow, any> = ch.accessor(
+      (row) => workbenchValueFor(row, meta.id),
+      {
+        id: meta.id,
+        header: meta.label,
+        enableSorting: meta.sortable,
+        meta: { align: 'right' },
+        cell: (info) => {
+          const row = info.row.original;
+          if (row.stockManaged === false) {
+            // The only figure available for an unmanaged subject is the host store's own, and it
+            // would otherwise sit under a header naming an InvFlux concept (ATP) that it does not
+            // measure. Labelling it is the difference between reporting another system's number and
+            // appearing to report ours; the other slots have no counterpart at all, hence the dash.
+            // Only a TRULY untracked product ('none') empties its cell. For 'external' the figure
+            // is another plugin's and is the operative availability, so it stays visible — hiding a
+            // number the merchant relies on is the worse error. Undefined (older payload) also shows,
+            // so a missing field never silently swallows data.
+            return unmanagedStockCell(
+              'atp' === slot && null != row.wcStock ? fmt(row.wcStock) : null,
+              'none' === row.stockManagement,
+            );
+          }
+          const base = Number(info.getValue() ?? 0);
+          if (!isAggregate) return <span class={cls}>{fmt(base)}</span>;
 
-        if (slot === 'total') {
-          const c = (): { expected: number; actual: number } | undefined => conflict(row);
-          return (
-            <span
-              classList={{ 'rounded px-1 ring-1 ring-red-300': !!c() }}
-              title={
-                c()
-                  ? sprintf(
-                      /* translators: %1$s = expected total, %2$s = current live total. */
-                      __('Expected %1$s, current %2$s'),
-                      fmt(c()!.expected),
-                      fmt(c()!.actual),
-                    )
-                  : undefined
-              }
-            >
-              {deltaCell(fmt, base, () => totalDelta(row), cls)}
-            </span>
-          );
-        }
+          if (slot === 'total') {
+            const c = (): { expected: number; actual: number } | undefined => conflict(row);
+            return (
+              <span
+                classList={{ 'rounded px-1 ring-1 ring-red-300': !!c() }}
+                title={
+                  c()
+                    ? sprintf(
+                        /* translators: %1$s = expected total, %2$s = current live total. */
+                        __('Expected %1$s, current %2$s'),
+                        fmt(c()!.expected),
+                        fmt(c()!.actual),
+                      )
+                    : undefined
+                }
+              >
+                {deltaCell(fmt, base, () => totalDelta(row), cls)}
+              </span>
+            );
+          }
 
-        // atp / res / ctd aggregate: this slot's slice of the staged total correction's cascade.
-        return deltaCell(fmt, base, () => stagedCascade(row)?.[slot] ?? 0, cls);
+          // atp / res / ctd aggregate: this slot's slice of the staged total correction's cascade.
+          return deltaCell(fmt, base, () => stagedCascade(row)?.[slot] ?? 0, cls);
+        },
       },
-    });
+    );
 
     map.set(meta.id, def as ColumnDef<WorkbenchRow, unknown>);
   }

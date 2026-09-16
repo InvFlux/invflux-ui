@@ -24,6 +24,18 @@ export interface ListStore {
    */
   queueSearch: Accessor<string>;
   setQueueSearch: Setter<string>;
+  /**
+   * The order the queue should focus when it next renders, or `''` for none.
+   *
+   * Set when leaving a detail page for the queue, so the round trip is lossless: the operator lands
+   * on the row they were reading, already selected, and `Enter` takes them straight back into it.
+   * Without it, Escape would return them to a list with nothing selected — the same filters, but
+   * their place in it gone, which is most of what "where was I" means on a queue of 400.
+   *
+   * Consumed once and cleared: it describes a navigation, not a preference.
+   */
+  focusId: Accessor<string>;
+  setFocusId: Setter<string>;
   /** Return the order id before `currentId` in the cached sequence, or null. */
   getPrevId(currentId: string): string | null;
   /** Return the order id after `currentId` in the cached sequence, or null. */
@@ -41,6 +53,7 @@ export function useListStore(): ListStore {
 export function createListStore(): ListStore {
   const [ids, setIds] = createSignal<string[]>([]);
   const [queueSearch, setQueueSearch] = createSignal<string>('');
+  const [focusId, setFocusId] = createSignal<string>('');
 
   function indexOf(currentId: string): number {
     return ids().indexOf(currentId);
@@ -51,6 +64,8 @@ export function createListStore(): ListStore {
     setIds,
     queueSearch,
     setQueueSearch,
+    focusId,
+    setFocusId,
     getPrevId(currentId) {
       const i = indexOf(currentId);
       return i > 0 ? ids()[i - 1] : null;

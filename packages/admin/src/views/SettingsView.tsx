@@ -1,9 +1,10 @@
-import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { Dynamic } from 'solid-js/web';
 import { createStore, reconcile } from 'solid-js/store';
 import { createQuery, useQueryClient } from '@tanstack/solid-query';
-import { __, sprintf } from '@invflux/i18n';
+import { __, _n, sprintf } from '@invflux/i18n';
 import {
+  ErrorBanner,
   Button,
   Checkbox,
   Input,
@@ -17,17 +18,24 @@ import {
   Modal,
   resolveSettingControl,
   type SettingMeta,
+  ModalFooter,
+  ModalHeader,
+  ModalPanel,
 } from '@invflux/ui';
 import { ImportAliasSection, IMPORT_ALIASES_QUERY_KEY } from './ImportAliasSection';
 import {
   commitSettings,
   fetchSettings,
   fetchOrderStatusPolicies,
+  fetchPaymentGatewayPolicies,
   fetchPluginPolicies,
   saveOrderStatusPolicies,
+  savePaymentGatewayPolicies,
   savePluginPolicies,
   type SettingRow,
   type OrderStatusPolicy,
+  type PaymentGatewayAnswer,
+  type PaymentGatewayPolicy,
   type PluginPolicyRow,
   type PluginPolicyData,
 } from '../api';
@@ -38,9 +46,11 @@ import invfluxMark from '@invflux/ui/assets/invflux-mark.svg?raw';
 const QUERY_KEY = ['invflux-settings'] as const;
 const OS_QUERY_KEY = ['invflux-order-status-policies'] as const;
 const PM_QUERY_KEY = ['invflux-plugin-policies'] as const;
+const PG_QUERY_KEY = ['invflux-payment-gateway-policies'] as const;
 const UNGROUPED = '__ungrouped__';
-// Synthetic outline/section keys for the two bespoke policy-table sections (not catalog groups).
+// Synthetic outline/section keys for the bespoke policy-table sections (not catalog groups).
 const SECTION_ORDER_STATUS = '__order_status__';
+const SECTION_PAYMENT_GATEWAYS = '__payment_gateways__';
 const SECTION_PLUGIN_META = '__plugin_meta__';
 const SECTION_IMPORT_ALIASES = '__import_aliases__';
 
@@ -64,18 +74,65 @@ export function SettingsView(props: SettingsViewProps) {
 
   // The two bespoke policy tables (not catalog settings): their own queries + staged-edit stores,
   // folded into the same pending-count + commit bar as the catalog dirty set.
-  const osQuery = createQuery(() => ({ queryKey: OS_QUERY_KEY, queryFn: () => fetchOrderStatusPolicies(props.context) }));
-  const pmQuery = createQuery(() => ({ queryKey: PM_QUERY_KEY, queryFn: () => fetchPluginPolicies(props.context) }));
-  const aliasQuery = createQuery(() => ({ queryKey: IMPORT_ALIASES_QUERY_KEY, queryFn: () => fetchImportAliases(props.context) }));
+  const osQuery = createQuery(() => ({
+    queryKey: OS_QUERY_KEY,
+    queryFn: () => fetchOrderStatusPolicies(props.context),
+  }));
+  const pmQuery = createQuery(() => ({
+    queryKey: PM_QUERY_KEY,
+    queryFn: () => fetchPluginPolicies(props.context),
+  }));
+  const pgQuery = createQuery(() => ({
+    queryKey: PG_QUERY_KEY,
+    queryFn: () => fetchPaymentGatewayPolicies(props.context),
+  }));
+  const aliasQuery = createQuery(() => ({
+    queryKey: IMPORT_ALIASES_QUERY_KEY,
+    queryFn: () => fetchImportAliases(props.context),
+  }));
   const [osDirty, setOsDirty] = createStore<
     Record<string, { stock_bucket: string; dispatch_status: string; color_id: number | null }>
   >({});
-  const [pmDirty, setPmDirty] = createStore<Record<string, { policy: string; acknowledged: boolean }>>({});
+  const [pmDirty, setPmDirty] = createStore<
+    Record<string, { policy: string; acknowledged: boolean }>
+  >({});
   const [pmRegister, setPmRegister] = createSignal('');
+  // Payment gateways: gateway id → staged "Processing / Completed means paid" answers.
+  const [pgDirty, setPgDirty] = createStore<Record<string, PaymentGatewayAnswer>>({});
 
   const osRows = (): OrderStatusPolicy[] => osQuery.data ?? [];
-  const pmInfo = (): PluginPolicyData => pmQuery.data ?? { installed: [], available: {}, knownSlugs: [] };
-  const osValue = (r: OrderStatusPolicy): { stock_bucket: string; dispatch_status: string; color_id: number | null } =>
+  const pgRows = (): PaymentGatewayPolicy[] => pgQuery.data ?? [];
+  const pgValue = (r: PaymentGatewayPolicy): PaymentGatewayAnswer =>
+    pgDirty[r.gateway_id] ?? {
+      processing_means_paid: r.processing_means_paid,
+      completed_means_paid: r.completed_means_paid,
+    };
+  // Processing meaning paid implies Completed does — a completed order went through Processing — so
+  // ticking Processing ticks Completed, which stays ticked while Processing is.
+  const stagePg = (r: PaymentGatewayPolicy, patch: Partial<PaymentGatewayAnswer>): void => {
+    const next = { ...pgValue(r), ...patch };
+    setPgDirty(r.gateway_id, {
+      ...next,
+      completed_means_paid: next.processing_means_paid || next.completed_means_paid,
+    });
+  };
+  // A row awaiting review is dirty as soon as it is answered, even with the value it already reads:
+  // saving that answer is what clears the review flag.
+  const pgRowDirty = (r: PaymentGatewayPolicy): boolean =>
+    r.gateway_id in pgDirty &&
+    (pgValue(r).processing_means_paid !== r.processing_means_paid ||
+      pgValue(r).completed_means_paid !== r.completed_means_paid ||
+      r.requires_review);
+  const pgChanges = createMemo(() => pgRows().filter(pgRowDirty));
+  // Methods switched off in WooCommerce fold behind a toggle: the table shows what the shop takes.
+  const [pgShowInactive, setPgShowInactive] = createSignal(false);
+  const pgActive = (): PaymentGatewayPolicy[] => pgRows().filter((r) => r.enabled);
+  const pgInactive = (): PaymentGatewayPolicy[] => pgRows().filter((r) => !r.enabled);
+  const pmInfo = (): PluginPolicyData =>
+    pmQuery.data ?? { installed: [], available: {}, knownSlugs: [] };
+  const osValue = (
+    r: OrderStatusPolicy,
+  ): { stock_bucket: string; dispatch_status: string; color_id: number | null } =>
     osDirty[r.status_slug] ?? {
       stock_bucket: r.stock_bucket,
       dispatch_status: r.dispatch_status,
@@ -89,12 +146,15 @@ export function SettingsView(props: SettingsViewProps) {
       osDirty[r.status_slug].dispatch_status !== r.dispatch_status ||
       osDirty[r.status_slug].color_id !== r.color_id);
   const pmRowDirty = (r: PluginPolicyRow): boolean =>
-    r.plugin_slug in pmDirty && (pmDirty[r.plugin_slug].policy !== r.policy || pmDirty[r.plugin_slug].acknowledged !== r.acknowledged);
+    r.plugin_slug in pmDirty &&
+    (pmDirty[r.plugin_slug].policy !== r.policy ||
+      pmDirty[r.plugin_slug].acknowledged !== r.acknowledged);
   const osChanges = createMemo(() => osRows().filter(osRowDirty));
   const pmChanges = createMemo(() => pmInfo().installed.filter(pmRowDirty));
 
   const rows = (): SettingRow[] => query.data ?? [];
-  const effectiveValue = (row: SettingRow): unknown => (row.name in dirty ? dirty[row.name] : row.value);
+  const effectiveValue = (row: SettingRow): unknown =>
+    row.name in dirty ? dirty[row.name] : row.value;
   const isDirty = (row: SettingRow): boolean =>
     row.name in dirty && JSON.stringify(dirty[row.name]) !== JSON.stringify(row.value);
   const dirtyRows = createMemo(() => rows().filter(isDirty));
@@ -104,6 +164,7 @@ export function SettingsView(props: SettingsViewProps) {
     const keys = new Set(dirtyRows().map((r) => r.group ?? UNGROUPED));
     if (osChanges().length > 0) keys.add(SECTION_ORDER_STATUS);
     if (pmChanges().length > 0 || '' !== pmRegister()) keys.add(SECTION_PLUGIN_META);
+    if (pgChanges().length > 0) keys.add(SECTION_PAYMENT_GATEWAYS);
 
     return keys;
   });
@@ -111,7 +172,12 @@ export function SettingsView(props: SettingsViewProps) {
   // registration. Declared after dirtyRows: createMemo runs its fn eagerly at creation, so a
   // forward reference to dirtyRows would hit the temporal dead zone.
   const pendingCount = createMemo(
-    () => dirtyRows().length + osChanges().length + pmChanges().length + ('' !== pmRegister() ? 1 : 0),
+    () =>
+      dirtyRows().length +
+      osChanges().length +
+      pmChanges().length +
+      pgChanges().length +
+      ('' !== pmRegister() ? 1 : 0),
   );
   // Modified = the effective (staged-or-persisted) value differs from the catalog default — the
   // persistent blue gutter indicator (VSCode's "modified" marker), distinct from unsaved/dirty.
@@ -121,6 +187,34 @@ export function SettingsView(props: SettingsViewProps) {
 
   // "Hide locked settings" — a per-browser UI pref (localStorage), off by default so Pro teasers
   // are visible. Display-only: the write path still re-checks the gate server-side.
+  /**
+   * Show only settings that currently want a decision — the filter the first-run screen deep-links
+   * into, so the count it shows lands on a page that contains exactly those settings and nothing
+   * else. A count is only honest if the surface it points at can drive it to zero.
+   *
+   * Deliberately NOT persisted, unlike `hideLocked`: that is a standing preference, this is where a
+   * link dropped you. A filter that survived the session would hide settings on a later visit for a
+   * reason the merchant had long forgotten.
+   */
+  const [onlyDecisions, setOnlyDecisions] = createSignal<boolean>(false);
+  // Applied whenever the host says the page was opened for those settings — an effect rather than an
+  // initial value because this view stays mounted across navigations, so arriving here a second time
+  // by the same link would otherwise land on an unfiltered page. It only ever turns the filter ON:
+  // unticking the box must stick even though the URL still carries the param.
+  createEffect(() => {
+    if (true === props.context.startOnDecisions) setOnlyDecisions(true);
+  });
+
+  /**
+   * Whether a row asks the merchant for a decision. A `note` advisory is shown on its row but never
+   * counted or listed by the filter: it informs a choice the merchant may be right to make, and a
+   * count that included it could never reach zero.
+   */
+  const needsDecision = (row: SettingRow): boolean => 'decision' === row.advisory?.severity;
+
+  /** Settings currently wanting a decision, whatever the search box says. */
+  const decisionCount = createMemo(() => rows().filter(needsDecision).length);
+
   const HIDE_LOCKED_KEY = 'invflux-admin-hide-locked';
   const [hideLocked, setHideLockedSignal] = createSignal<boolean>(readHideLocked());
   const setHideLocked = (value: boolean): void => {
@@ -162,7 +256,8 @@ export function SettingsView(props: SettingsViewProps) {
 
     return errs;
   });
-  const rowError = (row: SettingRow): string | null => serverErrors()[row.name] ?? clientErrors()[row.name] ?? null;
+  const rowError = (row: SettingRow): string | null =>
+    serverErrors()[row.name] ?? clientErrors()[row.name] ?? null;
   const hasBlockingErrors = (): boolean => Object.keys(clientErrors()).length > 0;
 
   const stage = (name: string, value: unknown): void => {
@@ -189,12 +284,16 @@ export function SettingsView(props: SettingsViewProps) {
   const groups = createMemo(() => {
     const term = search().trim().toLowerCase();
     const hide = hideLocked();
+    const decisionsOnly = onlyDecisions();
     const matches = (row: SettingRow): boolean => {
       if (hide && isLocked(row)) return false;
+      if (decisionsOnly && !needsDecision(row)) return false;
 
       return (
         term === '' ||
-        [row.title, row.name, row.description, row.group].some((s) => (s ?? '').toLowerCase().includes(term))
+        [row.title, row.name, row.description, row.group].some((s) =>
+          (s ?? '').toLowerCase().includes(term),
+        )
       );
     };
 
@@ -207,31 +306,40 @@ export function SettingsView(props: SettingsViewProps) {
       byGroup.set(key, list);
     }
 
-    return [...byGroup.entries()]
-      .map(([key, list]) => ({
-        key,
-        label: key === UNGROUPED ? __('General') : key,
-        allLocked: list.every(isLocked),
-        // Locked teasers sink to the bottom of their group.
-        rows: list.sort(
-          (a, b) =>
-            (isLocked(a) ? 1 : 0) - (isLocked(b) ? 1 : 0) ||
-            a.order - b.order ||
-            (a.title ?? a.name).localeCompare(b.title ?? b.name),
-        ),
-      }))
-      // Fully-locked groups sort after groups with any editable setting.
-      .sort((a, b) => (a.allLocked ? 1 : 0) - (b.allLocked ? 1 : 0) || a.label.localeCompare(b.label));
+    return (
+      [...byGroup.entries()]
+        .map(([key, list]) => ({
+          key,
+          label: key === UNGROUPED ? __('General') : key,
+          allLocked: list.every(isLocked),
+          // Locked teasers sink to the bottom of their group.
+          rows: list.sort(
+            (a, b) =>
+              (isLocked(a) ? 1 : 0) - (isLocked(b) ? 1 : 0) ||
+              a.order - b.order ||
+              (a.title ?? a.name).localeCompare(b.title ?? b.name),
+          ),
+        }))
+        // Fully-locked groups sort after groups with any editable setting.
+        .sort(
+          (a, b) => (a.allLocked ? 1 : 0) - (b.allLocked ? 1 : 0) || a.label.localeCompare(b.label),
+        )
+    );
   });
 
   const save = async (): Promise<void> => {
     if (0 === pendingCount() || hasBlockingErrors()) return;
 
     const changes = dirtyRows().map((row) => ({ name: row.name, value: effectiveValue(row) }));
-    const osPayload: Record<string, { stock_bucket: string; dispatch_status: string; color_id: number | null }> = {};
+    const osPayload: Record<
+      string,
+      { stock_bucket: string; dispatch_status: string; color_id: number | null }
+    > = {};
     for (const r of osChanges()) osPayload[r.status_slug] = osValue(r);
     const pmPayload: Record<string, { policy: string; acknowledged: boolean }> = {};
     for (const r of pmChanges()) pmPayload[r.plugin_slug] = pmValue(r);
+    const pgPayload: Record<string, PaymentGatewayAnswer> = {};
+    for (const r of pgChanges()) pgPayload[r.gateway_id] = pgValue(r);
     const register = pmRegister();
 
     setSaving(true);
@@ -246,8 +354,16 @@ export function SettingsView(props: SettingsViewProps) {
         if (!r.ok) for (const [k, v] of Object.entries(r.errors)) errors[`order-status:${k}`] = v;
       }
       if (Object.keys(pmPayload).length > 0 || '' !== register) {
-        const r = await savePluginPolicies(props.context, pmPayload, '' !== register ? register : undefined);
+        const r = await savePluginPolicies(
+          props.context,
+          pmPayload,
+          '' !== register ? register : undefined,
+        );
         if (!r.ok) for (const [k, v] of Object.entries(r.errors)) errors[`plugin:${k}`] = v;
+      }
+      if (Object.keys(pgPayload).length > 0) {
+        const r = await savePaymentGatewayPolicies(props.context, pgPayload);
+        if (!r.ok) for (const [k, v] of Object.entries(r.errors)) errors[`gateway:${k}`] = v;
       }
     } finally {
       setSaving(false);
@@ -258,11 +374,13 @@ export function SettingsView(props: SettingsViewProps) {
       setDirty(reconcile({}));
       setOsDirty(reconcile({}));
       setPmDirty(reconcile({}));
+      setPgDirty(reconcile({}));
       setPmRegister('');
       setModalOpen(false);
       void queryClient.invalidateQueries({ queryKey: QUERY_KEY });
       void queryClient.invalidateQueries({ queryKey: OS_QUERY_KEY });
       void queryClient.invalidateQueries({ queryKey: PM_QUERY_KEY });
+      void queryClient.invalidateQueries({ queryKey: PG_QUERY_KEY });
     } else {
       // Nothing (or only some endpoints) persisted; surface errors and keep the modal open.
       setServerErrors(errors);
@@ -289,6 +407,28 @@ export function SettingsView(props: SettingsViewProps) {
     sectionEls.get(key)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
+  // Order-status rows that are not statuses but things WooCommerce does to an order (trashing,
+  // deleting): shown in the table, decided by a setting, never edited here.
+  const isDerivedRow = (r: OrderStatusPolicy): boolean => null != r.derived_value;
+  const groupOfSetting = (name: string): string =>
+    rows().find((s) => s.name === name)?.group ?? UNGROUPED;
+  const derivedEffect = (r: OrderStatusPolicy): string => {
+    switch (`${r.status_slug}:${r.derived_value ?? ''}`) {
+      case 'trash:park':
+        return __('Held out of the queue, stock kept');
+      case 'trash:cancel':
+        return __('Cancelled: stock released');
+      case 'trash:ignore':
+        return __('Left as live work');
+      case 'deleted:release':
+        return __('Stock released');
+      case 'deleted:hold':
+        return __('Stock kept committed');
+      default:
+        return r.derived_value ?? '';
+    }
+  };
+
   // True when a search term is narrowing the list — drives the per-group hit counts (VSCode shows
   // them only while filtering).
   const filtering = (): boolean => '' !== search().trim();
@@ -297,46 +437,88 @@ export function SettingsView(props: SettingsViewProps) {
   // shows only if its title or one of its rows matches (the whole small table is then shown).
   const osSectionLabel = (): string => __('Order statuses');
   const pmSectionLabel = (): string => __('Stock-writing plugins');
+  const pgSectionLabel = (): string => __('Payment methods');
   const matchesTerm = (text: string): boolean => {
     const t = search().trim().toLowerCase();
 
     return '' === t || text.toLowerCase().includes(t);
   };
+  // The bespoke sections carry no advisory of their own, so the decisions filter hides them
+  // wholesale. Without this the page keeps rendering a whole order-status table under a checkbox
+  // reading "only the N settings needing a decision" — which is the count promising one thing and
+  // the surface showing another, and it is the promise that makes the count worth having.
   const showOrderStatus = (): boolean =>
-    osRows().length > 0 && (matchesTerm(osSectionLabel()) || osRows().some((r) => matchesTerm(r.label) || matchesTerm(r.status_slug)));
+    !onlyDecisions() &&
+    osRows().length > 0 &&
+    (matchesTerm(osSectionLabel()) ||
+      osRows().some((r) => matchesTerm(r.label) || matchesTerm(r.status_slug)));
   const showPluginMeta = (): boolean =>
+    !onlyDecisions() &&
     (pmInfo().installed.length > 0 || Object.keys(pmInfo().available).length > 0) &&
-    (matchesTerm(pmSectionLabel()) || pmInfo().installed.some((r) => matchesTerm(r.plugin_name) || matchesTerm(r.plugin_slug)));
+    (matchesTerm(pmSectionLabel()) ||
+      pmInfo().installed.some((r) => matchesTerm(r.plugin_name) || matchesTerm(r.plugin_slug)));
+  const showPaymentGateways = (): boolean =>
+    !onlyDecisions() &&
+    pgRows().length > 0 &&
+    (matchesTerm(pgSectionLabel()) ||
+      pgRows().some((r) => matchesTerm(r.label) || matchesTerm(r.gateway_id)));
   const aliasSectionLabel = (): string => __('Import aliases');
   const aliasConcepts = (): string[] => Object.keys(aliasQuery.data ?? {});
   // Show once the query has resolved — even with no learned aliases yet — so the panel (and its
   // empty-state "teach one via Remember" guidance) is discoverable. Under a search term, gate on a match.
   const showImportAliases = (): boolean =>
+    !onlyDecisions() &&
     undefined !== aliasQuery.data &&
-    (matchesTerm(aliasSectionLabel()) || aliasConcepts().some((c) => matchesTerm(c)) || Object.values(aliasQuery.data ?? {}).some((list) => list.some((a) => matchesTerm(a))));
+    (matchesTerm(aliasSectionLabel()) ||
+      aliasConcepts().some((c) => matchesTerm(c)) ||
+      Object.values(aliasQuery.data ?? {}).some((list) => list.some((a) => matchesTerm(a))));
 
   // 2-level outline for the sidebar: top-level group segment → its
   // sections, each carrying its matching-row count. A single-level group (no '/') is its own item.
   const outline = createMemo(() => {
-    const tops = new Map<string, { label: string; count: number; sections: Array<{ key: string; label: string; count: number }> }>();
+    const tops = new Map<
+      string,
+      {
+        label: string;
+        count: number;
+        sections: Array<{ key: string; label: string; count: number }>;
+      }
+    >();
     for (const group of groups()) {
       const segments = group.key === UNGROUPED ? [group.label] : group.key.split('/');
       const top = segments[0];
       const entry = tops.get(top) ?? { label: top, count: 0, sections: [] };
       entry.count += group.rows.length;
-      entry.sections.push({ key: group.key, label: segments.length > 1 ? segments.slice(1).join(' / ') : top, count: group.rows.length });
+      entry.sections.push({
+        key: group.key,
+        label: segments.length > 1 ? segments.slice(1).join(' / ') : top,
+        count: group.rows.length,
+      });
       tops.set(top, entry);
     }
 
-    const extra: Array<{ label: string; count: number; sections: Array<{ key: string; label: string; count: number }> }> = [];
+    const extra: Array<{
+      label: string;
+      count: number;
+      sections: Array<{ key: string; label: string; count: number }>;
+    }> = [];
     if (showOrderStatus()) {
       const label = osSectionLabel();
-      extra.push({ label, count: osRows().length, sections: [{ key: SECTION_ORDER_STATUS, label, count: osRows().length }] });
+      extra.push({
+        label,
+        count: osRows().length,
+        sections: [{ key: SECTION_ORDER_STATUS, label, count: osRows().length }],
+      });
     }
     if (showPluginMeta()) {
       const label = pmSectionLabel();
       const count = pmInfo().installed.length;
       extra.push({ label, count, sections: [{ key: SECTION_PLUGIN_META, label, count }] });
+    }
+    if (showPaymentGateways()) {
+      const label = pgSectionLabel();
+      const count = pgRows().length;
+      extra.push({ label, count, sections: [{ key: SECTION_PAYMENT_GATEWAYS, label, count }] });
     }
     if (showImportAliases()) {
       const label = aliasSectionLabel();
@@ -351,7 +533,10 @@ export function SettingsView(props: SettingsViewProps) {
   const countSuffix = (n: number): string => (filtering() ? ` (${n})` : '');
 
   return (
-    <div class="flex flex-col bg-surface text-text max-w-5xl mx-auto" style={{'height':'calc(100vh - 46px)'}}>
+    <div
+      class="flex flex-col bg-surface text-text max-w-5xl mx-auto"
+      style={{ height: 'calc(100vh - 46px)' }}
+    >
       <header class="shrink-0 border-b border-border p-4">
         {/* The InvFlux lockup is the app's top-left surface picker now (LockupLauncher), so the page
             title is just the plain surface name — no redundant lockup in the h1. */}
@@ -363,13 +548,35 @@ export function SettingsView(props: SettingsViewProps) {
           value={search()}
           onInput={(e) => setSearch(e.currentTarget.value)}
         />
-        <label class="mt-2 flex w-fit cursor-pointer items-center gap-2 text-sm text-text-muted">
-          <Checkbox
-            checked={hideLocked()}
-            onChange={(e) => setHideLocked(e.currentTarget.checked)}
-          />
-          {__('Hide locked settings')}
-        </label>
+        <div class="mt-2 flex flex-wrap items-center gap-4">
+          <label class="flex w-fit cursor-pointer items-center gap-2 text-sm text-text-muted">
+            <Checkbox
+              checked={hideLocked()}
+              onChange={(e) => setHideLocked(e.currentTarget.checked)}
+            />
+            {__('Hide locked settings')}
+          </label>
+          {/* Offered only when there is something to filter to: a checkbox that can only ever empty
+              the page is worse than absent. It stays visible while checked even if the last one
+              clears, so the merchant sees the list empty as a result of their own save. */}
+          <Show when={decisionCount() > 0 || onlyDecisions()}>
+            <label class="flex w-fit cursor-pointer items-center gap-2 text-sm text-text-muted">
+              <Checkbox
+                checked={onlyDecisions()}
+                onChange={(e) => setOnlyDecisions(e.currentTarget.checked)}
+              />
+              {sprintf(
+                /* translators: %d: number of settings still needing a decision. */
+                _n(
+                  'Only the %d setting needing a decision',
+                  'Only the %d settings needing a decision',
+                  decisionCount(),
+                ),
+                decisionCount(),
+              )}
+            </label>
+          </Show>
+        </div>
       </header>
 
       {/* Body: two independently-scrolling panes (VSCode settings). `min-h-0` lets the flex
@@ -379,7 +586,7 @@ export function SettingsView(props: SettingsViewProps) {
           <p class="p-4 text-text-muted">{__('Loading settings…')}</p>
         </Show>
         <Show when={query.isError}>
-          <p class="p-4 text-red-700">{__('Failed to load settings.')}</p>
+          <ErrorBanner class="p-4">{__('Failed to load settings.')}</ErrorBanner>
         </Show>
 
         <Show when={!query.isLoading && !query.isError}>
@@ -393,7 +600,8 @@ export function SettingsView(props: SettingsViewProps) {
                     fallback={
                       <>
                         <div class="px-2 py-1 text-xs font-semibold uppercase tracking-wide text-text-muted">
-                          {top.label}{countSuffix(top.count)}
+                          {top.label}
+                          {countSuffix(top.count)}
                         </div>
                         <For each={top.sections}>
                           {(s) => (
@@ -403,7 +611,8 @@ export function SettingsView(props: SettingsViewProps) {
                               classList={{ 'bg-dirty-bg text-text': dirtyGroupKeys().has(s.key) }}
                               onClick={() => scrollToGroup(s.key)}
                             >
-                              {s.label}{countSuffix(s.count)}
+                              {s.label}
+                              {countSuffix(s.count)}
                             </button>
                           )}
                         </For>
@@ -416,7 +625,8 @@ export function SettingsView(props: SettingsViewProps) {
                       classList={{ 'bg-dirty-bg': dirtyGroupKeys().has(top.sections[0].key) }}
                       onClick={() => scrollToGroup(top.sections[0].key)}
                     >
-                      {top.label}{countSuffix(top.count)}
+                      {top.label}
+                      {countSuffix(top.count)}
                     </button>
                   </Show>
                 </div>
@@ -441,7 +651,9 @@ export function SettingsView(props: SettingsViewProps) {
               <section ref={(el) => sectionEls.set(SECTION_ORDER_STATUS, el)} class="scroll-mt-4">
                 <h2 class="mb-1 text-lg font-semibold">{osSectionLabel()}</h2>
                 <p class="mb-4 text-sm text-text-muted">
-                  {__('Map WooCommerce order statuses to InvFlux stock and dispatch semantics. Stock and dispatch meaning is fixed for WooCommerce’s own statuses and set by you for custom ones; the colour is yours on every status.')}
+                  {__(
+                    'Map WooCommerce order statuses to InvFlux stock and dispatch semantics. Stock and dispatch meaning is fixed for WooCommerce’s own statuses and set by you for custom ones; the colour is yours on every status.',
+                  )}
                 </p>
                 <OrderStatusSection />
               </section>
@@ -451,9 +663,26 @@ export function SettingsView(props: SettingsViewProps) {
               <section ref={(el) => sectionEls.set(SECTION_PLUGIN_META, el)} class="scroll-mt-4">
                 <h2 class="mb-1 text-lg font-semibold">{pmSectionLabel()}</h2>
                 <p class="mb-4 text-sm text-text-muted">
-                  {__('Once you let InvFlux manage a product’s stock, other plugins can no longer change it — that is what keeps the numbers trustworthy. If you need one of them to update stock anyway, allow it here, preferably only for as long as you need it. Plugins appear in this list once they try to write stock.')}
+                  {__(
+                    'Once you let InvFlux manage a product’s stock, other plugins can no longer change it — that is what keeps the numbers trustworthy. If you need one of them to update stock anyway, allow it here, preferably only for as long as you need it. Plugins appear in this list once they try to write stock.',
+                  )}
                 </p>
                 <PluginPolicySection />
+              </section>
+            </Show>
+
+            <Show when={showPaymentGateways()}>
+              <section
+                ref={(el) => sectionEls.set(SECTION_PAYMENT_GATEWAYS, el)}
+                class="scroll-mt-4"
+              >
+                <h2 class="mb-1 text-lg font-semibold">{pgSectionLabel()}</h2>
+                <p class="mb-4 text-sm text-text-muted">
+                  {__(
+                    'For each payment method you settle by hand, say which order status means the money has arrived: “Processing”, as with a bank transfer, or “Completed”, as with cash on delivery, where the money comes at the door. InvFlux then records the payment when an order reaches that status. Leave both off if you record those payments yourself.',
+                  )}
+                </p>
+                <PaymentGatewaySection />
               </section>
             </Show>
 
@@ -461,7 +690,9 @@ export function SettingsView(props: SettingsViewProps) {
               <section ref={(el) => sectionEls.set(SECTION_IMPORT_ALIASES, el)} class="scroll-mt-4">
                 <h2 class="mb-1 text-lg font-semibold">{aliasSectionLabel()}</h2>
                 <p class="mb-4 text-sm text-text-muted">
-                  {__('Header labels the importer remembers for each column. Taught via “Remember” during an import; prune or add them here.')}
+                  {__(
+                    'Header labels the importer remembers for each column. Taught via “Remember” during an import; prune or add them here.',
+                  )}
                 </p>
                 <ImportAliasSection context={props.context} />
               </section>
@@ -479,9 +710,7 @@ export function SettingsView(props: SettingsViewProps) {
             {' · '}
             {__('Ctrl+Enter to review')}
           </span>
-          <Button onClick={() => setModalOpen(true)}>
-            {__('Review & save')}
-          </Button>
+          <Button onClick={() => setModalOpen(true)}>{__('Review & save')}</Button>
         </div>
       </Show>
 
@@ -499,16 +728,35 @@ export function SettingsView(props: SettingsViewProps) {
                 parts.push(`${v.stock_bucket} / ${v.dispatch_status}`);
               }
               if (v.color_id !== r.color_id) {
-                parts.push(null === v.color_id ? __('colour: default') : sprintf(__('colour: %s'), TAG_PALETTE[v.color_id]?.name ?? String(v.color_id)));
+                parts.push(
+                  null === v.color_id
+                    ? __('colour: default')
+                    : sprintf(
+                        __('colour: %s'),
+                        TAG_PALETTE[v.color_id]?.name ?? String(v.color_id),
+                      ),
+                );
               }
 
               return { label: r.label, detail: parts.join(' · ') };
             }),
             ...pmChanges().map((r) => ({
               label: '' !== r.plugin_name ? r.plugin_name : r.plugin_slug,
-              detail: pmValue(r).acknowledged ? `${pmValue(r).policy} · ${__('notices silenced')}` : pmValue(r).policy,
+              detail: pmValue(r).acknowledged
+                ? `${pmValue(r).policy} · ${__('notices silenced')}`
+                : pmValue(r).policy,
             })),
-            ...('' !== pmRegister() ? [{ label: pmRegister(), detail: __('register plugin') }] : []),
+            ...pgChanges().map((r) => ({
+              label: r.label,
+              detail: pgValue(r).processing_means_paid
+                ? __('“Processing” status means paid')
+                : pgValue(r).completed_means_paid
+                  ? __('“Completed” status means paid')
+                  : __('No order status means paid'),
+            })),
+            ...('' !== pmRegister()
+              ? [{ label: pmRegister(), detail: __('register plugin') }]
+              : []),
           ]}
           oldValue={(row) => row.value}
           newValue={(row) => effectiveValue(row)}
@@ -569,83 +817,272 @@ export function SettingsView(props: SettingsViewProps) {
             </tr>
           </thead>
           <tbody class="divide-y divide-border text-xs">
-            <For each={osRows()}>
+            <For each={osRows().filter((r) => !isDerivedRow(r))}>
               {(r) => (
                 <>
-                <tr classList={{ 'bg-dirty-bg': osRowDirty(r) }}>
-                  <td class="px-3 py-2">
-                    {r.label}
-                    <Show when={!r.is_core && r.requires_review}>
-                      <span class="ml-2 rounded bg-dirty-bg px-1.5 py-0.5 text-xs font-medium text-text">
-                        {__('Needs review')}
-                      </span>
-                    </Show>
-                  </td>
-                  <td class="px-3 py-2"><code class="text-xs text-text-muted">{r.status_slug}</code></td>
-                  <td class="px-3 py-2">
-                    {/* Enabled for core statuses too, unlike the two Selects beside it: a colour
+                  <tr classList={{ 'bg-dirty-bg': osRowDirty(r) }}>
+                    <td class="px-3 py-2">
+                      {r.label}
+                      <Show when={!r.is_core && r.requires_review}>
+                        <span class="ml-2 rounded bg-dirty-bg px-1.5 py-0.5 text-xs font-medium text-text">
+                          {__('Needs review')}
+                        </span>
+                      </Show>
+                    </td>
+                    <td class="px-3 py-2">
+                      <code class="text-xs text-text-muted">{r.status_slug}</code>
+                    </td>
+                    <td class="px-3 py-2">
+                      {/* Enabled for core statuses too, unlike the two Selects beside it: a colour
                         carries no WooCommerce semantics, so there is nothing to protect. */}
-                    <button
-                      type="button"
-                      class="cursor-pointer rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-                      aria-expanded={colorOpenFor() === r.status_slug}
-                      aria-label={sprintf(__('Colour for %s'), r.label)}
-                      onClick={() => setColorOpenFor(colorOpenFor() === r.status_slug ? null : r.status_slug)}
-                    >
-                      <Pill colorId={effectiveColor(r)}>
-                        {r.label}
-                        <Show when={null === osValue(r).color_id}>
-                          <span class="ml-1 opacity-60">{__('(default)')}</span>
-                        </Show>
-                      </Pill>
-                    </button>
-                  </td>
-                  <td class="px-3 py-2">
-                    <Select disabled={r.is_core} value={osValue(r).stock_bucket} onChange={(e) => setBucket(r, e.currentTarget.value)}>
-                      <For each={bucketOptions}>{([v, l]) => <option value={v}>{l}</option>}</For>
-                    </Select>
-                  </td>
-                  <td class="px-3 py-2">
-                    <Select disabled={r.is_core} value={osValue(r).dispatch_status} onChange={(e) => setDispatch(r, e.currentTarget.value)}>
-                      <For each={dispatchOptions}>{([v, l]) => <option value={v}>{l}</option>}</For>
-                    </Select>
-                  </td>
-                </tr>
-                {/* The swatch grid lives in its own row rather than a popover: the table wrapper is
+                      <button
+                        type="button"
+                        class="cursor-pointer rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                        aria-expanded={colorOpenFor() === r.status_slug}
+                        aria-label={sprintf(__('Colour for %s'), r.label)}
+                        onClick={() =>
+                          setColorOpenFor(colorOpenFor() === r.status_slug ? null : r.status_slug)
+                        }
+                      >
+                        <Pill colorId={effectiveColor(r)}>
+                          {r.label}
+                          <Show when={null === osValue(r).color_id}>
+                            <span class="ml-1 opacity-60">{__('(default)')}</span>
+                          </Show>
+                        </Pill>
+                      </button>
+                    </td>
+                    <td class="px-3 py-2">
+                      <Select
+                        // Named per row, matching the `Colour for %s` control above it: a column
+                        // name alone repeats identically down every row, so it never says WHICH
+                        // status is being changed.
+                        aria-label={sprintf(__('Stock bucket for %s'), r.label)}
+                        disabled={r.is_core}
+                        value={osValue(r).stock_bucket}
+                        onChange={(e) => setBucket(r, e.currentTarget.value)}
+                      >
+                        <For each={bucketOptions}>{([v, l]) => <option value={v}>{l}</option>}</For>
+                      </Select>
+                    </td>
+                    <td class="px-3 py-2">
+                      <Select
+                        aria-label={sprintf(__('Dispatch status for %s'), r.label)}
+                        disabled={r.is_core}
+                        value={osValue(r).dispatch_status}
+                        onChange={(e) => setDispatch(r, e.currentTarget.value)}
+                      >
+                        <For each={dispatchOptions}>
+                          {([v, l]) => <option value={v}>{l}</option>}
+                        </For>
+                      </Select>
+                    </td>
+                  </tr>
+                  {/* The swatch grid lives in its own row rather than a popover: the table wrapper is
                     `overflow-x-auto`, which forces overflow-y to `auto` as well, so anything
                     absolutely positioned out of a cell would be clipped or scroll away. A
                     disclosure row needs no positioning and cannot be cut off. */}
-                <Show when={colorOpenFor() === r.status_slug}>
-                  <tr classList={{ 'bg-dirty-bg': osRowDirty(r) }}>
-                    <td class="px-3 pb-3" colSpan={5}>
-                      <div class="flex flex-wrap items-start gap-4">
-                        <PaletteSwatchPicker
-                          ariaLabel={sprintf(__('Colour for %s'), r.label)}
-                          value={osValue(r).color_id}
-                          onPick={(id) => setColor(r, id)}
-                        />
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          disabled={null === osValue(r).color_id}
-                          onClick={() => setColor(r, null)}
-                        >
-                          {__('Use default')}
-                        </Button>
-                      </div>
-                      <Show when={null === osValue(r).color_id}>
-                        <p class="mt-2 text-2xs text-text-muted">
-                          {__('No colour set — this status follows the shipped default, and will keep following it if that default changes.')}
-                        </p>
-                      </Show>
-                    </td>
-                  </tr>
-                </Show>
+                  <Show when={colorOpenFor() === r.status_slug}>
+                    <tr classList={{ 'bg-dirty-bg': osRowDirty(r) }}>
+                      <td class="px-3 pb-3" colSpan={5}>
+                        <div class="flex flex-wrap items-start gap-4">
+                          <PaletteSwatchPicker
+                            ariaLabel={sprintf(__('Colour for %s'), r.label)}
+                            value={osValue(r).color_id}
+                            onPick={(id) => setColor(r, id)}
+                          />
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            disabled={null === osValue(r).color_id}
+                            onClick={() => setColor(r, null)}
+                          >
+                            {__('Use default')}
+                          </Button>
+                        </div>
+                        <Show when={null === osValue(r).color_id}>
+                          <p class="mt-2 text-2xs text-text-muted">
+                            {__(
+                              'No colour set — this status follows the shipped default, and will keep following it if that default changes.',
+                            )}
+                          </p>
+                        </Show>
+                      </td>
+                    </tr>
+                  </Show>
                 </>
               )}
             </For>
+            {/* Trashing and deleting are things WooCommerce does to an order, not statuses. They are
+              shown here because this is where a reader asks what happens to orders, and they are
+              read-only because each is decided by a setting — two editors for one answer lose
+              edits. */}
+            <Show when={osRows().some(isDerivedRow)}>
+              <tr class="bg-surface-raised">
+                <td class="px-3 py-2 text-xs font-medium text-text-muted" colSpan={5}>
+                  {__('What happens to orders WooCommerce removes')}
+                </td>
+              </tr>
+              <For each={osRows().filter(isDerivedRow)}>
+                {(r) => (
+                  <tr
+                    data-testid="order-status-derived-row"
+                    data-slug={r.status_slug}
+                    data-value={r.derived_value ?? ''}
+                  >
+                    <td class="px-3 py-2">{r.label}</td>
+                    <td class="px-3 py-2">
+                      <code class="text-xs text-text-muted">{r.status_slug}</code>
+                    </td>
+                    <td class="px-3 py-2">
+                      <Pill colorId={effectiveColor(r)}>{r.label}</Pill>
+                    </td>
+                    <td class="px-3 py-2" colSpan={2}>
+                      <span data-testid="order-status-derived-effect">{derivedEffect(r)}</span>
+                      <Show when={r.derived_from}>
+                        {(setting) => (
+                          <button
+                            type="button"
+                            class="ml-2 cursor-pointer text-primary underline focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                            data-testid="order-status-derived-setting-link"
+                            onClick={() => scrollToGroup(groupOfSetting(setting()))}
+                          >
+                            {__('Change this setting')}
+                          </button>
+                        )}
+                      </Show>
+                    </td>
+                  </tr>
+                )}
+              </For>
+            </Show>
           </tbody>
         </table>
+      </div>
+    );
+  }
+
+  // ── Payment-gateway policy table (bespoke section) ───────────────────────
+  function PaymentGatewaySection() {
+    const shown = (): PaymentGatewayPolicy[] =>
+      pgShowInactive() ? [...pgActive(), ...pgInactive()] : pgActive();
+
+    return (
+      <div>
+        <div class="overflow-x-auto rounded border border-border">
+          <table>
+            <thead class="bg-surface-raised text-left text-text-muted">
+              <tr>
+                <th class="px-3 py-2 font-medium">{__('Payment method')}</th>
+                <th class="px-3 py-2 font-medium">{__('Method ID')}</th>
+                <th class="px-3 py-2 font-medium">{__('“Processing” status means paid')}</th>
+                <th class="px-3 py-2 font-medium">{__('“Completed” status means paid')}</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-border text-xs">
+              <Show when={0 === shown().length}>
+                <tr>
+                  <td class="px-3 py-2 text-text-muted" colSpan={4}>
+                    {__('No payment method is active in WooCommerce.')}
+                  </td>
+                </tr>
+              </Show>
+              <For each={shown()}>
+                {(r) => (
+                  <tr
+                    classList={{ 'bg-dirty-bg': pgRowDirty(r), 'text-text-muted': !r.enabled }}
+                    data-gateway-id={r.gateway_id}
+                  >
+                    <td class="px-3 py-2">
+                      {r.label}
+                      {/* Answering is explicit: ticking the box says "paid", clicking the badge
+                          confirms "not paid". Either is staged like any other edit, so the badge
+                          goes once the row is answered and the review clears on save. */}
+                      <Show when={r.requires_review && !(r.gateway_id in pgDirty)}>
+                        <button
+                          type="button"
+                          class="ml-2 cursor-pointer rounded bg-dirty-bg px-1.5 py-0.5 text-xs font-medium text-text hover:underline"
+                          title={__(
+                            'InvFlux found this payment method and does not treat any order status as paid until you decide. Tick a box if setting an order to that status means the money has arrived, or click here to confirm that neither does. Your answer takes effect when you save.',
+                          )}
+                          data-confirm-review={r.gateway_id}
+                          onClick={() => stagePg(r, {})}
+                        >
+                          {__('Needs review')}
+                        </button>
+                      </Show>
+                    </td>
+                    <td class="px-3 py-2">
+                      <code class="text-xs text-text-muted">{r.gateway_id}</code>
+                    </td>
+                    <Show
+                      when={!r.confirms_own_payments}
+                      fallback={
+                        <td class="px-3 py-2 text-text-muted" colSpan={2}>
+                          {__('Confirmed by the gateway')}
+                        </td>
+                      }
+                    >
+                      <td class="px-3 py-2" data-testid="gateway-processing-means-paid">
+                        <Checkbox
+                          aria-label={sprintf(__('“Processing” status means paid for %s'), r.label)}
+                          checked={pgValue(r).processing_means_paid}
+                          onChange={(e) =>
+                            stagePg(r, { processing_means_paid: e.currentTarget.checked })
+                          }
+                        />
+                      </td>
+                      <td
+                        class="px-3 py-2"
+                        data-testid="gateway-completed-means-paid"
+                        title={
+                          pgValue(r).processing_means_paid
+                            ? __(
+                                'An order reaches “Completed” through “Processing”, which already means paid for this payment method.',
+                              )
+                            : undefined
+                        }
+                      >
+                        <Checkbox
+                          aria-label={sprintf(
+                            /* translators: %s: the payment method's name, as WooCommerce shows it. */
+                            __('“Completed” status means paid for %s'),
+                            r.label,
+                          )}
+                          checked={pgValue(r).completed_means_paid}
+                          disabled={pgValue(r).processing_means_paid}
+                          onChange={(e) =>
+                            stagePg(r, { completed_means_paid: e.currentTarget.checked })
+                          }
+                        />
+                      </td>
+                    </Show>
+                  </tr>
+                )}
+              </For>
+            </tbody>
+          </table>
+        </div>
+        <Show when={pgInactive().length > 0}>
+          <button
+            type="button"
+            class="mt-2 cursor-pointer text-sm text-text-muted underline hover:text-text"
+            data-toggle-inactive-gateways
+            onClick={() => setPgShowInactive(!pgShowInactive())}
+          >
+            {pgShowInactive()
+              ? __('Hide inactive payment methods')
+              : sprintf(
+                  /* translators: %d: number of payment methods switched off in WooCommerce → Settings → Payments. */
+                  _n(
+                    'Show %d inactive payment method',
+                    'Show %d inactive payment methods',
+                    pgInactive().length,
+                  ),
+                  pgInactive().length,
+                )}
+          </button>
+        </Show>
       </div>
     );
   }
@@ -687,17 +1124,29 @@ export function SettingsView(props: SettingsViewProps) {
                     <td class="px-3 py-2">
                       {'' !== r.plugin_name ? r.plugin_name : r.plugin_slug}
                       <Show when={isKnown(r.plugin_slug)}>
-                        <span class="ml-2 text-xs text-text-muted" title={__('Known inventory plugin')}>⚑</span>
+                        <span
+                          class="ml-2 text-xs text-text-muted"
+                          title={__('Known inventory plugin')}
+                        >
+                          ⚑
+                        </span>
                       </Show>
                     </td>
-                    <td class="px-3 py-2"><code class="text-xs text-text-muted">{r.plugin_slug}</code></td>
                     <td class="px-3 py-2">
-                      <Select value={pmValue(r).policy} onChange={(e) => setPolicy(r, e.currentTarget.value)}>
+                      <code class="text-xs text-text-muted">{r.plugin_slug}</code>
+                    </td>
+                    <td class="px-3 py-2">
+                      <Select
+                        aria-label={sprintf(__('Policy for %s'), r.plugin_slug)}
+                        value={pmValue(r).policy}
+                        onChange={(e) => setPolicy(r, e.currentTarget.value)}
+                      >
                         <For each={policyOptions}>{([v, l]) => <option value={v}>{l}</option>}</For>
                       </Select>
                     </td>
                     <td class="px-3 py-2">
                       <Checkbox
+                        aria-label={sprintf(__('Silence notices for %s'), r.plugin_slug)}
                         checked={pmValue(r).acknowledged}
                         disabled={'deny' !== pmValue(r).policy}
                         onChange={(e) => setAck(r, e.currentTarget.checked)}
@@ -710,7 +1159,9 @@ export function SettingsView(props: SettingsViewProps) {
               <Show when={0 === pmInfo().installed.length}>
                 <tr>
                   <td colspan="5" class="px-3 py-2 text-text-muted">
-                    {__('No third-party stock plugins are tracked yet. Known inventory plugins appear here once installed.')}
+                    {__(
+                      'No third-party stock plugins are tracked yet. Known inventory plugins appear here once installed.',
+                    )}
                   </td>
                 </tr>
               </Show>
@@ -719,14 +1170,18 @@ export function SettingsView(props: SettingsViewProps) {
         </div>
         <Show when={availableEntries().length > 0}>
           <div class="mt-3 flex flex-wrap items-center gap-2 text-sm">
-            <label for="invflux-register-plugin" class="font-medium">{__('Register installed plugin:')}</label>
+            <label for="invflux-register-plugin" class="font-medium">
+              {__('Register installed plugin:')}
+            </label>
             <Select
               id="invflux-register-plugin"
               value={pmRegister()}
               onChange={(e) => setPmRegister(e.currentTarget.value)}
             >
               <option value="">{__('— Select a plugin —')}</option>
-              <For each={availableEntries()}>{([slug, name]) => <option value={slug}>{sprintf('%s (%s)', name, slug)}</option>}</For>
+              <For each={availableEntries()}>
+                {([slug, name]) => <option value={slug}>{sprintf('%s (%s)', name, slug)}</option>}
+              </For>
             </Select>
           </div>
         </Show>
@@ -743,13 +1198,27 @@ export function SettingsView(props: SettingsViewProps) {
 
     const isBool = (): boolean => 'bool' === row.dataType || row.dataType.startsWith('bool:');
 
+    // Ids tying the visible name to the control. Setting names carry dots (`workbench.column_labels`)
+    // which are legal in an id but awkward in a selector, so they are flattened once here.
+    const domId = (): string => `setting-${row.name.replace(/[^A-Za-z0-9_-]/g, '-')}`;
+    const labelId = (): string => `${domId()}-label`;
+    const errorId = (): string => `${domId()}-error`;
+
     const controlEl = () => (
-      <Show when={control} fallback={<span class="text-sm text-text-muted">{__('No control available.')}</span>}>
+      <Show
+        when={control}
+        fallback={<span class="text-sm text-text-muted">{__('No control available.')}</span>}
+      >
         {(C) => (
           <Dynamic
             component={C()}
             value={effectiveValue(row)}
             definition={metaOf(row)}
+            controlId={domId()}
+            labelId={labelId()}
+            // Only while a message is actually showing — a dangling `aria-describedby` points at
+            // nothing and is silently dropped, which reads as working right up until it matters.
+            describedBy={rowError(row) ? errorId() : undefined}
             disabled={disabled()}
             effectivePolicy={row.effectivePolicy}
             onChange={(value: unknown) => stage(row.name, value)}
@@ -794,11 +1263,17 @@ export function SettingsView(props: SettingsViewProps) {
         {/* Locked state is conveyed by the faded row + the "(tier)" chip on the title; a future
             enhancement links that chip to the Licenses page's Pro section. */}
         <Show when={rowError(row)}>
-          {(msg) => <p class="mt-1 text-xs text-red-600">{msg()}</p>}
+          {(msg) => (
+            <ErrorBanner id={errorId()} class="mt-1 text-xs">
+              {msg()}
+            </ErrorBanner>
+          )}
         </Show>
         {/* Replication badge (read-only until Federation — §10.4/§6). */}
         <Show when={row.policyLocked}>
-          <p class="mt-1 text-xs text-text-muted">🔒 {sprintf(__('%s (locked)'), row.effectivePolicy)}</p>
+          <p class="mt-1 text-xs text-text-muted">
+            🔒 {sprintf(__('%s (locked)'), row.effectivePolicy)}
+          </p>
         </Show>
       </>
     );
@@ -817,11 +1292,20 @@ export function SettingsView(props: SettingsViewProps) {
         }}
       >
         <div class="flex flex-wrap items-baseline gap-x-2">
-          <span class="font-semibold">{row.title ?? row.name}</span>
+          {/* A real <label>, not a styled span: this is the only text naming the control, so
+              without the association every field on the largest form in the SPA announced as an
+              unnamed input. It also makes the name a click target for the control it names. */}
+          <label id={labelId()} for={domId()} class="font-semibold">
+            {row.title ?? row.name}
+          </label>
           <Show when={locked()}>
             <span class="inline-flex items-center gap-1 rounded bg-yellow-100 px-1.5 py-0.5 text-xs font-medium text-yellow-800 ring-1 ring-yellow-200">
-              {/* eslint-disable-next-line solid/no-innerhtml -- build-time `?raw` SVG import, not user or server data. */}
-              <span class="inline-flex [&_svg]:h-3.5 [&_svg]:w-auto" innerHTML={invfluxMark} aria-hidden="true" />
+              <span
+                class="inline-flex [&_svg]:h-3.5 [&_svg]:w-auto"
+                // eslint-disable-next-line solid/no-innerhtml -- build-time `?raw` SVG import, not user or server data.
+                innerHTML={invfluxMark}
+                aria-hidden="true"
+              />
               {row.tier ?? 'Pro'}
             </span>
           </Show>
@@ -829,6 +1313,26 @@ export function SettingsView(props: SettingsViewProps) {
             <span class="text-xs italic text-text-muted">({__('unsaved')})</span>
           </Show>
         </div>
+
+        {/* The advice sits above the description and the control, because on a flagged setting it is
+            the thing that explains why the merchant is looking at this row at all. One neutral
+            treatment for both kinds: the server's message already carries the difference between
+            "this has a defect" and "nobody has chosen yet", and dressing the second as a warning is
+            what turns a setup checklist into an accusation. A note — a cost the merchant may be right
+            to accept — is quieter still: same place, muted, because it asks for nothing. */}
+        <Show when={row.advisory}>
+          {(advisory) => (
+            <p
+              class="mt-1 border-l-2 pl-2 text-sm"
+              classList={{
+                'border-primary text-text': 'note' !== advisory().severity,
+                'border-border text-text-muted': 'note' === advisory().severity,
+              }}
+            >
+              {advisory().message}
+            </p>
+          )}
+        </Show>
 
         <Show
           when={isBool()}
@@ -838,7 +1342,7 @@ export function SettingsView(props: SettingsViewProps) {
                 <p class="mt-0.5 text-sm text-text-muted">{row.description}</p>
               </Show>
               {docEl()}
-              <div class="mt-2 max-w-md">
+              <div class="mt-2">
                 {controlEl()}
                 {extrasEl()}
               </div>
@@ -900,57 +1404,53 @@ function SummaryModal(props: SummaryModalProps) {
   onMount(() => cancelBtn?.focus());
 
   return (
-    <Modal
-      onClose={props.onCancel}
-      label={__('Review changes')}
-      backdropClass="flex items-center justify-center bg-black/30 p-6"
-    >
-      <div
-        class="w-[32rem] max-w-[90vw] rounded-lg bg-surface p-5 text-text shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={onKeyDown}
-      >
-        <h2 class="mb-3 text-lg font-semibold">{__('Review changes')}</h2>
-        <ul class="mb-4 max-h-80 space-y-2 overflow-auto">
-          <For each={props.changes}>
-            {(row) => {
-              const err = props.error(row);
+    <Modal onClose={props.onCancel} label={__('Review changes')}>
+      <ModalPanel size="lg" class="text-text" onKeyDown={onKeyDown}>
+        <ModalHeader title={__('Review changes')} />
+        <div class="p-4">
+          <ul class="mb-4 max-h-80 space-y-2 overflow-auto">
+            <For each={props.changes}>
+              {(row) => {
+                const err = props.error(row);
 
-              return (
+                return (
+                  <li class="rounded border border-border p-2">
+                    <div class="flex items-center justify-between gap-2">
+                      <span class="font-medium">{row.title ?? row.name}</span>
+                      <Show when={err}>
+                        <ErrorBanner as="span" class="text-xs">
+                          {err}
+                        </ErrorBanner>
+                      </Show>
+                    </div>
+                    <div class="mt-1 text-xs text-text-muted">
+                      <span class="line-through">{display(props.oldValue(row))}</span>
+                      {' → '}
+                      <span class="text-text">{display(props.newValue(row))}</span>
+                    </div>
+                  </li>
+                );
+              }}
+            </For>
+            <For each={props.policyChanges}>
+              {(change) => (
                 <li class="rounded border border-border p-2">
-                  <div class="flex items-center justify-between gap-2">
-                    <span class="font-medium">{row.title ?? row.name}</span>
-                    <Show when={err}>
-                      <span class="text-xs text-red-600">{err}</span>
-                    </Show>
-                  </div>
-                  <div class="mt-1 text-xs text-text-muted">
-                    <span class="line-through">{display(props.oldValue(row))}</span>
-                    {' → '}
-                    <span class="text-text">{display(props.newValue(row))}</span>
-                  </div>
+                  <div class="font-medium">{change.label}</div>
+                  <div class="mt-1 text-xs text-text-muted">{change.detail}</div>
                 </li>
-              );
-            }}
-          </For>
-          <For each={props.policyChanges}>
-            {(change) => (
-              <li class="rounded border border-border p-2">
-                <div class="font-medium">{change.label}</div>
-                <div class="mt-1 text-xs text-text-muted">{change.detail}</div>
-              </li>
-            )}
-          </For>
-        </ul>
-        <div class="flex justify-end gap-2">
+              )}
+            </For>
+          </ul>
+        </div>
+        <ModalFooter>
           <Button ref={cancelBtn} variant="secondary" eagerFocusRing onClick={props.onCancel}>
             {__('Cancel')}
           </Button>
           <Button eagerFocusRing disabled={!props.canSave} onClick={props.onConfirm}>
             {props.saving ? __('Saving…') : __('Save')}
           </Button>
-        </div>
-      </div>
+        </ModalFooter>
+      </ModalPanel>
     </Modal>
   );
 }

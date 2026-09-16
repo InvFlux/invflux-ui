@@ -9,6 +9,7 @@
     "./src/Timeline.tsx",
     "./src/filters-builtins.tsx",
     "./src/settings/controls.tsx",
+    "./src/settings/presetNumberControl.tsx",
     "./src/datatypes/views.tsx",
     "./src/datatypes/codecs.ts",
     "./src/datatypes/editors.tsx",
@@ -19,6 +20,7 @@
     "./nav": "./src/NavTab.tsx",
     "./api": "./src/api/index.ts",
     "./toast": "./src/toast.ts",
+    "./pane": "./src/paneActive.ts",
     "./assets/*": "./assets/*"
   },
   "scripts": {
@@ -28,7 +30,7 @@
   },
   "dependencies": {
     "@invflux/i18n": "*",
-    "@kobalte/core": "^0.13.11",
+    "@kobalte/core": "^0.13.14",
     "@tanstack/table-core": "^8.21.3"
   },
   "peerDependencies": {

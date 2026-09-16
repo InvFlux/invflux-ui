@@ -65,13 +65,15 @@ export default function DispatchSection(): JSX.Element {
       >
         {(data) => (
           <DispatchApp
-            context={{
-              ...data(),
-              // Live from the shell — never a cached nonce / root / user from the bootstrap body.
-              apiRoot: app.apiRoot,
-              nonce: app.nonce,
-              currentUser: app.currentUser,
-            } satisfies DispatchContext}
+            context={
+              {
+                ...data(),
+                // Live from the shell — never a cached nonce / root / user from the bootstrap body.
+                apiRoot: app.apiRoot,
+                nonce: app.nonce,
+                currentUser: app.currentUser,
+              } satisfies DispatchContext
+            }
             portalRoot={portalRoot as HTMLElement}
             history={history}
             queryClient={queryClient}

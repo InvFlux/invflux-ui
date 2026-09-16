@@ -26,6 +26,7 @@ import {
 } from 'solid-js';
 import { Dynamic } from 'solid-js/web';
 import { A } from '@solidjs/router';
+import { OnOrderDrilldown } from './components/OnOrderDrilldown';
 import { StatusPill } from './components/StatusPill';
 
 /**
@@ -70,6 +71,10 @@ export interface ProcurementBridge {
     A: typeof A;
     /** Procurement status/stage pill — so an add-on's drill-down rows match the list's badges. */
     StatusPill: typeof StatusPill;
+    /** The base "On order" drill-down body — the aggregate and its upgrade prompt. An add-on that
+     *  replaces that drill-down renders this whenever the server answers `locked`, so a lapsed
+     *  licence still shows what is on order rather than nothing. */
+    OnOrderSummary: typeof OnOrderDrilldown;
   };
 }
 
@@ -78,10 +83,33 @@ export type ProcurementPluginApi = PluginApi<ProcurementBridge>;
 /** Install (once) `window.invflux.procurement` with this host's runtime bridge. */
 export function installPluginApi(): ProcurementPluginApi {
   return installSharedPluginApi<ProcurementBridge>('procurement', {
-    solid: { createSignal, createMemo, createEffect, onMount, onCleanup, Show, For, Switch, Match, Dynamic },
+    solid: {
+      createSignal,
+      createMemo,
+      createEffect,
+      onMount,
+      onCleanup,
+      Show,
+      For,
+      Switch,
+      Match,
+      Dynamic,
+    },
     ui: {
-      Button, IconButton, Input, Select, Textarea, Checkbox, Pill, Spinner,
-      Combobox, Modal, toast, A, StatusPill,
+      Button,
+      IconButton,
+      Input,
+      Select,
+      Textarea,
+      Checkbox,
+      Pill,
+      Spinner,
+      Combobox,
+      Modal,
+      toast,
+      A,
+      StatusPill,
+      OnOrderSummary: OnOrderDrilldown,
     },
   });
 }

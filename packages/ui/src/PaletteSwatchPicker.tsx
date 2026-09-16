@@ -1,5 +1,6 @@
 import { For, Show, type JSX } from 'solid-js';
 import {
+  paletteStyle,
   TAG_PALETTE,
   TAG_PALETTE_DISPLAY_COLUMNS,
   TAG_PALETTE_DISPLAY_ORDER,
@@ -65,7 +66,11 @@ export function PaletteSwatchPicker(props: PaletteSwatchPickerProps): JSX.Elemen
             type="button"
             class="flex h-6 w-6 cursor-pointer items-center justify-center rounded-full ring-1 ring-inset ring-black/10"
             classList={{ 'ring-2 ring-gray-800': props.value === colorId }}
-            style={{ 'background-color': c.bg, color: c.fg }}
+            style={
+              undefined === props.palette
+                ? paletteStyle(colorId)
+                : { 'background-color': c.bg, color: c.fg }
+            }
             title={c.name}
             aria-label={c.name}
             aria-pressed={props.value === colorId}

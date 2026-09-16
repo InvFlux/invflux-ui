@@ -15,7 +15,16 @@ export interface Supplier {
   phone: string | null;
   website: string | null;
   orderingUrl: string | null;
+  /** The street's name alone when {@link buildingNumber} is set; the whole line otherwise. */
   address1: string | null;
+  /** The house number, kept apart because a payment instruction has to state it on its own. */
+  buildingNumber: string | null;
+  /**
+   * The street as it should read, street and number already in the destination country's word
+   * order. Composed by the server so that ordering lives in one place — display this, never
+   * `address1`, or a supplier that has a separate number prints its street without one.
+   */
+  addressLine: string;
   address2: string | null;
   city: string | null;
   state: string | null;
@@ -27,8 +36,8 @@ export interface Supplier {
   costDecimals: number;
   /** *Our* account number with them — their customer reference for us (the mirror of {@link code}). */
   accountNumber: string | null;
-  /** Standing purchase terms for this supplier — middle rung of `PO ?? supplier ?? store`; null inherits. */
-  termsConditions: string | null;
+  /** The supplier's set of purchase terms — middle rung of `order ?? supplier ?? store`; null inherits the store's. */
+  termsLineageId: number | null;
   /** Locale their purchase orders are written in (e.g. `de_DE`); null uses the store's language. */
   documentLanguage: string | null;
   /** Purchase-tax rate applied to this supplier's lines, as a percentage string. */

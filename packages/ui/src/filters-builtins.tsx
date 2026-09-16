@@ -1,7 +1,9 @@
 import { createSignal, onCleanup, onMount } from 'solid-js';
+import { __, _n, _x, sprintf } from '@invflux/i18n';
 import { Combobox, type ComboboxOption } from './Combobox';
 import { Input } from './Input';
 import { Textarea } from './Textarea';
+import { createSearchFailure } from './searchFailure';
 import {
   FILTER_CONTROL_DATERANGE,
   FILTER_CONTROL_MULTISELECT,
@@ -10,6 +12,7 @@ import {
   FILTER_CONTROL_RANGE,
   FILTER_CONTROL_SELECT,
   filterControlRegistry,
+  resolveFilterSelection,
   type FilterControl,
 } from './filters';
 
@@ -24,17 +27,35 @@ import {
 // already convey what's picked, so the inline tag row inside the
 // input would just compete for the same horizontal space.
 
-const MultiSelectControl: FilterControl = (props) => (
-  <Combobox
-    options={props.options}
-    selected={props.value}
-    placeholder={props.placeholder}
-    maxVisible={20}
-    autoFocus={props.autoFocus}
-    onChange={props.onChange}
-    showSelectedTags={false}
-  />
-);
+// `multiselect` is the one built-in that carries the default-vs-deliberate contract:
+// `resolveFilterSelection` decides what a click means, and `selectionIsDefault` makes the state
+// visible as a dot rather than a checkmark.
+const MultiSelectControl: FilterControl = (props) => {
+  const handleChange = (next: string[]): void => {
+    const change = resolveFilterSelection(props.value, next, props.isDefault === true);
+    if (change.kind === 'revert') {
+      // No revert affordance wired (a host that never defaults this filter) — an empty selection is
+      // already that host's default, so emitting it is the same outcome.
+      if (props.onRevertToDefault) props.onRevertToDefault();
+      else props.onChange([]);
+      return;
+    }
+    props.onChange(change.value);
+  };
+
+  return (
+    <Combobox
+      options={props.options}
+      selected={props.value}
+      placeholder={props.placeholder}
+      maxVisible={20}
+      autoFocus={props.autoFocus}
+      onChange={handleChange}
+      selectionIsDefault={props.isDefault}
+      showSelectedTags={false}
+    />
+  );
+};
 
 const SelectControl: FilterControl = (props) => (
   <Combobox
@@ -58,6 +79,7 @@ const SelectControl: FilterControl = (props) => (
  *   - At/above threshold → debounced `loadOptions(query)`; `loading` spinner shows
  *     while the promise is in flight.
  *   - Race-safe: each new query bumps a generation counter and stale resolutions are dropped.
+ *   - A failed search says so, in the list and once in a toast — see {@link createSearchFailure}.
  */
 const MultiSelectAsyncControl: FilterControl = (props) => {
   const minLen = (): number => props.minQueryLength ?? 3;
@@ -66,6 +88,8 @@ const MultiSelectAsyncControl: FilterControl = (props) => {
   const [options, setOptions] = createSignal<ComboboxOption[]>([]);
   const [loading, setLoading] = createSignal(false);
   const [query, setQuery] = createSignal('');
+  /** Failed-vs-empty reporting, shared with the other search controls. */
+  const failed = createSearchFailure();
 
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let generation = 0;
@@ -82,13 +106,18 @@ const MultiSelectAsyncControl: FilterControl = (props) => {
   function handleSearchTextChange(text: string): void {
     setQuery(text);
     cancelPending();
+    // Both early returns clear the failure: with no search in play there is nothing to have
+    // failed, and leaving the flag set would answer "type at least 3 characters" with "search
+    // failed" for as long as the box stayed short.
     if (text.length < minLen()) {
       setOptions([]);
+      failed.clear();
       setLoading(false);
       return;
     }
     if (!props.loadOptions) {
       setOptions([]);
+      failed.clear();
       setLoading(false);
       return;
     }
@@ -101,22 +130,36 @@ const MultiSelectAsyncControl: FilterControl = (props) => {
           // Drop if a newer query started while we were in flight.
           if (mine !== generation) return;
           setOptions(next);
+          failed.clear();
           setLoading(false);
         })
-        .catch(() => {
+        .catch((error: unknown) => {
           if (mine !== generation) return;
           setOptions([]);
+          failed.record(error);
           setLoading(false);
         });
     }, debounceMs());
   }
 
   const emptyMessage = (): string => {
-    if (loading()) return 'Searching…';
+    if (loading()) return __('Searching…');
+    // Before the min-length hint: a failure is about the search itself, so it outranks any
+    // guidance about what to type.
+    const problem = failed.line();
+    if (problem !== null) return problem;
     if (query().length < minLen()) {
-      return `Type at least ${minLen()} character${minLen() === 1 ? '' : 's'} to search`;
+      return sprintf(
+        /* translators: %d: minimum number of characters before the search runs */
+        _n(
+          'Type at least %d character to search',
+          'Type at least %d characters to search',
+          minLen(),
+        ),
+        minLen(),
+      );
     }
-    return 'No matches';
+    return __('No matches');
   };
 
   return (
@@ -162,7 +205,7 @@ const RangeControl: FilterControl = (props) => {
         type="number"
         inputmode="decimal"
         class="w-24"
-        placeholder={props.placeholder ?? 'Min'}
+        placeholder={props.placeholder ?? _x('Min', 'lower bound of a numeric filter range')}
         value={minVal()}
         onInput={(e) => emit(e.currentTarget.value.trim(), maxVal())}
       />
@@ -171,7 +214,7 @@ const RangeControl: FilterControl = (props) => {
         type="number"
         inputmode="decimal"
         class="w-24"
-        placeholder="Max"
+        placeholder={_x('Max', 'upper bound of a numeric filter range')}
         value={maxVal()}
         onInput={(e) => emit(minVal(), e.currentTarget.value.trim())}
       />
@@ -204,7 +247,7 @@ const DateRangeControl: FilterControl = (props) => {
         type="date"
         max={toVal() === '' ? undefined : toVal()}
         value={fromVal()}
-        aria-label="From"
+        aria-label={_x('From', 'start of a date-range filter')}
         onInput={(e) => emit(e.currentTarget.value, toVal())}
       />
       <span class="text-text-muted">–</span>
@@ -212,7 +255,7 @@ const DateRangeControl: FilterControl = (props) => {
         type="date"
         min={fromVal() === '' ? undefined : fromVal()}
         value={toVal()}
-        aria-label="To"
+        aria-label={_x('To', 'end of a date-range filter')}
         onInput={(e) => emit(fromVal(), e.currentTarget.value)}
       />
     </div>
@@ -279,7 +322,7 @@ const NumericIdsControl: FilterControl = (props) => {
         ref={ref}
         rows={3}
         class="w-64 resize-y font-mono"
-        placeholder={props.placeholder ?? 'Paste IDs (any separators) — Ctrl+Enter to apply'}
+        placeholder={props.placeholder ?? __('Paste IDs (any separators) — Ctrl+Enter to apply')}
         value={(syncFromOutside(), text())}
         onInput={(e) => handleInput(e.currentTarget.value)}
         onKeyDown={handleKeyDown}
@@ -295,7 +338,9 @@ filterControlRegistry.register(FILTER_CONTROL_DATERANGE, 'core.daterange', DateR
   default: true,
 });
 filterControlRegistry.register(FILTER_CONTROL_RANGE, 'core.range', RangeControl, { default: true });
-filterControlRegistry.register(FILTER_CONTROL_SELECT, 'core.select', SelectControl, { default: true });
+filterControlRegistry.register(FILTER_CONTROL_SELECT, 'core.select', SelectControl, {
+  default: true,
+});
 filterControlRegistry.register(
   FILTER_CONTROL_MULTISELECT_ASYNC,
   'core.multiselect-async',

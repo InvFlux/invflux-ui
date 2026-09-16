@@ -24,7 +24,14 @@ export interface IconButtonProps extends JSX.ButtonHTMLAttributes<HTMLButtonElem
  * unlabelled icon buttons shipping.
  */
 export function IconButton(props: IconButtonProps): JSX.Element {
-  const [local, rest] = splitProps(props, ['label', 'size', 'danger', 'titled', 'class', 'children']);
+  const [local, rest] = splitProps(props, [
+    'label',
+    'size',
+    'danger',
+    'titled',
+    'class',
+    'children',
+  ]);
 
   return (
     <button

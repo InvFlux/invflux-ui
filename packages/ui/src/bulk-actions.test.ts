@@ -37,7 +37,8 @@ describe('bulk-action registry', () => {
     reg.register({
       id: 'single-supplier',
       label: 'Create PO',
-      isEnabled: (c) => Array.isArray(c.activeFilters.suppliers) && c.activeFilters.suppliers.length === 1,
+      isEnabled: (c) =>
+        Array.isArray(c.activeFilters.suppliers) && c.activeFilters.suppliers.length === 1,
       run: () => {},
     });
     const action = reg.get('single-supplier')!;

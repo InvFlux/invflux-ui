@@ -6,6 +6,7 @@ import { PortalCtx } from '@invflux/ui';
 // an app package.
 import { App as AdminApp } from '@invflux/admin/src/App';
 import type { AdminContext } from '@invflux/admin/src/types';
+import { useSearchParams } from '@solidjs/router';
 import { type JSX, useContext } from 'solid-js';
 import { useApp } from '../../context';
 
@@ -22,12 +23,23 @@ import { useApp } from '../../context';
 export default function SettingsSection(): JSX.Element {
   const app = useApp();
   const portalRoot = useContext(PortalCtx);
+  const [params] = useSearchParams();
 
   const context: AdminContext = {
     apiRoot: app.apiRoot,
     nonce: app.nonce,
     capabilities: {
       manageSettings: app.capabilities.manageSettings ?? false,
+    },
+    // `#/settings?decisions=1` opens with the "needs a decision" filter applied — the first-run
+    // screen's count links here, and a count that dropped you into the full list would leave the
+    // merchant hunting for the settings it just counted. The embedded SPA owns no router, so the
+    // shell reads the param and hands down the intent rather than the URL.
+    // A getter, not a value: the shell keeps this section mounted and only toggles visibility, so a
+    // link arriving while Settings has already been visited never re-runs this component. Read at
+    // access time instead, and the effect on the other side sees the change.
+    get startOnDecisions(): boolean {
+      return '1' === params.decisions;
     },
   };
 

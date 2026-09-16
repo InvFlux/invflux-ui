@@ -21,43 +21,13 @@ import styles from './app.css?inline';
 /** The single adopted stylesheet, preserved across hot updates of this module. */
 const sheet: CSSStyleSheet = import.meta.hot?.data.sheet ?? new CSSStyleSheet();
 
-/**
- * Light-DOM `<style>` mirrors of the same CSS, for overlays that escape the shadow tree (portalled
- * modals and listboxes). They are plain elements, so they need their text re-set by hand.
- */
-const mirrors: HTMLStyleElement[] = import.meta.hot?.data.mirrors ?? [];
-
 if (import.meta.hot) {
   import.meta.hot.data.sheet = sheet;
-  import.meta.hot.data.mirrors = mirrors;
 }
 
 sheet.replaceSync(styles);
-for (const el of mirrors) {
-  if (el.isConnected) el.textContent = styles;
-}
 
 /** The stylesheet to adopt into a shadow root. Always the same object, so hot swaps reach it. */
 export function appStyleSheet(): CSSStyleSheet {
   return sheet;
-}
-
-/** A `<style>` element carrying the same CSS, kept in step with hot updates while it stays mounted. */
-export function appStyleElement(): HTMLStyleElement {
-  const el = document.createElement('style');
-  el.textContent = styles;
-  mirrors.push(el);
-
-  return el;
-}
-
-// Self-accepting: a CSS change re-runs this module (updating the sheet above) and goes no further.
-//
-// This MUST be spelled `import.meta.hot.accept()` literally. Vite decides whether a module
-// self-accepts by statically scanning the source for that exact call — aliasing the object first
-// (`const hot = import.meta.hot; hot?.accept()`) type-checks, runs, and is silently never
-// registered, so the update propagates to the entry and reloads the page instead. Measured: the
-// aliased form reloaded on every stylesheet edit.
-if (import.meta.hot) {
-  import.meta.hot.accept();
 }

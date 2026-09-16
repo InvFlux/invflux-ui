@@ -1,4 +1,5 @@
 import { __ } from '@invflux/i18n';
+import { Input } from '@invflux/ui';
 import { type JSX, onMount } from 'solid-js';
 
 /**
@@ -10,7 +11,12 @@ export function isTypingInField(): boolean {
   let el: Element | null = document.activeElement;
   while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
   if (null === el) return false;
-  return 'INPUT' === el.tagName || 'TEXTAREA' === el.tagName || 'SELECT' === el.tagName || (el as HTMLElement).isContentEditable;
+  return (
+    'INPUT' === el.tagName ||
+    'TEXTAREA' === el.tagName ||
+    'SELECT' === el.tagName ||
+    (el as HTMLElement).isContentEditable
+  );
 }
 
 /**
@@ -47,12 +53,12 @@ export function QuickFilter(props: {
   };
 
   return (
-    <input
+    <Input
       ref={input}
       type="text"
       autocomplete="off"
       spellcheck={false}
-      class="w-full rounded border border-slate-300 px-2.5 py-1.5 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+      class="w-full"
       value={props.value()}
       placeholder={props.placeholder ?? __('Filter — name or SKU…')}
       onInput={(e) => props.onInput(e.currentTarget.value)}

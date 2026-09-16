@@ -4,6 +4,7 @@ import type {
   CreateCorrectionResponse,
   DispatchContext,
   DispatchCorrectionsResponse,
+  DispatchFacetsResponse,
   DispatchOrderDetail,
   DispatchOrderLine,
   DispatchQueueFilters,
@@ -79,11 +80,18 @@ function filterParams(filters: DispatchQueueFilters): Record<string, string> {
   // Dash-joined (not comma) so the deep-link the workbench builds round-trips without encoded commas.
   if (filters.subjectIds !== undefined) p['subject_ids'] = filters.subjectIds.join('-');
   if (filters.paymentMethods !== undefined) p['payment_method'] = filters.paymentMethods.join(',');
+  if (filters.shippingClasses !== undefined)
+    p['shipping_class'] = filters.shippingClasses.join(',');
+  if (filters.shippingMethods !== undefined)
+    p['shipping_method'] = filters.shippingMethods.join(',');
   if (filters.tagIds !== undefined) p['tag_id'] = filters.tagIds.join(',');
   if (filters.tagMatch === 'all') p['tag_match'] = 'all';
-  if (filters.pendingManualRefund) p['pending_manual_refund'] = '1';
+  if (filters.pendingActions !== undefined && filters.pendingActions.length > 0)
+    p['pending_action'] = filters.pendingActions.join(',');
   if (filters.search) p['search'] = filters.search;
   if (filters.updatedSince) p['updated_since'] = filters.updatedSince;
+  // What the caller *holds*, not what it is looking at — kept out of the filter vocabulary on
+  if (filters.scope) p['scope'] = filters.scope;
 
   return p;
 }
@@ -97,9 +105,7 @@ export interface FilterOption {
   label: string;
 }
 
-export async function fetchWorksheetFilterOptions(
-  ctx: DispatchContext,
-): Promise<FilterOption[]> {
+export async function fetchWorksheetFilterOptions(ctx: DispatchContext): Promise<FilterOption[]> {
   const body = await api(ctx).get<{ options: FilterOption[] }>(route('/filter-options/worksheets'));
   return body.options;
 }
@@ -118,8 +124,33 @@ export async function searchSkuFilterOptions(
 export async function fetchDispatchOrders(
   ctx: DispatchContext,
   filters: DispatchQueueFilters,
+  signal?: AbortSignal,
 ): Promise<DispatchQueueResponse> {
-  return api(ctx).get<DispatchQueueResponse>(route('/orders'), { params: filterParams(filters) });
+  return api(ctx).get<DispatchQueueResponse>(route('/orders'), {
+    params: filterParams(filters),
+    signal,
+  });
+}
+
+/**
+ * Filter-facet counts for one dimension: how many orders each of its options would match, under
+ * every *other* filter currently applied.
+ *
+ * `page` and `per_page` are stripped — a count is over the whole result set, and sending the page
+ * would answer "how many on screen", which is a different and useless question.
+ */
+export async function fetchDispatchFacets(
+  ctx: DispatchContext,
+  dimension: string,
+  filters: DispatchQueueFilters,
+  signal?: AbortSignal,
+): Promise<DispatchFacetsResponse> {
+  const { page: _page, perPage: _perPage, ...rest } = filters;
+
+  return api(ctx).get<DispatchFacetsResponse>(route('/orders/facets'), {
+    params: { ...filterParams(rest), dimension },
+    signal,
+  });
 }
 
 export async function fetchDispatchOrderDetail(
@@ -130,7 +161,8 @@ export async function fetchDispatchOrderDetail(
     .get<DispatchOrderDetail>(route(path`/orders/${hexId}`))
     .catch((error: unknown) => {
       // A missing order is a routing fact the SPA acts on (it redirects), not a failure to report.
-      if (error instanceof ApiError && error.status === 404) throw new DispatchOrderNotFoundError(hexId);
+      if (error instanceof ApiError && error.status === 404)
+        throw new DispatchOrderNotFoundError(hexId);
       throw error;
     });
 }
@@ -211,6 +243,12 @@ export class StageLineError extends ApiError {
 
 export interface HeartbeatResponse {
   viewers: OrderViewer[];
+  /**
+   * Opaque token that moves whenever something the order page shows has changed — the order row,
+   * its corrections, its products' stock concerns. Compared, never parsed. `null` for an order
+   * that no longer exists.
+   */
+  revision?: string | null;
 }
 
 /**
@@ -318,7 +356,11 @@ export async function createOrderAnnotation(
   tags?: NoteTagDelta,
 ): Promise<AnnotationVersion> {
   const res = await api(ctx)
-    .post<{ annotation: AnnotationVersion }>(route(path`/orders/${orderHexId}/annotations`), { body, addTags: tags?.addTags, removeTags: tags?.removeTags })
+    .post<{ annotation: AnnotationVersion }>(route(path`/orders/${orderHexId}/annotations`), {
+      body,
+      addTags: tags?.addTags,
+      removeTags: tags?.removeTags,
+    })
     .catch(annotationError('Add note failed'));
   return res.annotation;
 }
@@ -345,7 +387,9 @@ export async function deleteOrderAnnotation(
   threadHexId: string,
 ): Promise<AnnotationVersion> {
   const res = await api(ctx)
-    .del<{ annotation: AnnotationVersion }>(route(path`/orders/${orderHexId}/annotations/${threadHexId}`))
+    .del<{ annotation: AnnotationVersion }>(
+      route(path`/orders/${orderHexId}/annotations/${threadHexId}`),
+    )
     .catch(annotationError('Delete note failed'));
   return res.annotation;
 }
@@ -354,9 +398,7 @@ export async function fetchOrderCorrections(
   ctx: DispatchContext,
   orderHexId: string,
 ): Promise<DispatchCorrectionsResponse> {
-  return api(ctx).get<DispatchCorrectionsResponse>(
-    route(path`/orders/${orderHexId}/corrections`),
-  );
+  return api(ctx).get<DispatchCorrectionsResponse>(route(path`/orders/${orderHexId}/corrections`));
 }
 
 export async function createCorrection(
@@ -388,6 +430,57 @@ export async function stageLine(
   return api(ctx)
     .patch<StageLineResponse>(route(path`/orders/${orderHexId}/lines/${lineHexId}`), request)
     .catch(typedAs((c, st, ms) => new StageLineError(c, st, ms), 'Stage request failed'));
+}
+
+// ---------------------------------------------------------------------------
+// Address correction — PATCH /orders/{id}/address/{type}
+// ---------------------------------------------------------------------------
+
+/** The stated fields a correction may set, keyed as WooCommerce keys them. */
+export interface OrderAddressFields {
+  first_name?: string;
+  last_name?: string;
+  company?: string;
+  address_1?: string;
+  address_2?: string;
+  city?: string;
+  state?: string;
+  postcode?: string;
+  country?: string;
+}
+
+/** One of the two addresses a host order carries. */
+export type OrderAddressTarget = 'billing' | 'shipping';
+
+export interface CorrectAddressResponse {
+  /** The addresses the correction was applied to, as the server read the request. */
+  addressTypes: OrderAddressTarget[];
+  /** The edit restated the same facts, so nothing was repointed and no timeline entry was written. */
+  unchanged: boolean;
+}
+
+/**
+ * Correct one or both of the order's stated addresses.
+ *
+ * Only the fields given are written; anything omitted keeps its value, so a caller may send just
+ * what changed. The write lands in WooCommerce — this is the host's document — and the order page
+ * reads the host's live columns, so a refetch shows the result with no projection step.
+ *
+ * `targets` is an instruction, not a hint. Naming both is how an order billed and shipped to one
+ * place is fixed once instead of twice, and the server writes what it is told: the operator picked
+ * the scope on the form, beside the values it applies to, so there is no stale inference for the
+ * server to second-guess.
+ */
+export async function correctOrderAddress(
+  ctx: DispatchContext,
+  orderHexId: string,
+  targets: OrderAddressTarget[],
+  fields: OrderAddressFields,
+): Promise<CorrectAddressResponse> {
+  return api(ctx).patch<CorrectAddressResponse>(route(path`/orders/${orderHexId}/addresses`), {
+    targets,
+    fields,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -437,7 +530,10 @@ export async function processCorrections(
   payload: ProcessCorrectionsPayload,
 ): Promise<ProcessCorrectionsResponse> {
   return api(ctx)
-    .post<ProcessCorrectionsResponse>(route(path`/orders/${orderHexId}/corrections/process`), payload)
+    .post<ProcessCorrectionsResponse>(
+      route(path`/orders/${orderHexId}/corrections/process`),
+      payload,
+    )
     .catch(typedAs((c, st, ms) => new CorrectionApiError(c, st, ms), 'Process corrections failed'));
 }
 
@@ -460,43 +556,81 @@ export async function settleManualRefund(
   orderHexId: string,
 ): Promise<SettleManualRefundResponse> {
   return api(ctx)
-    .post<SettleManualRefundResponse>(route(path`/orders/${orderHexId}/settle-manual-refund`), { manualConfirmed: true })
-    .catch(typedAs((c, st, ms) => new CorrectionApiError(c, st, ms), 'Settle manual refund failed'));
+    .post<SettleManualRefundResponse>(route(path`/orders/${orderHexId}/settle-manual-refund`), {
+      manualConfirmed: true,
+    })
+    .catch(
+      typedAs((c, st, ms) => new CorrectionApiError(c, st, ms), 'Settle manual refund failed'),
+    );
 }
 
 export type CaptureResolution = 'cancel' | 'hold' | 'capture_refund' | 'capture_choice';
 
 export type CapturePaymentResult =
-  | { status: 'captured' | 'cancelled' | 'held' | 'captured_partial' | 'choice_offered' }
+  | {
+      status:
+        | 'captured'
+        | 'cancelled'
+        | 'held'
+        | 'captured_partial'
+        | 'choice_offered'
+        /** A part payment: recorded, and nothing else — the order stays unpaid. */
+        | 'recorded_partial';
+    }
   | { status: 'shortfall'; shortfall: number };
 
 /**
+ * A payment as the operator entered it in "Record payment". Amounts and the rate are decimal
+ * strings; the day is `YYYY-MM-DD`, a day at the site.
+ */
+export interface ManualPaymentInput {
+  amount: string;
+  currency: string;
+  /** Units of the order's currency per unit of `currency`; `null` when they match. */
+  fxRate: string | null;
+  method: string;
+  receivedOn: string;
+  reference: string;
+  /** Why the payment differs from what the order owes; `null` when it does not. */
+  differenceReason: string | null;
+}
+
+/**
  * Record a manual payment for a manual-gateway order (BACS/cheque/COD) and capture its
- * stock. `{status:'captured'}` on a clean capture. On a stock shortfall with no
+ * stock. A payment that does not settle the order is refused (422) before anything else
+ * happens. `{status:'captured'}` on a clean capture. On a stock shortfall with no
  * `resolution` the backend replies 409 and we return `{status:'shortfall', shortfall}`
  * so the caller can prompt the merchant; passing `resolution` then resolves it:
  * `cancel` → cancel the order; `hold` → leave it on-hold; `capture_refund` → fulfil the
  * available units + refund the shortfall (`captured_partial`); `capture_choice` → fulfil
- * the available units + let the customer decide (`choice_offered`).
+ * the available units + let the customer decide (`choice_offered`). Every resolution but
+ * `hold` records the payment.
  */
 export async function capturePayment(
   ctx: DispatchContext,
   orderHexId: string,
+  payment: ManualPaymentInput,
   resolution?: CaptureResolution,
 ): Promise<CapturePaymentResult> {
   return api(ctx)
     .post<CapturePaymentResult>(
       route(path`/orders/${orderHexId}/capture-payment`),
-      resolution ? { resolution } : {},
+      resolution ? { payment, resolution } : { payment },
     )
     .catch((error: unknown) => {
       // 409 is an *outcome* here, not a failure: the gateway captured less than the order needs and
       // the caller resolves the shortfall. Reporting it as an error would hide the number it needs.
       if (error instanceof ApiError && error.status === 409) {
         const body = (error.body ?? {}) as { data?: { shortfall?: number } };
-        return { status: 'shortfall', shortfall: body.data?.shortfall ?? 0 } as CapturePaymentResult;
+        return {
+          status: 'shortfall',
+          shortfall: body.data?.shortfall ?? 0,
+        } as CapturePaymentResult;
       }
-      return typedAs((c, st, m) => new CorrectionApiError(c, st, m), 'Capture payment failed')(error);
+      return typedAs(
+        (c, st, m) => new CorrectionApiError(c, st, m),
+        'Capture payment failed',
+      )(error);
     });
 }
 
@@ -594,22 +728,24 @@ async function tagWriteJson(
   // into the return value and trips ASI. The methods are closures over the context, so detaching
   // one from the object is safe.
   const send = method === 'POST' ? client.post : client.patch;
-  const res = await send<{ tag: TagSummary }>(route(p), body)
-    .catch((error: unknown) => {
-      if (error instanceof ApiError && error.constructor === ApiError) {
-        const err = (error.body ?? {}) as {
-          error?: string; code?: string; conflictId?: number; archived?: TagSummary[];
-        };
-        throw new TagWriteError(
-          err.error ?? `Tag write failed (${String(error.status)})`,
-          err.code,
-          err.conflictId,
-          err.archived,
-          error.status,
-        );
-      }
-      throw error;
-    });
+  const res = await send<{ tag: TagSummary }>(route(p), body).catch((error: unknown) => {
+    if (error instanceof ApiError && error.constructor === ApiError) {
+      const err = (error.body ?? {}) as {
+        error?: string;
+        code?: string;
+        conflictId?: number;
+        archived?: TagSummary[];
+      };
+      throw new TagWriteError(
+        err.error ?? `Tag write failed (${String(error.status)})`,
+        err.code,
+        err.conflictId,
+        err.archived,
+        error.status,
+      );
+    }
+    throw error;
+  });
   return res.tag;
 }
 
@@ -641,7 +777,9 @@ export function updateTag(
 }
 
 export async function deleteTag(ctx: DispatchContext, id: number): Promise<void> {
-  await api(ctx).del<void>(route(path`/tags/${id}`)).catch(tagError('Delete tag failed'));
+  await api(ctx)
+    .del<void>(route(path`/tags/${id}`))
+    .catch(tagError('Delete tag failed'));
 }
 
 /**
@@ -682,13 +820,28 @@ export async function unassignOrderTag(
 }
 
 /** Bulk-assign tags across many orders. One shared `note` is stamped on each. */
+/**
+ * Assign tags across a selection, and answer with each order's RESULTING tag list.
+ *
+ * `assigned` is keyed by order hex id. The queue applies it as the authoritative middle stage of
+ * its three — after the local splice it made on the click, before the delta poll that settles what
+ * only the server can know (workflow state, above all).
+ */
 export async function bulkAssignOrderTags(
   ctx: DispatchContext,
   orderIds: string[],
   tagIds: number[],
   note?: string,
-): Promise<void> {
-  await api(ctx)
-    .post<void>(route('/orders/tags/bulk'), { orderIds, tagIds, note })
+): Promise<BulkAssignResult> {
+  return api(ctx)
+    .post<BulkAssignResult>(route('/orders/tags/bulk'), { orderIds, tagIds, note })
     .catch(tagError('Bulk assign tags failed'));
+}
+
+export interface BulkAssignResult {
+  ok: boolean;
+  orders: number;
+  tags: number;
+  /** Order hex id → the tags that order carries now. */
+  assigned: Record<string, TagSummary[]>;
 }

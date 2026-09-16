@@ -1,4 +1,4 @@
-import { __ } from '@invflux/i18n';
+import { __, _x, formatNumber } from '@invflux/i18n';
 import { Button, SettingsSection } from '@invflux/ui';
 import { For } from 'solid-js';
 
@@ -16,7 +16,7 @@ export function parsePerPage(raw: string | undefined): number {
   return LOAD_SIZE_OPTIONS.includes(n) ? n : DEFAULT_PER_PAGE;
 }
 
-const fmt = (n: number): string => new Intl.NumberFormat().format(n);
+const fmt = (n: number): string => formatNumber(n);
 
 /**
  * The Dispatch surface's settings, as foldable sections.
@@ -33,7 +33,9 @@ export function DispatchSettingsPanel(props: {
 }) {
   return (
     <>
-      <SettingsSection title={__('Display')}>
+      <SettingsSection
+        title={_x('Display', 'settings section heading: how things are shown (noun)')}
+      >
         <label class="flex items-center justify-between gap-4">
           <span class="text-sm text-text">{__('Page size')}</span>
           <select

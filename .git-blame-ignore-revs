@@ -1,0 +1,12 @@
+# Commits that touched formatting only. `git blame` skips them, so a line's blame
+# points at whoever last changed its meaning rather than at a formatter run.
+#
+# GitHub honours this file automatically. Locally, opt in once per clone:
+#     git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# Only add a commit here if it is genuinely formatting-only — a mixed commit
+# listed here would hide real changes from blame, which is worse than the noise
+# this file exists to remove.
+
+# style: apply prettier across the workspace (168 files, 2026-08-28)
+028b35a5444a602ba07c94a6dc3628058cd42271

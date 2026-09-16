@@ -44,7 +44,12 @@ function parse(raw: string | null): WorkspaceSnapshot | null {
   if (null === raw) return null;
   try {
     const snap = JSON.parse(raw) as WorkspaceSnapshot;
-    if (null === snap || VERSION !== snap.version || !Array.isArray(snap.pinned) || !Array.isArray(snap.open)) {
+    if (
+      null === snap ||
+      VERSION !== snap.version ||
+      !Array.isArray(snap.pinned) ||
+      !Array.isArray(snap.open)
+    ) {
       return null;
     }
     return snap;
@@ -106,7 +111,13 @@ export function seedRouteFor(
 ): string | null {
   const defaultLanding = '' === initialHash || '#' === initialHash || '#/' === initialHash;
   const active = snapshot.active;
-  if (!fromSession && defaultLanding && 'string' === typeof active && '' !== active && '/' !== active) {
+  if (
+    !fromSession &&
+    defaultLanding &&
+    'string' === typeof active &&
+    '' !== active &&
+    '/' !== active
+  ) {
     return active;
   }
   return null;

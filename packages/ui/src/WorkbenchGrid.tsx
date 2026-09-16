@@ -33,35 +33,48 @@
  */
 
 import {
+  batch,
   createEffect,
   createMemo,
   createSignal,
   onCleanup,
   Show,
+  untrack,
   type JSX,
 } from 'solid-js';
 import { Button } from './Button';
 import { TableViewIcon, RecordViewIcon, ColumnsSettingsIcon } from './icons';
-import {
-  createInfiniteQuery,
-  type InfiniteData,
-} from '@tanstack/solid-query';
+import { createInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/solid-query';
 import type {
   ColumnOrderState,
   SortingState,
   VisibilityState,
   RowSelectionState,
 } from '@tanstack/solid-table';
-import { __, _n } from '@invflux/i18n';
-import { DataGrid, type StagedCell, type GridSettings, type DataGridComponentRole, type DataGridMenuItem, type RowAttrs } from './grid/DataGrid';
-import { EMPTY_SELECTION, type SelectionState, type CellCoord } from './grid/cellSelection';
+import { __, _n, _x, formatNumber, sprintf } from '@invflux/i18n';
+import {
+  DataGrid,
+  type StagedCell,
+  type GridSettings,
+  type DataGridComponentRole,
+  type DataGridMenuItem,
+  type RowAttrs,
+} from './grid/DataGrid';
+import {
+  EMPTY_SELECTION,
+  selectionRectsFromCells,
+  type SelectionState,
+  type CellCoord,
+} from './grid/cellSelection';
 import { workbenchValueFor, applyRowPatch } from './grid/workbenchValueFor';
 import { buildWorkbenchColumns, buildStockColumns } from './grid/workbenchColumns';
 import { useHostNav } from './hostNav';
+import { applyColumnOverrides, columnOverridesForSave } from './columnLabels';
 import { describeConflicts as describeConflictsFor } from './workbenchConflicts';
 import { qk } from './api/queryKeys';
 import { pollingTransport, type LiveUpdatesTransport } from './liveUpdates';
-import { useDirtyCells, pendingCellKey } from './grid/useDirtyCells';
+import { pendingCellKey, useDirtyCells } from './grid/useDirtyCells';
+import { mergeRefreshedRows, rowsToRefresh } from './grid/rowRefresh';
 import { cascadeAllocate, type SlotDeltas } from './onHandCascade';
 import { CorrectionReviewModal } from './CorrectionReviewModal';
 import type {
@@ -72,14 +85,25 @@ import type {
 } from './CorrectionReviewModal';
 import { BulkEditModal, type BulkEditColumn, type BulkEditResult } from './BulkEditModal';
 import { usePortalRootOptional } from './portal';
+import {
+  applyBatches,
+  cellsToClearAfterApply,
+  sendConcurrently,
+  splitSubmittableRows,
+  type SubmittedCell,
+} from './grid/applyPartition';
+import { IconButton } from './IconButton';
+import { Spinner } from './Spinner';
 import { toast } from './toast';
 import type {
   WorkbenchRow,
   WorkbenchPage,
   WorkbenchHandles,
+  WorkbenchApplyConflict,
   WorkbenchApplyRequest,
   WorkbenchApplyResponse,
   RowPatch,
+  DirtyRow,
 } from './workbenchGridTypes';
 import type { GridColumnMeta, TaxonomySpace } from './types';
 import type { GridFilterMeta } from './filterBridge';
@@ -95,6 +119,14 @@ export interface WorkbenchGridCapabilities {
   onhandCorrect: boolean;
   /** Edit WC catalogue data (e.g. grouped-product members via the Type drill-down). */
   editProducts: boolean;
+  /**
+   * Manage store-wide settings — gates renaming a column in the picker.
+   *
+   * Optional, defaulting to "no": the surfaces that build this object by hand (the product tab,
+   * the PO grids) have no rename affordance to gate, and should not have to assert a capability
+   * they never use. Absent therefore means the pen never appears, which is the safe direction.
+   */
+  manageSettings?: boolean;
 }
 
 /** The WordPress bootstrap context every surface hands the grid: REST root + nonce + capabilities. */
@@ -102,6 +134,12 @@ export interface WorkbenchGridContext {
   apiRoot: string;
   nonce: string;
   capabilities: WorkbenchGridCapabilities;
+  /**
+   * How many apply requests a large save may have in flight at once. Absent means the default of 3.
+   * The bound protects the host's PHP workers, which the storefront shares, so it is the merchant's
+   * setting to raise rather than the grid's.
+   */
+  applyConcurrency?: number;
 }
 
 export interface WorkbenchGridProps {
@@ -130,15 +168,26 @@ export interface WorkbenchGridProps {
   /** Show the leading row-selection checkbox column. Default true; set false on surfaces with no
    *  bulk row actions (the embedded product tab) to reclaim horizontal space. */
   showRowSelection?: boolean;
+  /** Show the "loaded / total" footer counter. Default true; set false on a surface that already
+   *  shows the same count in its own chrome (the Central Workbench's readout beside Refresh), where
+   *  the footer is redundant and its row is pure vertical cost. */
+  showFooterCount?: boolean;
   /** Show the grid's built-in toolbar row (Columns / Record-view / Save). Default true. A host with its
    *  own chrome (the Central Workbench) sets false and drives those from its own bar via the
    *  `openColumnManager` / `toggleLayout` / `openSaveReview` handles + `onDirtyChange` / `onLayoutChange`. */
   showToolbar?: boolean;
   /** Reactive dirty-state mirror, for a host rendering its own Save button. */
   onDirtyChange?: (dirty: boolean) => void;
-  /** Reactive fetching-state mirror (initial load OR a refetch), for a host rendering its own Refresh
-   *  spinner. Pushed rather than pulled because a host's plain handle binding isn't reactive. */
+  /** Reactive busy-state mirror (initial load, a refetch, or a save still sending), for a host
+   *  rendering its own Refresh spinner. Pushed rather than pulled because a host's plain handle
+   *  binding isn't reactive. */
   onFetchingChange?: (fetching: boolean) => void;
+  /** Reactive save-progress mirror, for a host rendering its own progress indicator while a save is
+   *  sending. `multiChunk` is true when the save went out as more than one request (so a host can
+   *  show progress only for a save large enough to be worth a bar); null once no save is active. */
+  onSaveProgressChange?: (
+    progress: { done: number; total: number; multiChunk: boolean } | null,
+  ) => void;
   /** Reactive layout mirror, for a host rendering its own Record/Table toggle (`canToggle` = small set). */
   onLayoutChange?: (info: { layout: 'grid' | 'record'; canToggle: boolean }) => void;
   /** Column ids visible by default when nothing is stored yet — overrides the server's
@@ -147,9 +196,11 @@ export interface WorkbenchGridProps {
   /** Surface-level default display settings (density / wrap / text size) applied when nothing is
    *  stored. Stored user prefs still win. */
   defaultGridSettings?: Partial<GridSettings>;
-  /** Opt-in: in read mode, strip the parent product's name prefix from a variation's name (the common
-   *  "Parent - Attribute" case) so the grid shows just the distinguishing part. Edit mode shows the
-   *  full name. */
+  /** Initial state of the variation-name form: strip the parent product's name prefix from a
+   *  variation's name (the common "Parent - Attribute" case) so read mode shows just the
+   *  distinguishing part. Edit mode always shows the full name, and so does a variation whose parent
+   *  is not in the loaded set. A DEFAULT only — the merchant switches it from the Product column's
+   *  header menu, and their choice persists per surface. */
   compactVariationNames?: boolean;
   /**
    * Initial table/record layout. `"auto"` (default) flips to the transposed record view for a small
@@ -228,7 +279,18 @@ export interface WorkbenchGridProps {
   rowAttrs?: (row: WorkbenchRow) => RowAttrs;
   /** Host-contributed right-click context-menu items, appended after the grid's own Save/Revert (e.g. a
    *  "Bulk actions" submenu scoped to the cell selection). Items may be submenu parents (`children`). */
-  contextMenuExtras?: (args: { coord: CellCoord; row: WorkbenchRow; meta: GridColumnMeta }) => DataGridMenuItem[];
+  contextMenuExtras?: (args: {
+    coord: CellCoord;
+    row: WorkbenchRow;
+    meta: GridColumnMeta;
+  }) => DataGridMenuItem[];
+  /** Host-contributed items for one COLUMN's header menu, appended after the grid's own (which
+   *  already contribute the Product column's variation-name form). Called per column: return `[]`
+   *  for every id the host has nothing to say about. */
+  headerMenuExtras?: (args: {
+    columnId: string;
+    meta: GridColumnMeta | undefined;
+  }) => DataGridMenuItem[];
   /** Gate the DataGrid "Copy ▸ As JSON" item (a Pro feature); disabled with the hint when it returns false. */
   copyAsJsonAllowed?: () => boolean;
   copyAsJsonUpgradeHint?: string;
@@ -257,15 +319,15 @@ const DEFAULT_LOAD_SIZE = 100;
 const DEFAULT_PRODUCTS_ENDPOINT = '/workbench/products';
 
 /**
- * Locale-aware integer formatter shared by the stock cells (via {@link buildWorkbenchColumns}).
+ * Integer formatter shared by the stock cells (via {@link buildWorkbenchColumns}), in the host's
+ * locale.
  *
- * The `Intl.NumberFormat` is constructed **once**, not per call. Constructing one costs ~60us
- * against ~1.3us to format through an existing instance, and seven stock-cell renderers call this
- * for every row on screen — so building it inside the function cost roughly 36ms of every paint at
- * 100 rows, for a value that never varies. Keep the instance hoisted.
+ * Seven stock-cell renderers call this for every row on screen, so it must not construct an
+ * `Intl.NumberFormat` per call (~60us against ~1.3us through an existing instance — roughly 36ms of
+ * every paint at 100 rows). `formatNumber` without options reuses one instance per bound locale;
+ * pass no options here.
  */
-const integerFormat = new Intl.NumberFormat();
-const fmt = (n: number): string => integerFormat.format(n);
+const fmt = (n: number): string => formatNumber(n);
 
 /** Strip a leading parent-name prefix (+ any separator) from a variation's full name for compact
  *  display — "Cool Tee - Blue / L" → "Blue / L". Falls back to the full name when it doesn't start
@@ -303,6 +365,7 @@ const isStringArray = (v: unknown): v is string[] =>
   Array.isArray(v) && v.every((x) => typeof x === 'string');
 const isNumberRecord = (v: unknown): v is Record<string, number> =>
   typeof v === 'object' && v !== null && Object.values(v).every((n) => typeof n === 'number');
+const isBoolean = (v: unknown): v is boolean => typeof v === 'boolean';
 const isVisibility = (v: unknown): v is VisibilityState =>
   typeof v === 'object' && v !== null && Object.values(v).every((b) => typeof b === 'boolean');
 
@@ -366,9 +429,14 @@ async function postJson<T>(ctx: WorkbenchGridContext, path: string, body: unknow
 }
 
 /** GET JSON from `{apiRoot}/invflux/v1{path}` with optional query params. */
-async function getJson<T>(ctx: WorkbenchGridContext, path: string, params?: Record<string, string>): Promise<T> {
+async function getJson<T>(
+  ctx: WorkbenchGridContext,
+  path: string,
+  params?: Record<string, string>,
+): Promise<T> {
   const url = new URL(`${ctx.apiRoot.replace(/\/$/, '')}/invflux/v1${path}`);
-  if (params !== undefined) for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+  if (params !== undefined)
+    for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
   const res = await fetch(url, {
     headers: { Accept: 'application/json', 'X-WP-Nonce': ctx.nonce },
     credentials: 'same-origin',
@@ -454,7 +522,7 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   const endpoint = (): string => props.productsEndpoint ?? DEFAULT_PRODUCTS_ENDPOINT;
   const presetParams = (): Record<string, string> => props.presetParams ?? {};
   const queryParams = (): Record<string, string | string[]> => props.queryParams?.() ?? {};
-  // Optional light-DOM portal root — when the host provides a PortalCtx (an embedded surface in a
+  // Optional shared portal root — when the host provides a PortalCtx (an embedded surface in a
   // shadow root under transformed ancestors), the grid's modals portal to it so `position: fixed`
   // stays viewport-relative. Full-page hosts provide none → modals render in place, unchanged.
   const portalRoot = usePortalRootOptional();
@@ -464,11 +532,14 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   const subscriptionId = mintSubscriptionId();
 
   // localStorage keys, namespaced by the surface prefix.
-  const key = (suffix: string): string => `invflux:workbench-grid:${props.storageKeyPrefix}:${suffix}`;
+  const key = (suffix: string): string =>
+    `invflux:workbench-grid:${props.storageKeyPrefix}:${suffix}`;
 
   // ── Sort (server-driven). Controlled when `props.sort` is provided (the host owns it, e.g. for URL
   // sync); otherwise internal. Either way every change is reported via `onSortChange`. ──
-  const [internalSort, setInternalSort] = createSignal<SortState>(props.sort?.() ?? { sortBy: 'name', sortDir: 'asc' });
+  const [internalSort, setInternalSort] = createSignal<SortState>(
+    props.sort?.() ?? { sortBy: 'name', sortDir: 'asc' },
+  );
   const sort = (): SortState => props.sort?.() ?? internalSort();
   const setSort = (next: SortState): void => {
     setInternalSort(next);
@@ -489,24 +560,39 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   const [expandedColSections, setExpandedColSections] = createSignal<string[]>(
     readJson(key('col_sections'), [], isStringArray),
   );
+  // Variation names: full `Parent - Attribute` or just the distinguishing part. The prop is the
+  // surface's DEFAULT (the product tab embeds one family, where the parent's name on every row is
+  // pure noise); a merchant's own choice from the Product column's header menu overrides it and
+  // persists, the same way stored visibility beats `defaultVisibleColumnIds`.
+  const [compactVariations, setCompactVariations] = createSignal<boolean>(
+    // Read once, at mount, like every other seed above it: this is the initial value of a signal the
+    // merchant then owns, so tracking the prop would let a re-render overwrite their choice.
+    // eslint-disable-next-line solid/reactivity -- one-shot seed for a user-owned signal.
+    readJson(key('varnames_compact'), props.compactVariationNames ?? false, isBoolean),
+  );
   const [rowSelection, setRowSelection] = createSignal<RowSelectionState>({});
   const [cellSelection, setCellSelection] = createSignal<SelectionState>(EMPTY_SELECTION);
 
+  createEffect(() => writeJson(key('varnames_compact'), compactVariations()));
   createEffect(() => writeJson(key('cols'), columnVisibility()));
   createEffect(() => writeJson(key('col_order'), columnOrder()));
   createEffect(() => writeJson(key('col_sizing'), columnSizing()));
   createEffect(() => writeJson(key('col_sections'), expandedColSections()));
 
   // ── Fetch: infinite query over the paged products endpoint ──
-  const query = createInfiniteQuery<WorkbenchPage>(() => ({
-    queryKey: qk.workbench.grid(
+  const queryClient = useQueryClient();
+  /** The products query's cache key for the current view — shared by the query and by in-place merges. */
+  const gridQueryKey = (): ReturnType<typeof qk.workbench.grid> =>
+    qk.workbench.grid(
       props.ctx.apiRoot,
       endpoint(),
       presetParams(),
       queryParams(),
       sort(),
       loadSize(),
-    ),
+    );
+  const query = createInfiniteQuery<WorkbenchPage>(() => ({
+    queryKey: gridQueryKey(),
     initialPageParam: 1,
     queryFn: async ({ pageParam }) => {
       const url = buildProductsUrl(
@@ -535,14 +621,17 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   // Live-update overlay: subjectId → latest patched fields (keyed by column id). Folded onto the
   // query-cache rows in `rows()` so live stock (and future audit) deltas surface without mutating the
   // cache. Absolute values (not deltas), so a fresh full refetch supersedes them — cleared on refetch.
-  const [livePatches, setLivePatches] = createSignal<Map<number, Record<string, unknown>>>(new Map());
+  const [livePatches, setLivePatches] = createSignal<Map<number, Record<string, unknown>>>(
+    new Map(),
+  );
 
   /** Merge received patches into the overlay (latest value wins per field). `[]` is a legal no-op tick. */
   function applyPatches(patches: RowPatch[]): void {
     if (patches.length === 0) return;
     setLivePatches((prev) => {
       const next = new Map(prev);
-      for (const p of patches) next.set(p.subject_id, { ...(next.get(p.subject_id) ?? {}), ...p.fields });
+      for (const p of patches)
+        next.set(p.subject_id, { ...(next.get(p.subject_id) ?? {}), ...p.fields });
       return next;
     });
   }
@@ -570,12 +659,81 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
     setLivePatches(new Map());
   }
 
+  /**
+   * Ids per by-id read-back request. Each request costs about a second whatever it carries (the list
+   * query's fixed work), so fewer, bigger requests win: 500 six-digit ids is ~3.5 KB of URL, well
+   * inside a web server's usual 8 KB request-line limit.
+   */
+  const REFRESH_IDS_PER_REQUEST = 500;
+
+  /**
+   * Re-read just the rows a save touched and merge them into the loaded pages in place — never a
+   * reload of every loaded page, whose cost (the list query's catalogue-wide work, then every row
+   * again over the wire) has nothing to do with what was saved. Which rows: see `rowsToRefresh`.
+   *
+   * Read by id with the page's filters and the host's preset left out: a saved row that no longer
+   * matches the filter is still brought up to date where it sits (it moves or drops out on the next
+   * full load), and the product tab's `post_ids` preset would otherwise drop the variations it shows
+   * as brought-with context. No subscription is sent, so the live-updates watched set is untouched.
+   * The re-read rows' overlay entries go too — the fresh rows are authoritative for them.
+   *
+   * Any failure falls back to the full reload: slower, never less correct.
+   */
+  async function refreshRows(saved: readonly number[], inFlight: number): Promise<void> {
+    const data = query.data as InfiniteData<WorkbenchPage> | undefined;
+    const ids = rowsToRefresh(saved, data?.pages.flatMap((page) => page.products) ?? []);
+    if (ids.length === 0) return;
+    const wanted = new Set(ids);
+    const fresh = new Map<number, WorkbenchRow>();
+    const chunks: number[][] = [];
+    for (let i = 0; i < ids.length; i += REFRESH_IDS_PER_REQUEST)
+      chunks.push(ids.slice(i, i + REFRESH_IDS_PER_REQUEST));
+    try {
+      // Side by side under the same bound as the save: a large save's read-back is several
+      // requests, and one at a time they would add up to more than the reload this replaces.
+      await sendConcurrently(chunks, inFlight, async (chunk) => {
+        const url = buildProductsUrl(
+          props.ctx,
+          endpoint(),
+          {},
+          { subject_ids: chunk.join('-'), bring_parents: '0' },
+          sort(),
+          chunk.length,
+          1,
+          '',
+        );
+        const res = await fetch(url, {
+          headers: { Accept: 'application/json', 'X-WP-Nonce': props.ctx.nonce },
+          credentials: 'same-origin',
+        });
+        if (!res.ok) throw new Error(`Request failed (${res.status})`);
+        const page = (await res.json()) as WorkbenchPage;
+        for (const row of page.products)
+          if (wanted.has(row.subjectId)) fresh.set(row.subjectId, row);
+      });
+    } catch {
+      await refetchAndResetLive();
+      return;
+    }
+    queryClient.setQueryData<InfiniteData<WorkbenchPage>>(gridQueryKey(), (prev) =>
+      undefined === prev ? prev : { ...prev, pages: mergeRefreshedRows(prev.pages, fresh) },
+    );
+    setLivePatches((prev) => {
+      if (![...fresh.keys()].some((id) => prev.has(id))) return prev;
+      const next = new Map(prev);
+      for (const id of fresh.keys()) next.delete(id);
+      return next;
+    });
+  }
+
   // Live-updates transport (opt-in). Instantiated once; the returned cleanup fires on unmount. The
   // default polling transport reads the subscription token the fetch layer already threads to the
   // server, so it asks only "diffs since cursor X for subscription Y" — no watched-set in the URL.
   if (props.liveUpdates) {
     const lu = props.liveUpdates;
-    const transport = lu.transport ?? pollingTransport({ intervalMs: lu.intervalMs ?? 30_000, endpoint: lu.endpoint });
+    const transport =
+      lu.transport ??
+      pollingTransport({ intervalMs: lu.intervalMs ?? 30_000, endpoint: lu.endpoint });
     onCleanup(
       transport({
         apiRoot: props.ctx.apiRoot,
@@ -643,7 +801,13 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   createEffect(() => {
     const cols = stableColumns();
     const whitelist = props.defaultVisibleColumnIds;
-    if (appliedDefaultVisibility || hadStoredVisibility || whitelist === undefined || cols.length === 0) return;
+    if (
+      appliedDefaultVisibility ||
+      hadStoredVisibility ||
+      whitelist === undefined ||
+      cols.length === 0
+    )
+      return;
     const visible = new Set(whitelist);
     const next: VisibilityState = {};
     for (const id of [...cols.map((c) => c.id), 'orders']) next[id] = visible.has(id);
@@ -651,20 +815,43 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
     appliedDefaultVisibility = true;
   });
 
-  // Parent product name by wcProductId — feeds the opt-in variation-name compaction (strip the parent
-  // prefix in read mode). Only variable parents contribute a name.
+  // Parent product name by wcProductId — feeds the variation-name compaction (strip the parent prefix
+  // in read mode). Only variable parents contribute a name, which is also what keeps the compaction
+  // honest: a variation whose parent is NOT in the loaded set finds no entry and falls back to its
+  // full name, so an orphan row never loses the only context that identifies it. That is a structural
+  // guarantee, not a check to remember — nothing here has to ask whether the parent is on screen.
   const parentNameByProductId = createMemo(() => {
     const map = new Map<number, string>();
     for (const r of rows()) if (r.wcVariationId === null) map.set(r.wcProductId, r.name);
     return map;
   });
-  const displayName = props.compactVariationNames
-    ? (row: WorkbenchRow, full: string): string => {
-        if (row.wcVariationId === null) return full;
-        const parent = parentNameByProductId().get(row.wcProductId);
-        return parent ? stripParentPrefix(full, parent) : full;
-      }
-    : undefined;
+  const displayName = (row: WorkbenchRow, full: string): string => {
+    if (!compactVariations() || row.wcVariationId === null) return full;
+    const parent = parentNameByProductId().get(row.wcProductId);
+    return parent ? stripParentPrefix(full, parent) : full;
+  };
+
+  /**
+   * Persist a merchant-authored name for one column, or clear it with an empty string.
+   *
+   * **Sends every override in force, not just the edited one.** The endpoint replaces the whole map
+   * for the caller's locale — it is a put, not a patch — so a body carrying one entry would clear
+   * every other rename in the store. The set is rebuilt here from the columns themselves, where a
+   * rename is exactly `label !== defaultLabel`.
+   *
+   * The response carries the map the server actually stored, and the labels are recomputed from
+   * that rather than from the text that was typed. The server owns the normalisation — trimming,
+   * dropping a blank, dropping one equal to the shipped name — and re-deriving it here would be a
+   * second copy of those rules, drifting the moment either side changed.
+   */
+  async function renameColumn(columnId: string, label: string): Promise<void> {
+    const res = await postJson<{ labels?: Record<string, string> }>(
+      props.ctx,
+      '/workbench/settings/column-labels',
+      columnOverridesForSave(stableColumns(), { columnId, label }),
+    );
+    setStableColumns((prev) => applyColumnOverrides(prev, res.labels ?? {}));
+  }
 
   /** Reset column visibility / order / sizing to this surface's defaults (the "Reset to default"
    *  button in the column manager). Visibility → the surface whitelist (or empty, letting the grid
@@ -689,7 +876,11 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   // Warn before navigating away with unsaved staged edits — the grid owns the dirty model, so the
   // guard lives here (every mount surface inherits it) rather than in each host shell.
   const beforeUnloadGuard = (e: BeforeUnloadEvent): void => {
-    if (dirty.isDirty()) {
+    // Staged edits OR a submission still outstanding. The second is not covered by the first: an
+    // apply lives in this browser, so closing the tab abandons whatever has not been answered yet
+    // and leaves the store partially updated with no record of what was intended — and a submitted
+    // row is precisely the one whose staged edit is about to be dropped.
+    if (dirty.isDirty() || dirty.hasPending()) {
       e.preventDefault();
       e.returnValue = '';
     }
@@ -697,12 +888,72 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   window.addEventListener('beforeunload', beforeUnloadGuard);
   onCleanup(() => window.removeEventListener('beforeunload', beforeUnloadGuard));
   const [saveError, setSaveError] = createSignal<string | null>(null);
+
+  // ── Save status (the strip under the grid) ──
+  // What the operator sees of an apply once the review has closed: progress while its requests go
+  // out, then how it ended. It replaces the toasts a save used to raise, and it never re-opens the
+  // review by itself — an unbidden dialog would re-block the grid at the moment the operator has
+  // moved on. Submissions that overlap share one strip, which reports their combined rows.
+  interface ApplyStatus {
+    /** Submissions still sending; the strip shows progress while this is above zero. */
+    active: number;
+    /** Rows sent so far, against the rows the strip covers. */
+    done: number;
+    total: number;
+    saved: number;
+    /** Rows refused (a conflict) or never answered (a failed request). Still staged, retryable. */
+    notSaved: number;
+    /** What went wrong, when something did. */
+    detail: string | null;
+    /** True once any submission covered by this strip went out as more than one request — lets a host
+     *  show a progress bar only for a save big enough to warrant one. Sticky while the strip is up. */
+    multiChunk: boolean;
+  }
+  /** How long a result with nothing left to act on stays up; one with unsaved rows stays until dismissed. */
+  const APPLY_STATUS_FADE_MS = 4000;
+  const [applyStatus, setApplyStatus] = createSignal<ApplyStatus | null>(null);
+  let applyStatusFade: number | undefined;
+  onCleanup(() => clearTimeout(applyStatusFade));
+  const beginApplyStatus = (rows: number, multiChunk: boolean): void => {
+    clearTimeout(applyStatusFade);
+    setApplyStatus((s) =>
+      s !== null && s.active > 0
+        ? // Overlapping submissions merge; OR the flag so a small save started during a big one
+          // never hides the big one's bar.
+          {
+            ...s,
+            active: s.active + 1,
+            total: s.total + rows,
+            multiChunk: s.multiChunk || multiChunk,
+          }
+        : { active: 1, done: 0, total: rows, saved: 0, notSaved: 0, detail: null, multiChunk },
+    );
+  };
+  const advanceApplyStatus = (rows: number): void => {
+    setApplyStatus((s) => (s === null ? s : { ...s, done: s.done + rows }));
+  };
+  const endApplyStatus = (saved: number, notSaved: number, detail: string | null): void => {
+    const next = ((s): ApplyStatus | null =>
+      s === null
+        ? null
+        : {
+            ...s,
+            active: s.active - 1,
+            saved: s.saved + saved,
+            notSaved: s.notSaved + notSaved,
+            detail: s.detail ?? detail,
+          })(applyStatus());
+    setApplyStatus(next);
+    if (next !== null && next.active === 0 && next.notSaved === 0 && next.detail === null) {
+      applyStatusFade = window.setTimeout(() => setApplyStatus(null), APPLY_STATUS_FADE_MS);
+    }
+  };
   const [showReviewModal, setShowReviewModal] = createSignal(false);
-  /** An apply is in flight — POST *and* the reconciling refetch. Drives the review modal's scrim. */
-  const [saving, setSaving] = createSignal(false);
   // Per-subject save conflict: the live on-hand total moved under a staged correction. Keyed by
   // subjectId; drives the Total cell's red ring + tooltip. Cleared when the cell is re-staged.
-  const [conflicts, setConflicts] = createSignal<Map<number, { expected: number; actual: number }>>(new Map());
+  const [conflicts, setConflicts] = createSignal<Map<number, { expected: number; actual: number }>>(
+    new Map(),
+  );
 
   /** Server-resolved editability (`meta.editable` is resolved per column + current user) + the per-row
    *  read-only overrides + the two on-hand `total` guards (aggregate parent, unmanaged). */
@@ -719,7 +970,10 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
     // A variable parent has no price/cost of its own — those live on each variation (and WC ignores a
     // parent price). `reorder_threshold` stays editable: it's the variations' default. Slot columns are
     // already covered by the `total` guard above.
-    if (isVariableParent && (meta.id === 'price' || meta.id === 'sale_price' || meta.id === 'wac')) {
+    if (
+      isVariableParent &&
+      (meta.id === 'price' || meta.id === 'sale_price' || meta.id === 'wac')
+    ) {
       return false;
     }
     return true;
@@ -767,7 +1021,8 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
    *  shows the parent's resolved value — so re-selecting "Same as parent" isn't staged as a no-op. */
   function persistedEditorValue(row: WorkbenchRow, meta: GridColumnMeta): unknown {
     const inheritValue = meta.editorConfig.inheritValue;
-    if (inheritValue !== undefined && (row.inherited?.includes(meta.id) ?? false)) return inheritValue;
+    if (inheritValue !== undefined && (row.inherited?.includes(meta.id) ?? false))
+      return inheritValue;
     return workbenchValueFor(row, meta.id);
   }
 
@@ -781,7 +1036,8 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
    *  Reason-gated columns (the on-hand `total`) are never cleared this way. */
   function clearedValueFor(meta: GridColumnMeta): { ok: boolean; value: unknown } {
     if (meta.bulkSaveReason !== null) return { ok: false, value: null };
-    if (meta.editorConfig.clearValue !== undefined) return { ok: true, value: meta.editorConfig.clearValue };
+    if (meta.editorConfig.clearValue !== undefined)
+      return { ok: true, value: meta.editorConfig.clearValue };
     const dt = meta.dataType;
     if (dt === 'bool') return { ok: true, value: false };
     if (dt.startsWith('number')) return { ok: true, value: null };
@@ -800,18 +1056,28 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   }
 
   /** Row-aware cleared value: a variation cell for an inheritable column clears to "inherit". */
-  function clearedValueForRow(meta: GridColumnMeta, row: WorkbenchRow): { ok: boolean; value: unknown } {
+  function clearedValueForRow(
+    meta: GridColumnMeta,
+    row: WorkbenchRow,
+  ): { ok: boolean; value: unknown } {
     const inheritValue = meta.editorConfig.inheritValue;
-    if (row.wcVariationId !== null && inheritValue !== undefined) return { ok: true, value: inheritValue };
+    if (row.wcVariationId !== null && inheritValue !== undefined)
+      return { ok: true, value: inheritValue };
     return clearedValueFor(meta);
   }
 
   /** On a variation, prepend an "inherit from parent" option to an inheritable enum so it's re-selectable. */
   function editorMetaForRow(meta: GridColumnMeta, row: WorkbenchRow): GridColumnMeta {
     const inheritValue = meta.editorConfig.inheritValue;
-    if (row.wcVariationId === null || inheritValue === undefined || meta.dataType !== 'enum') return meta;
+    if (row.wcVariationId === null || inheritValue === undefined || meta.dataType !== 'enum')
+      return meta;
     const options = Array.isArray(meta.editorConfig.options) ? meta.editorConfig.options : [];
-    if (options.some((o) => o !== null && typeof o === 'object' && (o as { value?: unknown }).value === inheritValue)) {
+    if (
+      options.some(
+        (o) =>
+          o !== null && typeof o === 'object' && (o as { value?: unknown }).value === inheritValue,
+      )
+    ) {
       return meta;
     }
     const inheritLabel =
@@ -820,7 +1086,10 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
         : __('Same as parent');
     return {
       ...meta,
-      editorConfig: { ...meta.editorConfig, options: [{ value: inheritValue, label: inheritLabel }, ...options] },
+      editorConfig: {
+        ...meta.editorConfig,
+        options: [{ value: inheritValue, label: inheritLabel }, ...options],
+      },
     };
   }
 
@@ -862,13 +1131,39 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   const stagesValidCost = (staged: unknown): boolean =>
     staged != null && staged !== '' && Number.isFinite(Number(staged)) && Number(staged) >= 0;
 
+  /**
+   * Subjects with at least one staged cell that is NOT already in flight — the rows a review would
+   * actually be about. A row whose every dirty cell is pending has nothing new to confirm.
+   */
+  const reviewableSubjectIds = (): number[] => {
+    const out: number[] = [];
+    for (const [subjectId, row] of dirty.dirtyCells()) {
+      for (const columnId of row.cells.keys()) {
+        if (!dirty.isPending(subjectId, columnId)) {
+          out.push(subjectId);
+          break;
+        }
+      }
+    }
+
+    return out;
+  };
+
   const reviewGroups = createMemo<CorrectionReviewGroup[]>(() => {
     const byColumn = new Map<string, CorrectionReviewGroup['rows']>();
     const rowById = new Map(rows().map((r) => [r.subjectId, r]));
     for (const [subjectId, row] of dirty.dirtyCells()) {
       for (const [columnId, edit] of row.cells) {
+        // A cell with a request outstanding is IN FLIGHT, not awaiting review. It stays in the dirty
+        // model until the server answers (that is what re-bases it on a conflict), but listing it as
+        // a change to apply would ask the operator to confirm something already sent.
+        if (dirty.isPending(subjectId, columnId)) continue;
         const list = byColumn.get(columnId) ?? [];
-        if (columnId === 'total' && typeof edit.new === 'number' && typeof edit.original === 'number') {
+        if (
+          columnId === 'total' &&
+          typeof edit.new === 'number' &&
+          typeof edit.original === 'number'
+        ) {
           // On-hand is delta-first: show the FROZEN delta over the LIVE baseline (old = current total,
           // new = current + delta) so the review agrees with the grid even after a background sync, and
           // carry the live per-slot base + deficit so the modal computes its own cascade + warnings.
@@ -891,10 +1186,18 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
             // A cost seeded in THIS SAME save (a staged `wac` edit) counts too: the server applies
             // the seed before the stock movement, so the added units WILL be valued — don't nudge to
             // "seed the cost first" when the operator is already doing exactly that in one operation.
-            hasCostBasis: live ? live.wac != null || stagesValidCost(row.cells.get('wac')?.new) : undefined,
+            hasCostBasis: live
+              ? live.wac != null || stagesValidCost(row.cells.get('wac')?.new)
+              : undefined,
           });
         } else {
-          list.push({ subjectId, name: row.name, sku: row.sku, oldValue: edit.original, newValue: edit.new });
+          list.push({
+            subjectId,
+            name: row.name,
+            sku: row.sku,
+            oldValue: edit.original,
+            newValue: edit.new,
+          });
         }
         byColumn.set(columnId, list);
       }
@@ -903,7 +1206,11 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
     const order = apiSelectableColumnIds();
     return [...byColumn.entries()]
       .sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]))
-      .map(([columnId, groupRows]) => ({ columnId, meta: metaById.get(columnId), rows: groupRows }));
+      .map(([columnId, groupRows]) => ({
+        columnId,
+        meta: metaById.get(columnId),
+        rows: groupRows,
+      }));
   });
 
   // Governance advisories for the save-review banner: computed from the staged stock-management group,
@@ -916,6 +1223,34 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   function openSaveReview(): void {
     setSaveError(null);
     if (!dirty.isDirty()) return;
+    // Everything staged is already in flight — there is nothing new to confirm, so opening an empty
+    // review would be the dialog asking about work the operator has already sent.
+    const reviewable = reviewableSubjectIds();
+    if (reviewable.length === 0) return;
+    // Refuse only where the overlap is real: a row that has a save outstanding AND fresh edits on
+    // top of it. Two different rows saving and being edited at once endanger nothing — they share
+    // no baseline — so blocking those would be a rule paid for by every operator to protect a case
+    // that does not exist.
+    //
+    // The dangerous one is same-row: a row's edits are submitted together, so re-reviewing a row
+    // whose previous save has not been confirmed stages new intent over a baseline the server has
+    // not agreed to. The copy names the situation and the remedy; "the review is unavailable" would
+    // say the dialog is broken, when what is blocked is the save.
+    const { held } = splitSubmittableRows(reviewable, dirty.isRowPending);
+    if (held.length > 0) {
+      toast.error(
+        sprintf(
+          /* translators: %d: number of rows whose previous save has not finished yet */
+          _n(
+            '%d row is still saving. Wait for it to finish, then review your changes.',
+            '%d rows are still saving. Wait for them to finish, then review your changes.',
+            held.length,
+          ),
+          held.length,
+        ),
+      );
+      return;
+    }
     setShowReviewModal(true);
   }
 
@@ -978,51 +1313,198 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
     return describeConflictsFor(conflicts, (columnId) => metaById.get(columnId)?.label ?? columnId);
   }
 
-  /** Serialise the dirty cells into the generic apply shape, POST, then reconcile: refetch so applied
-   *  cells' baseline becomes the new value, drop non-conflicted staged edits, keep conflicted rows so
-   *  the operator can retry. On-hand `total` edits carry a SIGN-AWARE disposition (negative delta → a
-   *  "decreases" disposition, positive → "increases"); discovery context rides the batch level. */
+  /**
+   * Rows per request for the retry-safe part of an apply (rows that are not retry-safe go together),
+   * by how many requests run at once. One at a time, bigger chunks win: each request boots
+   * WordPress, so fewer of them is faster. Side by side, smaller chunks win: they fill the slots
+   * evenly instead of leaving the last wave half empty, and each request is half as long — less work
+   * lost if one fails, further from a host's execution timeout, and spinners that clear sooner.
+   */
+  const APPLY_CHUNK_ROWS_ONE_AT_A_TIME = 100;
+  const APPLY_CHUNK_ROWS_SIDE_BY_SIDE = 50;
+  /** Requests in flight when the host sets no bound: the "Balanced" level of the merchant's setting. */
+  const APPLY_CONCURRENCY = 3;
+  /** Gap between the opening requests of a save, so they do not reach the host in one burst. */
+  const APPLY_STAGGER_MS = 200;
+
+  /** Serialise the dirty cells into the generic apply shape, send it as the requests `applyBatches`
+   *  plans, then reconcile once: refetch so applied cells' baseline becomes the new value, drop the
+   *  cells that were accepted, keep refused and unanswered rows staged so the operator can retry.
+   *  On-hand `total` edits carry a SIGN-AWARE disposition (negative delta → a "decreases"
+   *  disposition, positive → "increases"); discovery context rides every request of the batch. */
   async function commitSave(reason: string, dispositions: CorrectionDispositions): Promise<void> {
-    // Re-entrancy guard, and not a redundant one: the modal disables its Apply button while
-    // `saving`, but Ctrl+Enter / Ctrl+S reach its `confirm()` through two keydown listeners that
-    // never look at the button. Each submit re-reads the SAME staged edits, so a second one either
-    // races the first over one baseline or lands as a spurious conflict — neither is a thing to
-    // show an operator mid-correction.
-    if (saving()) return;
     setSaveError(null);
-    const applyRows: WorkbenchApplyRequest['rows'] = [...dirty.dirtyCells().entries()]
+
+    // Rows with a request already outstanding are REFUSED, never re-sent. This is the re-entrancy
+    // guard — per row rather than per grid — and it is a correctness boundary, not politeness:
+    // `TotalAdjustHandler` derives a stock movement from `original`, so re-submitting a row whose
+    // baseline the server has not confirmed writes the wrong movement silently. It also covers the
+    // double-submit the old blanket `saving()` flag existed for: Ctrl+Enter reaches the modal's
+    // confirm through two keydown listeners that never look at the disabled button, so two calls
+    // can land in one tick.
+    //
+    // `claimRows` decides and marks in a SINGLE call. The check and the mark cannot be separated by
+    // anything, so the second call is refused whether or not the first one's write has become
+    // visible to a reactive read yet — the guard does not rest on scheduler timing.
+    const staged = new Map<number, DirtyRow>(dirty.dirtyCells());
+    const {
+      accepted,
+      refused,
+      keys: pendingKeys,
+    } = dirty.claimRows(
+      [...staged].map(([subjectId, row]) => ({ subjectId, columnIds: row.cells.keys() })),
+    );
+    const sendable: Array<[number, DirtyRow]> = accepted.map((subjectId) => [
+      subjectId,
+      staged.get(subjectId)!,
+    ]);
+
+    const applyRows: WorkbenchApplyRequest['rows'] = sendable
       .map(([subjectId, dirtyRow]) => ({
         subject_id: subjectId,
         edits: [...dirtyRow.cells.entries()].map(([columnId, edit]) => {
-          if (columnId === 'total' && typeof edit.new === 'number' && typeof edit.original === 'number') {
+          if (
+            columnId === 'total' &&
+            typeof edit.new === 'number' &&
+            typeof edit.original === 'number'
+          ) {
             const delta = edit.new - edit.original;
-            const disposition = delta < 0 ? dispositions.negative : delta > 0 ? dispositions.positive : null;
+            const disposition =
+              delta < 0 ? dispositions.negative : delta > 0 ? dispositions.positive : null;
             return { column_id: columnId, original: edit.original, new: edit.new, disposition };
           }
           return { column_id: columnId, original: edit.original, new: edit.new };
         }),
       }))
       .filter((r) => r.edits.length > 0);
-    if (applyRows.length === 0) return;
+    if (applyRows.length === 0) {
+      // Nothing is going out, so release the lock the claim just took — otherwise these rows stay
+      // unsaveable for the rest of the session with nothing on screen to explain it.
+      if (pendingKeys.size > 0) dirty.resolvePending(pendingKeys);
+      // Everything the operator asked to save is already in flight. Say so, rather than letting
+      // Apply look like it did nothing.
+      if (refused.length > 0) {
+        toast.error(
+          sprintf(
+            /* translators: %d: number of rows whose previous save has not finished yet */
+            _n(
+              '%d row is still saving. Wait for it to finish, then save again.',
+              '%d rows are still saving. Wait for them to finish, then save again.',
+              refused.length,
+            ),
+            refused.length,
+          ),
+        );
+      }
+      return;
+    }
 
-    // Optimistic: lock every submitted cell (faded + spinner) across the in-flight + refetch window.
-    // The review modal covers the grid, so it gets its own busy scrim from `saving` — the operator
-    // would otherwise watch an unchanged dialog for the whole POST + refetch and press Apply again.
-    const pendingKeys = new Set<string>();
-    for (const r of applyRows) for (const e of r.edits) pendingKeys.add(pendingCellKey(r.subject_id, e.column_id));
-    dirty.setPending(pendingKeys);
-    setSaving(true);
+    // Exactly the cells this submission carries — the same set `claimRows` locked above and the one
+    // `resolvePending` clears when it settles. Derived from `sendable` rather than from `applyRows`
+    // so the correspondence is structural: both are "the accepted rows × their staged cells", and a
+    // future filter over `applyRows` cannot silently leave part of the lock behind.
+    // Re-deriving it from the row's dirty cells at settle time instead would sweep up whatever was
+    // staged on those rows in the meantime, which the pending lock deliberately allows.
+    const submittedCells: SubmittedCell[] = sendable.flatMap(([subjectId, row]) =>
+      [...row.cells.keys()].map((columnId) => ({ subjectId, columnId })),
+    );
+
+    // Hand the grid back NOW. The batch is sent; holding the modal over it buys the operator
+    // nothing but a dialog to watch, and on a large apply that is the whole point of the exercise.
+    // Each submitted cell stays locked and faded until the request carrying it answers, so nothing
+    // pretends to have settled — what closes is the dialog, not the transaction. Progress and the
+    // outcome show in the status strip.
+    closeSaveReview();
+
+    // The requests this batch goes out as: rows that are not retry-safe together first, then the
+    // retry-safe rows in chunks, a row's edits never split (see `applyBatches`). A column the grid
+    // has no metadata for counts as unsafe, so an unknown column is only ever slower.
+    const metaById = columnMetaById();
+    const inFlight = props.ctx.applyConcurrency ?? APPLY_CONCURRENCY;
+    const batches = applyBatches(
+      applyRows,
+      (columnId) => metaById.get(columnId)?.retrySafe === true,
+      inFlight > 1 ? APPLY_CHUNK_ROWS_SIDE_BY_SIDE : APPLY_CHUNK_ROWS_ONE_AT_A_TIME,
+    );
+    beginApplyStatus(applyRows.length, batches.length > 1);
+
+    const conflicts: WorkbenchApplyConflict[] = [];
+    const unanswered = new Set<number>();
+    let requestError: string | null = null;
+    // This submission's locks not yet released. A row settles as soon as the request carrying it
+    // answers, and may then be edited and saved again — so every later release names only what is
+    // still held here, never `pendingKeys` whole, which could free a newer save's lock on that row.
+    const stillLocked = new Set(pendingKeys);
+
+    // A request's accepted rows settle the moment it answers. Their confirmed values go into the live
+    // overlay first — the grid's underlying data, exactly where a live update puts a value the server
+    // confirmed — and only then do the staged edits drop and the cells unlock. So `original` is never
+    // an unconfirmed value: a cell takes a new edit only once its baseline is what the server just
+    // accepted. A refused row keeps its edits staged and its lock until the batch's refetch re-bases it.
+    const settleConfirmed = (
+      rows: WorkbenchApplyRequest['rows'],
+      refusedRows: ReadonlySet<number>,
+    ): void => {
+      const sent = new Set(rows.map((row) => row.subject_id));
+      const cells = cellsToClearAfterApply(
+        submittedCells.filter((cell) => sent.has(cell.subjectId)),
+        refusedRows,
+      );
+      if (cells.length === 0) return;
+      const fields = new Map<number, Record<string, unknown>>();
+      for (const { subjectId, columnId } of cells) {
+        const edit = staged.get(subjectId)?.cells.get(columnId);
+        if (edit === undefined) continue;
+        fields.set(subjectId, { ...(fields.get(subjectId) ?? {}), [columnId]: edit.new });
+      }
+      const keys = cells.map((cell) => pendingCellKey(cell.subjectId, cell.columnId));
+      batch(() => {
+        applyPatches([...fields].map(([subject_id, patch]) => ({ subject_id, fields: patch })));
+        dirty.revert(cells);
+        dirty.resolvePending(keys);
+      });
+      for (const key of keys) stillLocked.delete(key);
+    };
+
+    // Up to `applyConcurrency` requests in flight, started in plan order so the serial request goes
+    // out first, and the opening ones staggered so they do not reach the host in the same instant.
+    // The rows of different requests never overlap, so how they interleave on the server does not
+    // matter; what the bound protects is the host's worker pool.
+    await sendConcurrently(
+      batches,
+      inFlight,
+      async (rows) => {
+        try {
+          const response = await postJson<WorkbenchApplyResponse>(props.ctx, '/workbench/apply', {
+            reason,
+            discovery_context: dispositions.discoveryContext,
+            rows,
+          });
+          conflicts.push(...response.conflicts);
+          settleConfirmed(rows, new Set(response.conflicts.map((c) => c.subject_id)));
+        } catch (err) {
+          // Its rows stay staged and are reported as not saved. They are not re-sent automatically:
+          // a request that failed in transit may still have been applied, and for a row that is not
+          // retry-safe a second send would repeat its stock movement.
+          for (const row of rows) unanswered.add(row.subject_id);
+          requestError ??= err instanceof Error ? err.message : String(err);
+        }
+        advanceApplyStatus(rows.length);
+      },
+      APPLY_STAGGER_MS,
+    );
+    const conflicted = new Set(conflicts.map((c) => c.subject_id));
+    const notSaved = new Set([...conflicted, ...unanswered]);
+    const saved = applyRows.filter((r) => !notSaved.has(r.subject_id)).length;
+    const detail =
+      [conflicts.length > 0 ? describeConflicts(conflicts) : null, requestError]
+        .filter((part): part is string => part !== null)
+        .join(' ') || null;
 
     try {
-      const response = await postJson<WorkbenchApplyResponse>(props.ctx, '/workbench/apply', {
-        reason,
-        discovery_context: dispositions.discoveryContext,
-        rows: applyRows,
-      });
-      const conflicted = new Set(response.conflicts.map((c) => c.subject_id));
       // Map on-hand `total` conflicts (the live total moved) onto the per-subject conflict ring.
       const nextConflicts = new Map<number, { expected: number; actual: number }>();
-      for (const c of response.conflicts) {
+      for (const c of conflicts) {
         if (c.column_id !== 'total') continue;
         nextConflicts.set(c.subject_id, {
           expected: typeof c.expected === 'number' ? c.expected : 0,
@@ -1032,35 +1514,40 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
       setConflicts(nextConflicts);
       // Hand the raw conflict list to the host (if any) so it can render its own affordance (e.g. a
       // sticky reject-all toast); the grid still surfaces them inline + on the Total cell ring below.
-      if (response.conflicts.length > 0) props.onConflicts?.(response.conflicts);
-      // Refetch FIRST so applied cells' persisted baseline updates before we drop their staged edit
-      // (flicker-free: the optimistic value is replaced by the identical server value). Stock is
-      // delta-first, so the frozen delta re-bases over the refreshed live total for conflicted rows.
-      // Also drops the live overlay — the fresh base is authoritative.
-      await refetchAndResetLive();
-      dirty.revert(
-        [...dirty.dirtyCells().entries()]
-          .filter(([subjectId]) => !conflicted.has(subjectId))
-          .flatMap(([subjectId, r]) => [...r.cells.keys()].map((columnId) => ({ subjectId, columnId }))),
-      );
-      dirty.clearPending();
+      if (conflicts.length > 0) props.onConflicts?.(conflicts);
+      // Re-read the rows this save sent — plus the variations of any saved parent, which show its
+      // inherited fields — and merge them in place: the server may have normalised a value it
+      // accepted, and a column derived from an edited one only changes here. Stock is delta-first,
+      // so the frozen delta re-bases over the refreshed live total for conflicted rows. Unanswered
+      // rows are read back too: their request may have applied anyway.
+      if (unanswered.size < applyRows.length)
+        await refreshRows(
+          applyRows.map((r) => r.subject_id),
+          inFlight,
+        );
+      // Accepted cells settled as their requests answered. What is still locked is the rows refused
+      // or never answered, which stay staged for the operator to review and save again.
+      dirty.resolvePending(stillLocked);
 
       // Notify the host if any submitted row actually persisted (some may have conflicted) — after the
       // refetch, so a host that re-reads the same subjects sees the grid's fresh baseline.
-      if (applyRows.some((r) => !conflicted.has(r.subject_id))) props.onApplied?.();
+      if (saved > 0) props.onApplied?.();
 
-      if (response.conflicts.length > 0) {
-        const msg = describeConflicts(response.conflicts);
-        setSaveError(msg);
-        toast.error(msg);
-      } else {
-        closeSaveReview();
-      }
+      // The review stays reachable for what was not saved (the strip's Review), and conflicts stay
+      // on their rows (the Total cell's ring) for as long as they matter.
+      setSaveError(detail);
+      endApplyStatus(saved, notSaved.size, detail);
     } catch (err) {
-      dirty.clearPending();
-      setSaveError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSaving(false);
+      // Release only what THIS submission still holds: a failure here says nothing about another
+      // submission still in flight, and unlocking its cells would let an edit be staged against a
+      // baseline the server has not confirmed.
+      dirty.resolvePending(stillLocked);
+      const msg = err instanceof Error ? err.message : String(err);
+      // The review is already closed, so the message has to come to where the operator is: the
+      // strip, which stays up until dismissed because the edits are still staged — silence here
+      // would read as "saved".
+      setSaveError(msg);
+      endApplyStatus(saved, notSaved.size, msg);
     }
   }
 
@@ -1075,7 +1562,9 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   // or a variable parent + its handful of variations side-by-side); horizontal for many records. The
   // toolbar toggle overrides. Record mode is a DataGrid layout, so all its cell behaviour carries over.
   const RECORD_MODE_MAX = 12;
-  const [layoutPref, setLayoutPref] = createSignal<'auto' | 'grid' | 'record'>(props.defaultLayout ?? 'auto');
+  const [layoutPref, setLayoutPref] = createSignal<'auto' | 'grid' | 'record'>(
+    props.defaultLayout ?? 'auto',
+  );
   const effectiveLayout = (): 'grid' | 'record' => {
     const count = rows().length;
     if (count === 0) return 'grid';
@@ -1091,8 +1580,23 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   // Reactive callbacks for a host that renders its own Save / Record-view controls (the Central
   // Workbench, which hides the grid's toolbar) — mirror the grid's dirty + layout state to the shell.
   createEffect(() => props.onDirtyChange?.(dirty.isDirty()));
-  createEffect(() => props.onFetchingChange?.(query.isFetching));
-  createEffect(() => props.onLayoutChange?.({ layout: effectiveLayout(), canToggle: layoutToggleable() }));
+  // A save in progress counts as busy until its last request has answered and the batch has
+  // refetched — not only while a query fetch runs, which would drop the spinner between requests.
+  createEffect(() =>
+    props.onFetchingChange?.(query.isFetching || (applyStatus()?.active ?? 0) > 0),
+  );
+  // Mirror live save progress to a host that renders its own indicator (null once no save is active).
+  createEffect(() => {
+    const s = applyStatus();
+    props.onSaveProgressChange?.(
+      s !== null && s.active > 0
+        ? { done: s.done, total: s.total, multiChunk: s.multiChunk }
+        : null,
+    );
+  });
+  createEffect(() =>
+    props.onLayoutChange?.({ layout: effectiveLayout(), canToggle: layoutToggleable() }),
+  );
 
   /** Stage one cell edit into the dirty model + clear any stale conflict ring on that subject. Shared
    *  by the DataGrid and the RecordView so editing behaves identically in either layout. */
@@ -1123,7 +1627,8 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
       set(rowId);
       if (isParent) {
         for (const child of rows()) {
-          if (child.wcProductId === row.wcProductId && child.wcVariationId !== null) set(String(child.subjectId));
+          if (child.wcProductId === row.wcProductId && child.wcVariationId !== null)
+            set(String(child.subjectId));
         }
       }
       return next;
@@ -1133,6 +1638,90 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   // Shift-range anchor for the checkbox column — the row a plain leading-cell click last targeted.
   // Reactive so the column factory outlines the anchor row's checkbox.
   const [rowAnchorId, setRowAnchorId] = createSignal<string | null>(null);
+
+  // Trim the row (bulk-action) selection to the members that still match when the filter/search
+  // changes. A selection the new result set no longer shows is a footgun: the bulk bar keeps counting
+  // and acting on rows the operator can't see (select 3, filter to a disjoint 6, and it still reads
+  // "3 products"). Membership is server-side and paged, so it can't be decided from the loaded rows
+  // alone — a still-matching selected row may sit on an unfetched page — so we ask the server which of
+  // the selected ids the new query returns (via the `subject_ids` grid filter, a dash-joined id list)
+  // and keep only those. Only `queryParams` is watched: sort is a separate signal and paging uses the
+  // infinite-query cursor, so reordering or scrolling changes neither the signature nor the match set.
+  let lastQuerySig: string | undefined;
+  let reconcileAbort: AbortController | undefined;
+  createEffect(() => {
+    const sig = JSON.stringify(queryParams());
+    const changed = lastQuerySig !== undefined && sig !== lastQuerySig;
+    lastQuerySig = sig;
+    if (!changed) return;
+
+    // Read untracked: `queryParams` is the sole trigger — a selection change must not re-run this.
+    const sel = untrack(rowSelection);
+    const selected = Object.keys(sel).filter((id) => sel[id]);
+    reconcileAbort?.abort();
+    if (selected.length === 0) {
+      setRowAnchorId(null);
+      return;
+    }
+    reconcileAbort = new AbortController();
+    void trimSelectionToMatches(selected, sig, reconcileAbort.signal);
+  });
+
+  /** Keep only the selected subjects that still match the (just-changed) query. On any failure fall
+   *  back to the safe blunt drop rather than keep counting rows we can't confirm are visible. */
+  async function trimSelectionToMatches(
+    ids: string[],
+    sig: string,
+    signal: AbortSignal,
+  ): Promise<void> {
+    // Restrict the current view to exactly the selected subjects — no brought-with context (a parent
+    // or child pulled in for fold context would falsely read as "still matches"), no subscription (it
+    // must not rewrite the live-updates watched set), one page big enough for the whole selection.
+    // Dash-joined: `subject_ids` is a `numeric_ids` grid filter, whose URL/wire encoding is dash-joined.
+    const params: Record<string, string | string[]> = {
+      ...queryParams(),
+      subject_ids: ids.join('-'),
+    };
+    params['bring_parents'] = '0';
+    delete params['bring_children'];
+    delete params['hide_parents'];
+    delete params['hide_children'];
+    const url = buildProductsUrl(
+      props.ctx,
+      endpoint(),
+      presetParams(),
+      params,
+      sort(),
+      Math.min(10000, ids.length),
+      1,
+      '',
+    );
+    const superseded = (): boolean => signal.aborted || JSON.stringify(queryParams()) !== sig;
+    let matched: Set<number>;
+    try {
+      const res = await fetch(url, {
+        headers: { Accept: 'application/json', 'X-WP-Nonce': props.ctx.nonce },
+        credentials: 'same-origin',
+        signal,
+      });
+      if (!res.ok) throw new Error(`Request failed (${res.status})`);
+      const page = (await res.json()) as WorkbenchPage;
+      matched = new Set(page.products.map((p) => p.subjectId));
+    } catch {
+      if (superseded()) return; // a newer filter change owns the selection now
+      setRowSelection({});
+      setRowAnchorId(null);
+      return;
+    }
+    if (superseded()) return;
+    setRowSelection((prev) => {
+      const next: RowSelectionState = {};
+      for (const [id, on] of Object.entries(prev))
+        if (on && matched.has(Number(id))) next[id] = true;
+      return next;
+    });
+    setRowAnchorId((prev) => (prev !== null && matched.has(Number(prev)) ? prev : null));
+  }
 
   /** Leading (checkbox) cell click — the whole cell is the target (the checkbox itself is
    *  pointer-events-none). A plain click toggles the row and makes it the anchor; a Shift+click fills
@@ -1184,7 +1773,11 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
         meta,
         targets: group.rows.map((row) => {
           const staged = dirty.edit(row.subjectId, group.columnId);
-          return { subjectId: row.subjectId, row, value: staged ? staged.new : workbenchValueFor(row, group.columnId) };
+          return {
+            subjectId: row.subjectId,
+            row,
+            value: staged ? staged.new : workbenchValueFor(row, group.columnId),
+          };
         }),
       });
     }
@@ -1200,23 +1793,82 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   }
 
   function applyBulkEdits(edits: BulkEditResult[]): void {
-    for (const e of edits) dirty.patch(e.subjectId, e.columnId, e.original, e.newValue, e.row.name, e.row.sku);
+    // One write for the whole selection, not one per cell: `patch()` in a loop makes the grid
+    // re-render once per edited cell, which is what made a few-hundred-cell apply sit there.
+    //
+    // `original` is the PERSISTED value, not the modal's — the modal tracks against the staged
+    // value so reopening continues from it, but the dirty model prunes a cell by comparing against
+    // what is saved. Passing the staged value leaves an edit that stages the saved value back over
+    // itself: visibly dirty, and a pointless write on save. A bulk edit that returns a column to
+    // where it started (raise 10%, then undo it) is exactly that case.
+    dirty.patchMany(
+      edits.map((e) => ({
+        subjectId: e.subjectId,
+        columnId: e.columnId,
+        original: workbenchValueFor(e.row, e.columnId),
+        next: e.newValue,
+        name: e.row.name,
+        sku: e.row.sku,
+      })),
+    );
     closeBulkEdit();
   }
 
   /** Right-click extras: Revert (when the selection carries staged edits) + Save (when dirty). */
   function ownContextMenuExtras(): DataGridMenuItem[] {
     const extras: DataGridMenuItem[] = [];
-    if (selectionHasDirty()) extras.push({ id: 'revert', label: __('Revert'), run: revertSelection });
+    if (selectionHasDirty())
+      extras.push({ id: 'revert', label: __('Revert'), run: revertSelection });
     if (dirty.isDirty()) extras.push({ id: 'save', label: __('Save'), run: openSaveReview });
     return extras;
+  }
+
+  /**
+   * The Product column's own header-menu entry: how a variation names itself.
+   *
+   * It lives here rather than in the display settings because it is a property of ONE column, and a
+   * page-level setting whose effect is confined to a single column has to be found by elimination.
+   * On the header it is where the operator is already looking when the names read wrong.
+   *
+   * Shown whenever the column is, including on a catalogue with no variable products: it is a stored
+   * preference, not a command against the loaded rows, and gating it on what happens to be on screen
+   * would make it appear and disappear as the operator folds a family open.
+   */
+  function ownHeaderMenuExtras(columnId: string): DataGridMenuItem[] {
+    if (columnId !== 'name') return [];
+    return [
+      {
+        id: 'variation-names',
+        label: __('Variation names'),
+        children: [
+          {
+            id: 'variation-names-full',
+            // Deliberately the WooCommerce words a merchant sees on the product screen, not the
+            // domain's: this row is a variation of a variable product, never an "aggregate member".
+            label: __('Full product name'),
+            checked: !compactVariations(),
+            run: () => setCompactVariations(false),
+          },
+          {
+            id: 'variation-names-attrs',
+            label: __('Attributes only'),
+            checked: compactVariations(),
+            run: () => setCompactVariations(true),
+          },
+        ],
+      },
+    ];
   }
 
   // Surface the row-checkbox selection (as subject ids) to the host so it can build its own bulk-action
   // bar — the grid stays free of surface-specific actions (worksheets, supplier assign, …).
   createEffect(() => {
     const sel = rowSelection();
-    props.onSelectionChange?.(Object.keys(sel).filter((k) => sel[k]).map(Number));
+    props.onSelectionChange?.(
+      Object.keys(sel)
+        .filter((k) => sel[k])
+        .map(Number),
+    );
   });
 
   const handles: WorkbenchHandles = {
@@ -1232,32 +1884,52 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
     loadAllPages: async () => {
       while (query.hasNextPage && !query.isFetchingNextPage) await query.fetchNextPage();
     },
-    selectSubjectRows: (subjectIds) => {
-      const ids = new Set(subjectIds);
-      const display = rows();
-      const colCount = apiSelectableColumnIds().length;
-      const idxs: number[] = [];
-      for (let i = 0; i < display.length; i++) if (ids.has(display[i].subjectId)) idxs.push(i);
-      if (idxs.length === 0 || colCount === 0) {
+    getActiveCell: () => {
+      const active = cellSelection().active;
+      if (active === null) return null;
+      const subjectId = rows()[active.row]?.subjectId;
+      const columnId = apiSelectableColumnIds()[active.col];
+
+      return subjectId === undefined || columnId === undefined ? null : { subjectId, columnId };
+    },
+    selectCells: (cells, active) => {
+      const rowIndexBySubject = new Map<number, number>();
+      rows().forEach((row, index) => rowIndexBySubject.set(row.subjectId, index));
+      const colIndexById = new Map<string, number>();
+      apiSelectableColumnIds().forEach((id, index) => colIndexById.set(id, index));
+
+      // Cells whose row or column is no longer on screen simply fail to resolve and drop out. That
+      // is the whole of the collapse case: the host re-applies what it had, and the rows that went
+      // away take their selection with them.
+      const coords: CellCoord[] = [];
+      for (const cell of cells) {
+        const row = rowIndexBySubject.get(cell.subjectId);
+        const col = colIndexById.get(cell.columnId);
+        if (row !== undefined && col !== undefined) coords.push({ row, col });
+      }
+      if (coords.length === 0) {
         setCellSelection(EMPTY_SELECTION);
+
         return;
       }
-      // Group contiguous row indices into full-width ranges (a parent + its variations are adjacent).
-      const ranges: SelectionState['ranges'] = [];
-      let start = idxs[0];
-      let prev = idxs[0];
-      for (let k = 1; k < idxs.length; k++) {
-        if (idxs[k] === prev + 1) {
-          prev = idxs[k];
-          continue;
-        }
-        ranges.push({ r1: start, c1: 0, r2: prev, c2: colCount - 1 });
-        start = idxs[k];
-        prev = idxs[k];
+
+      let cursor: CellCoord | null = null;
+      if (active) {
+        const row = rowIndexBySubject.get(active.subjectId);
+        const col = colIndexById.get(active.columnId);
+        if (row !== undefined && col !== undefined) cursor = { row, col };
       }
-      ranges.push({ r1: start, c1: 0, r2: prev, c2: colCount - 1 });
-      const active = { row: idxs[0], col: 0 };
-      setCellSelection({ active, anchor: active, ranges });
+      // Fallback: the selection's top-left, so the cursor lands somewhere the user can see rather
+      // than wherever the caller happened to list first.
+      cursor ??= coords.reduce((best, c) =>
+        c.row < best.row || (c.row === best.row && c.col < best.col) ? c : best,
+      );
+
+      setCellSelection({
+        active: cursor,
+        anchor: cursor,
+        ranges: selectionRectsFromCells(coords),
+      });
     },
     toggleLayout: () => toggleLayout(),
   };
@@ -1300,6 +1972,18 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   const bespokeColumns = createMemo(() => {
     const merged = new Map(staticBespoke);
     for (const [id, def] of buildStockColumns(stableColumns(), stockDeps)) merged.set(id, def);
+    // A bespoke def's grid header is the server's canonical label — the one name the column manager,
+    // the tooltip and a per-language admin rename all speak, so the grid never disagrees with them.
+    // (The defs still carry a header string, but only as the pre-metadata first-paint fallback; once
+    // the column list arrives this assignment supersedes it.) A merchant who wants a column narrower
+    // renames it, and that flows through here too, since a rename is just a different `meta.label`.
+    // Generic datatype-view and stock columns already build their header from `meta.label`, so this
+    // re-asserts what they have; it exists for the bespoke defs, whose built-in header it replaces.
+    for (const meta of stableColumns()) {
+      const def = merged.get(meta.id);
+      if (def !== undefined) merged.set(meta.id, { ...def, header: meta.label });
+    }
+
     return merged;
   });
 
@@ -1322,17 +2006,30 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
             <Button
               variant="secondary"
               class="px-2!"
-              aria-label={effectiveLayout() === 'record' ? __('Switch to table view') : __('Switch to record view')}
-              title={effectiveLayout() === 'record' ? __('Switch to table view') : __('Switch to record view')}
+              aria-label={
+                effectiveLayout() === 'record'
+                  ? __('Switch to table view')
+                  : __('Switch to record view')
+              }
+              title={
+                effectiveLayout() === 'record'
+                  ? __('Switch to table view')
+                  : __('Switch to record view')
+              }
               onClick={() => toggleLayout()}
             >
-              {effectiveLayout() === 'record'
-                ? <TableViewIcon class="h-5 w-5" />
-                : <RecordViewIcon class="h-5 w-5" />}
+              {effectiveLayout() === 'record' ? (
+                <TableViewIcon class="h-5 w-5" />
+              ) : (
+                <RecordViewIcon class="h-5 w-5" />
+              )}
             </Button>
           </Show>
           {props.toolbarExtra}
           <div class="ml-auto flex items-center gap-2">
+            <Button disabled={!dirty.isDirty()} onClick={() => openSaveReview()}>
+              {__('Save')}
+            </Button>
             <Button
               variant="secondary"
               class="px-2!"
@@ -1341,12 +2038,6 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
               onClick={() => handles.openColumnManager()}
             >
               <ColumnsSettingsIcon class="h-5 w-5" />
-            </Button>
-            <Button
-              disabled={!dirty.isDirty()}
-              onClick={() => openSaveReview()}
-            >
-              {__('Save')}
             </Button>
           </div>
         </div>
@@ -1402,11 +2093,9 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
           drilldownSearchOptions={
             props.ctx.capabilities.editProducts
               ? async (q) => {
-                  const res = await getJson<{ products: Array<{ postId: number; name: string; sku: string }> }>(
-                    props.ctx,
-                    '/products/search',
-                    { q, limit: '20' },
-                  );
+                  const res = await getJson<{
+                    products: Array<{ postId: number; name: string; sku: string }>;
+                  }>(props.ctx, '/products/search', { q, limit: '20' });
                   return res.products.map((p) => ({
                     value: String(p.postId),
                     label: p.sku ? `${p.name} (${p.sku})` : p.name,
@@ -1419,13 +2108,24 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
             if (message !== '') toast.error(message);
           }}
           onClipboardSuccess={(message) => toast.success(message)}
-          contextMenuExtras={(args) => [...(props.contextMenuExtras?.(args) ?? []), ...ownContextMenuExtras()]}
+          contextMenuExtras={(args) => [
+            ...(props.contextMenuExtras?.(args) ?? []),
+            ...ownContextMenuExtras(),
+          ]}
+          headerMenuExtras={(args) => [
+            ...(props.headerMenuExtras?.(args) ?? []),
+            ...ownHeaderMenuExtras(args.columnId),
+          ]}
           componentChoiceId={props.componentChoiceId}
           rowAttrs={props.rowAttrs}
           copyAsJsonAllowed={props.copyAsJsonAllowed}
           copyAsJsonUpgradeHint={props.copyAsJsonUpgradeHint}
           keyHandlers={[saveKeyHandler, ...(props.extraKeyHandlers ?? [])]}
-          keyHandlersInGrid={[inGridSaveKeyHandler, backspaceRevertHandler, ...(props.extraInGridKeyHandlers ?? [])]}
+          keyHandlersInGrid={[
+            inGridSaveKeyHandler,
+            backspaceRevertHandler,
+            ...(props.extraInGridKeyHandlers ?? []),
+          ]}
           // ── Controlled state ──
           sorting={tableSorting}
           onSortingChange={(next) => {
@@ -1442,6 +2142,8 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
           expandedColumnSections={expandedColSections}
           setExpandedColumnSections={(updater) => setExpandedColSections((prev) => updater(prev))}
           onResetColumns={resetColumns}
+          canRenameColumns={() => props.ctx.capabilities.manageSettings === true}
+          onRenameColumn={renameColumn}
           rowSelection={rowSelection}
           setRowSelection={(updater) => setRowSelection((prev) => updater(prev))}
           cellSelection={cellSelection}
@@ -1452,11 +2154,7 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
           }}
           fallback={
             props.fallback ??
-            (query.isPending ? (
-              <>{__('Loading…')}</>
-            ) : (
-              <>{__('No products found.')}</>
-            ))
+            (query.isPending ? <>{__('Loading…')}</> : <>{__('No products found.')}</>)
           }
           apiRef={(api) => {
             apiFocusGrid = api.focusGrid;
@@ -1468,17 +2166,90 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
         />
       </div>
 
+      {/* ── Save status: progress while an apply goes out, then how it ended ── */}
+      <Show when={applyStatus()}>
+        {(status) => (
+          <div
+            role="status"
+            aria-live="polite"
+            class="flex shrink-0 items-center gap-3 border-t border-border px-1 pt-2 text-sm"
+          >
+            <Show
+              when={status().active > 0}
+              fallback={
+                <>
+                  <span
+                    class={
+                      status().notSaved > 0 || status().detail !== null
+                        ? 'min-w-0 flex-1 truncate text-red-700'
+                        : 'min-w-0 flex-1 truncate text-text-muted'
+                    }
+                    title={status().detail ?? undefined}
+                  >
+                    {[
+                      status().saved > 0
+                        ? sprintf(
+                            /* translators: %d: number of product rows saved */
+                            _n('%d row saved', '%d rows saved', status().saved),
+                            status().saved,
+                          )
+                        : null,
+                      status().notSaved > 0
+                        ? sprintf(
+                            /* translators: %d: number of product rows the save did not apply */
+                            _n('%d row not saved', '%d rows not saved', status().notSaved),
+                            status().notSaved,
+                          )
+                        : null,
+                      status().detail,
+                    ]
+                      .filter((part): part is string => part !== null && part !== '')
+                      .join(' · ')}
+                  </span>
+                  <Show when={status().notSaved > 0}>
+                    <Button variant="secondary" size="sm" onClick={() => openSaveReview()}>
+                      {_x(
+                        'Review',
+                        'workbench save status: open the review of unsaved rows, button',
+                      )}
+                    </Button>
+                  </Show>
+                  <IconButton
+                    label={_x('Dismiss', 'workbench save status: close the strip, button')}
+                    onClick={() => setApplyStatus(null)}
+                  >
+                    ✕
+                  </IconButton>
+                </>
+              }
+            >
+              <Spinner />
+              <span class="tabular-nums text-text-muted">
+                {sprintf(
+                  /* translators: 1: rows sent so far, 2: rows in the save (the plural follows it) */
+                  _n('Saving %1$d of %2$d row…', 'Saving %1$d of %2$d rows…', status().total),
+                  status().done,
+                  status().total,
+                )}
+              </span>
+            </Show>
+          </div>
+        )}
+      </Show>
+
       {/* ── Footer ── */}
-      <div class="flex shrink-0 items-center justify-between py-2 text-sm text-text-muted">
-        <Show when={query.data} fallback={<span>—</span>}>
-          <span>
-            {loadedCount()} / {totalCount()}
-          </span>
-        </Show>
-        <Show when={query.isFetchingNextPage}>
-          <span>{__('Loading more…')}</span>
-        </Show>
-      </div>
+      <Show when={props.showFooterCount !== false}>
+        <div class="flex shrink-0 items-center justify-between py-2 text-sm text-text-muted">
+          <Show when={query.data} fallback={<span>—</span>}>
+            <span>
+              {loadedCount()} / {totalCount()}
+            </span>
+          </Show>
+          <Show when={query.isFetchingNextPage}>
+            <span>{__('Loading more…')}</span>
+          </Show>
+        </div>
+      </Show>
 
       {/* ── Save-review (shared modal; v2 shows non-stock edit groups, v3 adds the on-hand group) ── */}
       <Show when={showReviewModal() && dirty.isDirty()}>
@@ -1487,7 +2258,6 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
           governanceNotes={governanceNotes()}
           space={stableTaxonomySpace()}
           error={saveError()}
-          pending={saving()}
           mount={portalRoot}
           onConfirm={(reason, dispositions) => void commitSave(reason, dispositions)}
           onCancel={closeSaveReview}

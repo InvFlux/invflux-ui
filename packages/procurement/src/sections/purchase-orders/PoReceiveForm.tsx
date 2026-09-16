@@ -1,8 +1,12 @@
 import { __, _n, sprintf } from '@invflux/i18n';
 import { createEffect, createSignal, type JSX, on, onCleanup, Show } from 'solid-js';
-import { Button, SplitActionButton } from '@invflux/ui';
+import { Button, SplitActionButton, Textarea } from '@invflux/ui';
 import { PoReceiveGrid } from './PoReceiveGrid';
-import { PO_RECEIVE_ACTIONS_SCOPE, type PoReceiveActionContext, registerPoReceiveActions } from './poReceiveActions';
+import {
+  PO_RECEIVE_ACTIONS_SCOPE,
+  type PoReceiveActionContext,
+  registerPoReceiveActions,
+} from './poReceiveActions';
 import type { PoLine, ReceivingSessionRow } from './types';
 
 /** A staged receipt line the parent posts to /receive on confirm (alias of the persisted WIP row). */
@@ -52,6 +56,11 @@ export function PoReceiveForm(props: {
   /** Governance cap: may finalize (confirm / close short) WITHOUT counting every line. Without it, the
    *  worker must address every line first (a staged value — incl. 0 — or nothing outstanding). */
   canLax: boolean;
+  /** Whether barcode (GTIN) matching is available; passed straight to the grid. */
+  hasPro: boolean;
+  /** Governance cap: may finish the order on less than was ordered. Server-enforced; mirrored here
+   *  so the action is disabled rather than offered and then refused. */
+  canCloseShort: boolean;
 }): JSX.Element {
   // Seed the staged state once from any persisted WIP (keyed by PO-line id). A WIP row exists only
   // for a *counted* line, so its `received` is restored verbatim — including 0 ("checked, none
@@ -161,33 +170,46 @@ export function PoReceiveForm(props: {
   const wipRows = (): ReceiveRow[] =>
     props.lines
       .filter((l) => null !== recvFor(l.id))
-      .map((l) => ({ poLineId: l.id, received: recvFor(l.id) ?? 0, damaged: Math.min(recvFor(l.id) ?? 0, dmgFor(l.id) ?? 0) }));
+      .map((l) => ({
+        poLineId: l.id,
+        received: recvFor(l.id) ?? 0,
+        damaged: Math.min(recvFor(l.id) ?? 0, dmgFor(l.id) ?? 0),
+      }));
 
   // Confirm shape: only lines that actually received units (0-count lines record no receipt line).
   const confirmRows = (): ReceiveRow[] => wipRows().filter((r) => r.received > 0);
 
   const anyReceived = (): boolean => confirmRows().length > 0;
-  // Nothing actually received this session (every line blank or a staged 0) — there's no receipt to log,
-  // so the session cancels rather than finalizes. Drives the [Cancel reception] affordance.
-  const sessionEmpty = (): boolean => !anyReceived();
+  // Nothing entered at all — the count is untouched, so Cancel is the only thing to offer. A staged 0
+  // is not nothing: it says "checked, none arrived", which is exactly what a close-short rests on, so
+  // it turns the finish options on even though no receipt would be logged.
+  const anyCounted = (): boolean => props.lines.some((l) => null !== recvFor(l.id));
+  const sessionEmpty = (): boolean => !anyCounted();
+  // Whether an earlier delivery already landed — what makes finishing short on nothing a real outcome.
+  const hasEarlierReceipts = (): boolean => props.lines.some((l) => l.qtyReceived > 0);
   // Good qty for a line this session (what reaches stock).
-  const goodThisSession = (l: PoLine): number => Math.max(0, (recvFor(l.id) ?? 0) - (dmgFor(l.id) ?? 0));
+  const goodThisSession = (l: PoLine): number =>
+    Math.max(0, (recvFor(l.id) ?? 0) - (dmgFor(l.id) ?? 0));
   // Review discipline: every line that can still receive must be explicitly counted before finalizing —
   // 0 is a valid count ("checked, none arrived"); a blank cell gates the receipt. Lines with nothing open
   // (already fully received on an earlier delivery, or a zero-qty line) need no count — they can't take
   // more. The `invflux_gr_close_short_lax` cap (props.canLax) waives the gate for trusted roles.
-  const allCounted = (): boolean => props.lines.every((l) => 0 === l.qtyOpen || null !== recvFor(l.id));
+  const allCounted = (): boolean =>
+    props.lines.every((l) => 0 === l.qtyOpen || null !== recvFor(l.id));
   const gateAllCounted = (): boolean => props.canLax || allCounted();
   // A line is "short" when its CUMULATIVE good (received-so-far + this session) is below the ordered qty —
   // matching the server's qty_open, so the pre-confirm hint agrees with the prompt. A line fully received
   // across earlier deliveries is NOT short even if this session adds nothing to it.
-  const shortLines = (): number => props.lines.filter((l) => l.qtyReceived + goodThisSession(l) < l.requestedQty).length;
+  const shortLines = (): number =>
+    props.lines.filter((l) => l.qtyReceived + goodThisSession(l) < l.qtyRequested).length;
   const isShort = (): boolean => shortLines() > 0;
 
   // The three finalize effects. Each resolves FX first (a missing required rate flags + focuses the
   // field and aborts), then calls the matching parent handler with the committed rows/note/rate.
   // Keeping a PO open across deliveries is base behaviour — no tier gate here.
-  const runWithFx = (effect: (rows: ReceiveRow[], note: string, fxRate: string | null) => void): void => {
+  const runWithFx = (
+    effect: (rows: ReceiveRow[], note: string, fxRate: string | null) => void,
+  ): void => {
     const fx = resolveFx();
     if (undefined === fx) return; // foreign receipt missing its rate — blocked + flagged
     effect(confirmRows(), note(), fx);
@@ -202,6 +224,9 @@ export function PoReceiveForm(props: {
     isShort: isShort(),
     shortCount: shortLines(),
     gateOk: gateAllCounted(),
+    canCloseShort: props.canCloseShort,
+    anyReceived: anyReceived(),
+    hasEarlierReceipts: hasEarlierReceipts(),
     busy: props.pending,
     onConfirm: doConfirm,
     onKeepOpen: doKeepOpen,
@@ -210,22 +235,35 @@ export function PoReceiveForm(props: {
 
   return (
     <div>
-      <p class="mb-3 text-sm text-slate-500">
-        {__('Enter what arrived per line — and how many are damaged — then confirm. Nothing is added to stock until you confirm the receipt.')}
+      <p class="mb-1 text-sm text-slate-500">
+        {__(
+          'Enter what arrived per line — and how many are damaged — then confirm. Nothing is added to stock until you confirm the receipt.',
+        )}
       </p>
 
-      <PoReceiveGrid poId={props.poId} lines={props.lines} received={received} damaged={damaged} setRecv={setRecv} setDmg={setDmg} />
+      <PoReceiveGrid
+        poId={props.poId}
+        lines={props.lines}
+        hasPro={props.hasPro}
+        received={received}
+        damaged={damaged}
+        setRecv={setRecv}
+        setDmg={setDmg}
+      />
 
       <label class="mt-4 block text-sm">
         <span class="mb-1 block font-medium text-slate-600">{__('Note (optional)')}</span>
-        <textarea
+        <Textarea
           rows="1"
+          noResize
           // Only size seeded content, and only after paint (scrollHeight is 0 pre-layout — that's the
           // "height: 0px" bug). An empty note keeps rows="1" with NO inline height; typing grows it.
           ref={(el) => {
             if ('' !== note()) requestAnimationFrame(() => autoGrowNote(el));
           }}
-          class="w-full resize-none overflow-hidden rounded border border-slate-300 px-2 py-1.5 text-sm focus:border-primary focus:outline-none"
+          // `overflow-hidden` is this field's own: the auto-grow keeps the box at content height, so
+          // a scrollbar would only ever appear for the instant before it resizes.
+          class="w-full overflow-hidden"
           placeholder={__('e.g. wrong item received, mis-pick, packaging issue…')}
           value={note()}
           onInput={(e) => {
@@ -243,9 +281,13 @@ export function PoReceiveForm(props: {
         <div class="flex justify-end mt-4">
           <div class="flex flex-col gap-1">
             <p class="text-xs text-text-muted">
-              {sprintf(__('1 %1$s = this many %2$s — applied to line costs at receipt'), props.currency, props.baseCurrency)}
+              {sprintf(
+                __('1 %1$s = this many %2$s — applied to line costs at receipt'),
+                props.currency,
+                props.baseCurrency,
+              )}
             </p>
-            <div class='flex items-center gap-3 justify-end'>
+            <div class="flex items-center gap-3 justify-end">
               <label for="gr-fx-rate" class="text-sm font-medium text-slate-600">
                 {sprintf(__('FX rate (%1$s → %2$s)'), props.currency, props.baseCurrency)}
               </label>
@@ -263,7 +305,7 @@ export function PoReceiveForm(props: {
                   'border-slate-300 focus:border-primary': !fxError(),
                 }}
                 value={fxRate()}
-                placeholder={props.currency + ' / ' + props.baseCurrency}
+                placeholder={props.baseCurrency + ' / ' + props.currency}
                 onInput={(e) => {
                   setFxRate(e.currentTarget.value);
                   if (fxError()) setFxError(false);
@@ -288,7 +330,14 @@ export function PoReceiveForm(props: {
             {__('Enter a received quantity on every open line (0 is fine) to finalize.')}
           </span>
         </Show>
-        <Show when={!sessionEmpty() && isShort()}>
+        <Show when={!sessionEmpty() && !anyReceived()}>
+          <span class="text-xs text-amber-600">
+            {__(
+              'Nothing arrived on the counted lines — cancel the count, or close the order short.',
+            )}
+          </span>
+        </Show>
+        <Show when={anyReceived() && isShort()}>
           <span class="text-xs text-amber-600">
             {sprintf(
               _n(
@@ -304,20 +353,20 @@ export function PoReceiveForm(props: {
             not short → "Confirm receipt" headlines; short → "Receive & keep open" headlines (the
             non-destructive default), with "Close short" (destructive) and a disabled "Confirm receipt"
             in the overflow. All three are base — no tier gate. */}
-        <Show
-          when={!sessionEmpty()}
-          fallback={
-            <Button
-              variant="secondary"
-              class="py-2"
-              title={__('Nothing received — discard this reception')}
-              disabled={props.pending}
-              onClick={() => props.onCancel()}
-            >
-              {__('Cancel reception')}
-            </Button>
-          }
-        >
+        {/* Cancel stays beside the finish options while nothing has been received: a count of zeroes
+            may end in a close-short, or just be abandoned. */}
+        <Show when={!anyReceived()}>
+          <Button
+            variant="secondary"
+            class="py-2"
+            title={__('Nothing received — discard this reception')}
+            disabled={props.pending}
+            onClick={() => props.onCancel()}
+          >
+            {__('Cancel reception')}
+          </Button>
+        </Show>
+        <Show when={!sessionEmpty()}>
           <SplitActionButton<PoReceiveActionContext>
             scope={PO_RECEIVE_ACTIONS_SCOPE}
             ctx={actionCtx()}

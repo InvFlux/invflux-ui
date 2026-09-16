@@ -83,8 +83,36 @@ export interface GridFilterBridgeOptions {
   }) => JSX.Element;
 }
 
+/**
+ * Collapse a `URLSearchParams` into the saved-filter parameter map: a key repeated more than once
+ * becomes a list, a key appearing once stays a scalar.
+ *
+ * The distinction is not cosmetic — it is what the surface reads back. A single-valued repeated
+ * param (`?id[]=7`) has to stay a list, or replaying it drops the array shape the reader expects,
+ * so the key's own spelling decides rather than how many values happen to be present today.
+ */
+function paramsToMap(params: URLSearchParams): Record<string, string | string[]> {
+  const out: Record<string, string | string[]> = {};
+  for (const [key, value] of params.entries()) {
+    const existing = out[key];
+    if (existing === undefined) {
+      out[key] = key.endsWith('[]') ? [value] : value;
+    } else if (Array.isArray(existing)) {
+      existing.push(value);
+    } else {
+      out[key] = [existing, value];
+    }
+  }
+
+  return out;
+}
+
 /** Default chip summary: up to two labels joined, else "first +N". */
-function defaultSummary(values: string[], options: ComboboxOption[], _meta?: GridFilterMeta): string {
+function defaultSummary(
+  values: string[],
+  options: ComboboxOption[],
+  _meta?: GridFilterMeta,
+): string {
   if (values.length === 0) return '';
   const labelFor = (v: string): string => options.find((o) => o.value === v)?.label ?? v;
   if (values.length <= 2) return values.map(labelFor).join(', ');
@@ -129,7 +157,11 @@ export function gridFiltersToDescriptors(
       // an empty chip would silently widen rather than narrow. Unchecking the last scope restores
       // the default instead.
       const setScopes = (value: string[]): void =>
-        opts.setModifier?.(meta.id, 'scopes', (value.length > 0 ? value : fallbackScopes).join(','));
+        opts.setModifier?.(
+          meta.id,
+          'scopes',
+          (value.length > 0 ? value : fallbackScopes).join(','),
+        );
 
       // Prefix the summary with the active non-default mode label ("None: ACME") so a chip is
       // unambiguous about include vs exclude vs intersection logic.
@@ -147,10 +179,17 @@ export function gridFiltersToDescriptors(
         : undefined;
 
       // `emptyMeansAll`: an empty value already matches everything, so the control shows ALL options
-      // checked when empty, and selecting all collapses back to empty (the inactive "no filter" state).
+      // marked when empty, and selecting all collapses back to empty (the inactive "no filter" state).
       // active/summary key off the RAW value (empty = inactive, no chip); only the control's displayed
-      // checkboxes use the all-when-empty value.
+      // marks use the all-when-empty value.
+      //
+      // That all-marked state is a DEFAULT, not a choice: nobody picked those options. So it renders
+      // as dots rather than checkmarks and the first click replaces it — the case the contract most
+      // needs, since a default that is *all* checked otherwise makes the first click appear to do
+      // nothing but clear. It earns no chip either: the chip's job is to explain an absence, and a
+      // default matching everything hides nothing.
       const emptyAll = meta.emptyMeansAll === true;
+      const isDefault = (): boolean => emptyAll && (values()[meta.id] ?? []).length === 0;
       const displayValue = (): string[] => {
         const raw = values()[meta.id] ?? [];
         return emptyAll && raw.length === 0 ? optionsFor().map((o) => o.value) : raw;
@@ -175,6 +214,16 @@ export function gridFiltersToDescriptors(
         options: optionsFor,
         onChange: emptyAll ? onChange : (next) => setValue(meta.id, next),
         clear: () => setValue(meta.id, []),
+        isDefault,
+        // Encoded through the same writer that puts this filter on the URL, rather than assembled
+        // here: `numeric_ids` dash-joins into a bare key while everything else repeats `id[]`, and
+        // a saved filter that guessed the shape would store something the surface cannot replay.
+        params: () => {
+          const params = new URLSearchParams();
+          writeFilterValuesToParams(params, { [meta.id]: displayValue() }, [meta]);
+
+          return paramsToMap(params);
+        },
         extra:
           (hasModes || hasScopes) && opts.extraFor
             ? () => opts.extraFor!({ meta, mode, setMode, scopes, setScopes })

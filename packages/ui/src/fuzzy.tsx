@@ -7,7 +7,8 @@ export interface FuzzyScore {
   indices: number[];
 }
 
-const isWordStart = (text: string, i: number): boolean => 0 === i || /[\s\-_./·,()[\]]/.test(text[i - 1] ?? '');
+const isWordStart = (text: string, i: number): boolean =>
+  0 === i || /[\s\-_./·,()[\]]/.test(text[i - 1] ?? '');
 
 /**
  * Score a needle against a label (subsequence match, case-insensitive). Returns null when the needle's
@@ -57,7 +58,9 @@ export function HighlightMatch(props: { text: string; query: string }): JSX.Elem
         const set = hit();
         return Array.from(props.text, (ch, i) =>
           set.has(i) ? (
-            <span class="font-semibold text-primary group-data-[highlighted]:text-inherit group-data-[highlighted]:underline">{ch}</span>
+            <span class="font-semibold text-primary group-data-[highlighted]:text-inherit group-data-[highlighted]:underline">
+              {ch}
+            </span>
           ) : (
             ch
           ),

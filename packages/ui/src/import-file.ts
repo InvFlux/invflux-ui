@@ -17,7 +17,10 @@ export interface ImportFileTransport {
  * Upload a file to the shared parse endpoint and return its rows (ragged rows are fine — the wizard's
  * column mapper aligns by column). Throws with the server's message on a rejected / unreadable file.
  */
-export async function parseImportFile(transport: ImportFileTransport, file: File): Promise<string[][]> {
+export async function parseImportFile(
+  transport: ImportFileTransport,
+  file: File,
+): Promise<string[][]> {
   const base = `${transport.apiRoot.replace(/\/$/, '')}/invflux/v1`;
   const form = new FormData();
   form.append('file', file);
@@ -49,7 +52,8 @@ export async function parseImportFile(transport: ImportFileTransport, file: File
 /** Learned header aliases, keyed by concept (`sku`, `cost`, `expected`, …). */
 export type ImportAliasMap = Record<string, string[]>;
 
-const restBase = (transport: ImportFileTransport): string => `${transport.apiRoot.replace(/\/$/, '')}/invflux/v1`;
+const restBase = (transport: ImportFileTransport): string =>
+  `${transport.apiRoot.replace(/\/$/, '')}/invflux/v1`;
 
 async function readError(res: Response, fallback: string): Promise<string> {
   try {
@@ -62,7 +66,9 @@ async function readError(res: Response, fallback: string): Promise<string> {
 
 /** GET the merchant's learned header aliases. Returns an empty map when none / unreadable. */
 export async function fetchImportAliases(transport: ImportFileTransport): Promise<ImportAliasMap> {
-  const res = await fetch(`${restBase(transport)}/import/aliases`, { headers: { Accept: 'application/json', 'X-WP-Nonce': transport.nonce } });
+  const res = await fetch(`${restBase(transport)}/import/aliases`, {
+    headers: { Accept: 'application/json', 'X-WP-Nonce': transport.nonce },
+  });
   if (!res.ok) return {};
   const data = (await res.json()) as { aliases?: ImportAliasMap };
   return data.aliases ?? {};
@@ -72,10 +78,18 @@ export async function fetchImportAliases(transport: ImportFileTransport): Promis
  * Teach one header → concept (append-only, import-operator gated). Returns the updated map. Fire-and-
  * forget friendly — the wizard applies the alias optimistically and only needs this to persist it.
  */
-export async function learnImportAlias(transport: ImportFileTransport, concept: string, header: string): Promise<ImportAliasMap> {
+export async function learnImportAlias(
+  transport: ImportFileTransport,
+  concept: string,
+  header: string,
+): Promise<ImportAliasMap> {
   const res = await fetch(`${restBase(transport)}/import/aliases/learn`, {
     method: 'POST',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-WP-Nonce': transport.nonce },
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'X-WP-Nonce': transport.nonce,
+    },
     body: JSON.stringify({ concept, header }),
   });
   if (!res.ok) throw new Error(await readError(res, `Could not save the alias (${res.status})`));
@@ -84,10 +98,17 @@ export async function learnImportAlias(transport: ImportFileTransport, concept: 
 }
 
 /** PUT the full alias map (settings-management gated) — wholesale replace for the Settings panel. */
-export async function saveImportAliases(transport: ImportFileTransport, aliases: ImportAliasMap): Promise<ImportAliasMap> {
+export async function saveImportAliases(
+  transport: ImportFileTransport,
+  aliases: ImportAliasMap,
+): Promise<ImportAliasMap> {
   const res = await fetch(`${restBase(transport)}/import/aliases`, {
     method: 'PUT',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-WP-Nonce': transport.nonce },
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'X-WP-Nonce': transport.nonce,
+    },
     body: JSON.stringify({ aliases }),
   });
   if (!res.ok) throw new Error(await readError(res, `Could not save aliases (${res.status})`));

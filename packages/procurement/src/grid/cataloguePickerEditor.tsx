@@ -33,7 +33,10 @@ function CataloguePickerEditor(props: EditProps): JSX.Element {
   const emptyMessage = (): string => {
     const label = cfg().supplierLabel ?? '';
     return 0 === (cfg().addOptions?.() ?? []).length
-      ? sprintf(__('All %s products added, no more available'), '' === label ? __('supplier') : label)
+      ? sprintf(
+          __('All %s products added, no more available'),
+          '' === label ? __('supplier') : label,
+        )
       : __('No matching products to add');
   };
 
@@ -97,5 +100,7 @@ export function registerCataloguePickerEditor(): void {
     return;
   }
   registered = true;
-  editRegistry.register('text:catalogue-add', 'invflux.catalogue-add', CataloguePickerEditor, { default: true });
+  editRegistry.register('text:catalogue-add', 'invflux.catalogue-add', CataloguePickerEditor, {
+    default: true,
+  });
 }

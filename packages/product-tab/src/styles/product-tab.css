@@ -1,34 +1,21 @@
-/* Tailwind — deliberately NOT the one-line `@import "tailwindcss"`, which is shorthand for the four
-   lines below with utilities wrapped in `@layer utilities`.
+/* Tailwind, in the expanded four-line form so the layer assignment is explicit.
 
-   We render into wp-admin, and this stylesheet is also mirrored into the **light DOM** for content
-   portalled out of the shadow root (modals, Kobalte listboxes). There, wp-admin's own stylesheets
-   apply — and they are **unlayered**. In the CSS cascade, unlayered author styles beat *every*
-   cascade layer regardless of specificity, so anything Tailwind puts in a layer loses to wp-admin
-   outright: `common.css`'s `p, .wp-die-message { margin: 1em 0 }` (0-0-1) silently outranked a
-   `.m-0` utility (0-1-0). Only `!important` escaped it.
-
-   So: keep theme/base/components layered (preflight MUST stay layered — it is element-based, and
-   this sheet is global once mirrored into the light DOM, so unlayering it would restyle all of
-   wp-admin), and emit **utilities unlayered**. Utilities are class-based, so they can only match
-   our own markup, and they now win against wp-admin on plain specificity.
-
-@layer theme, base, components;
-@import "tailwindcss/theme.css" layer(theme);
-@import "tailwindcss/preflight.css" layer(base);
-@import "tailwindcss/utilities.css";
-
-/* Hand wp-admin back the three class names it shares with Tailwind — see the file for the measured
-   collision set and the `revert` caveat. `@import` is only legal at the top of a sheet, so these
-   rules cannot rely on source order to beat the utilities they undo; they carry an id instead. */
-@import "../../../ui/src/styles/host-compat.css";
+   Utilities are layered — the ordinary Tailwind arrangement, and they can stay that way because this
+   sheet is only ever *adopted* by a shadow root, never mirrored into the document as a `<style>`.
+   That constraint is load-bearing: a `<style>` styles the whole document wherever it sits, and
+   wp-admin's own rules are unlayered, so they would outrank every layered utility regardless of
+   specificity. Both the tab's root and the portal root are shadow roots adopting this sheet, so it
+@layer theme, base, components, utilities;
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/preflight.css' layer(base);
+@import 'tailwindcss/utilities.css' layer(utilities);
 
 /* Scan shared UI primitives so utility classes used inside @invflux/ui components
    (Modal, CorrectionReviewModal, ToastRegion, …) make it into this SPA's CSS. */
 @source "../../../ui/src";
 
 /* Shared design tokens — see @invflux/ui theme.css. Everything below is product-tab's own. */
-@import "../../../ui/src/styles/theme.css";
+@import '../../../ui/src/styles/theme.css';
 
 @theme {
   /* This surface is embedded in a WooCommerce product screen rather than owning its own page, so
@@ -37,9 +24,9 @@
   --color-border: var(--color-border-host);
 
   /* Inline error banner — product-tab's own (App.tsx). No other surface renders this shape. */
-  --color-error-bg:     #fef2f2;
+  --color-error-bg: #fef2f2;
   --color-error-border: #dc2626;
-  --color-error-text:   #991b1b;
+  --color-error-text: #991b1b;
 
   /* DIVERGENCE, undocumented and preserved rather than resolved: the unified app uses #f8fafc.
      Kept so this extraction changes no pixels; worth unifying, but that is a visible change and
@@ -48,7 +35,9 @@
 }
 
 /* Base reset scoped to the shadow root — doesn't touch the host page */
-*, *::before, *::after {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
   /*
    * Tailwind v4 registers --tw-border-style via @property with initial-value:solid,
@@ -66,22 +55,4 @@
   color: var(--color-text);
   font-size: 0.8125rem;
   line-height: 1.5;
-}
-
-
-/* Preflight for the light-DOM portal root.
-   Inside the shadow root, preflight already zeroes these margins and wp-admin never reaches in. But
-   portalled content (modals, listboxes) lives in the light DOM, where preflight is layered and so
-   loses to wp-admin's unlayered element rules. This restores the shadow-DOM baseline so a component
-   looks the same wherever it is mounted.
-
-   The specificity is load-bearing: `:where()` keeps the id out of the sum, so the selector is 0-0-1
-   — level with wp-admin's own `p {}` / `h2 {}`, won on source order (this sheet is injected at
-   mount, after wp-admin's `<link>`s) — while any margin/padding utility (0-1-0) still beats it, so
-   `mt-4` on a modal heading keeps working. Raising this to `#id …` (1-0-1) would break every
-   spacing utility in a modal — don't.
-:where(#invflux-product-tab-portal)
-  :is(h1, h2, h3, h4, h5, h6, p, ul, ol, dl, dd, figure, blockquote, pre) {
-  margin: 0;
-  padding: 0;
 }

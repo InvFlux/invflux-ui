@@ -7,6 +7,12 @@ export interface ComboboxOption {
   label: string;
   depth?: number;
   disabled?: boolean;
+  /**
+   * Filter-facet count: how many rows picking this option would return, given every *other* filter
+   * currently applied. Absent means "not counted"; `0` renders as `0` rather than hiding the
+   * option, since "matches nothing right now" and "does not exist" are different facts.
+   */
+  count?: number;
 }
 
 export interface ComboboxProps {
@@ -41,6 +47,11 @@ export interface ComboboxProps {
    * the selection elsewhere (e.g. a FilterBar chip summary).
    */
   showSelectedTags?: boolean;
+  /**
+   * The selection is a **default** nobody chose, not a choice — marks each selected option with a
+   * dot instead of a checkmark. Multi-select only.
+   */
+  selectionIsDefault?: boolean;
 
   /** Portal target for the listbox; defaults to the shared PortalCtx (shadow-DOM escape). */
   mount?: HTMLElement;
@@ -82,6 +93,7 @@ export function Combobox(props: ComboboxProps): JSX.Element {
         disabled={props.disabled}
         autoFocus={props.autoFocus}
         showSelectedTags={props.showSelectedTags}
+        selectionIsDefault={props.selectionIsDefault}
         onSearch={props.onSearchTextChange}
         loading={props.loading}
         emptyMessage={emptyMessage()}

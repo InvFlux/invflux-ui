@@ -52,9 +52,17 @@ export function isActive(state: SelectionState, row: number, col: number): boole
   return state.active !== null && state.active.row === row && state.active.col === col;
 }
 
-/** True when the selection covers more than a single cell (any range wider/taller than 1×1). */
+/**
+ * True when the selection covers more than a single cell. Two ways to get there: a single range
+ * wider/taller than 1×1 (drag / shift-click), OR more than one range — disjoint cells built with
+ * Ctrl-click, where each range is 1×1 but together they are several cells. Missing the second case is
+ * why Ctrl-click-multiselect + F2 fell through to the single-cell inline editor instead of bulk edit.
+ */
 export function isMultiCell(state: SelectionState): boolean {
-  return state.ranges.some((rect) => rect.r1 !== rect.r2 || rect.c1 !== rect.c2);
+  return (
+    state.ranges.length > 1 ||
+    state.ranges.some((rect) => rect.r1 !== rect.r2 || rect.c1 !== rect.c2)
+  );
 }
 
 /**
@@ -163,10 +171,14 @@ export function toggleCell(state: SelectionState, coord: CellCoord): SelectionSt
       continue;
     }
     // Split the containing rect into up to four bands that exclude exactly (coord.row, coord.col).
-    if (coord.row > rect.r1) ranges.push({ r1: rect.r1, c1: rect.c1, r2: coord.row - 1, c2: rect.c2 }); // above
-    if (coord.row < rect.r2) ranges.push({ r1: coord.row + 1, c1: rect.c1, r2: rect.r2, c2: rect.c2 }); // below
-    if (coord.col > rect.c1) ranges.push({ r1: coord.row, c1: rect.c1, r2: coord.row, c2: coord.col - 1 }); // left of cell
-    if (coord.col < rect.c2) ranges.push({ r1: coord.row, c1: coord.col + 1, r2: coord.row, c2: rect.c2 }); // right of cell
+    if (coord.row > rect.r1)
+      ranges.push({ r1: rect.r1, c1: rect.c1, r2: coord.row - 1, c2: rect.c2 }); // above
+    if (coord.row < rect.r2)
+      ranges.push({ r1: coord.row + 1, c1: rect.c1, r2: rect.r2, c2: rect.c2 }); // below
+    if (coord.col > rect.c1)
+      ranges.push({ r1: coord.row, c1: rect.c1, r2: coord.row, c2: coord.col - 1 }); // left of cell
+    if (coord.col < rect.c2)
+      ranges.push({ r1: coord.row, c1: coord.col + 1, r2: coord.row, c2: rect.c2 }); // right of cell
   }
 
   return { active: coord, anchor: coord, ranges };
@@ -216,7 +228,11 @@ export function selectColumns(c1: number, c2: number, rows: number): SelectionSt
   const lo = Math.max(0, Math.min(c1, c2));
   const hi = Math.max(c1, c2);
 
-  return { active: { row: 0, col: lo }, anchor: { row: 0, col: lo }, ranges: [{ r1: 0, c1: lo, r2: rows - 1, c2: hi }] };
+  return {
+    active: { row: 0, col: lo },
+    anchor: { row: 0, col: lo },
+    ranges: [{ r1: 0, c1: lo, r2: rows - 1, c2: hi }],
+  };
 }
 
 /** Select entire rows r1..r2 across all columns (Excel Shift+Space over the selection's row span). */
@@ -225,5 +241,67 @@ export function selectRows(r1: number, r2: number, cols: number): SelectionState
   const lo = Math.max(0, Math.min(r1, r2));
   const hi = Math.max(r1, r2);
 
-  return { active: { row: lo, col: 0 }, anchor: { row: lo, col: 0 }, ranges: [{ r1: lo, c1: 0, r2: hi, c2: cols - 1 }] };
+  return {
+    active: { row: lo, col: 0 },
+    anchor: { row: lo, col: 0 },
+    ranges: [{ r1: lo, c1: 0, r2: hi, c2: cols - 1 }],
+  };
+}
+
+/**
+ * Build the minimal-ish set of rects covering exactly `cells` — the inverse of reading a selection
+ * back out as coordinates.
+ *
+ * Needed because the selection is stored as rectangles over row/column INDICES, while anything that
+ * has to survive a change to the displayed rows (folding a variation group, say) must be carried as
+ * stable identities and re-projected afterwards. Emitting one 1×1 rect per cell would be correct but
+ * turns a folded family into hundreds of rects that every cell render then scans; so equal column
+ * runs on vertically adjacent rows are merged, which collapses the common case — the same columns
+ * across a parent's whole variation set — back to one rect per run.
+ *
+ * Input order does not matter, and duplicates are ignored.
+ */
+export function selectionRectsFromCells(cells: Iterable<CellCoord>): SelectionRect[] {
+  const colsByRow = new Map<number, Set<number>>();
+  for (const { row, col } of cells) {
+    let set = colsByRow.get(row);
+    if (set === undefined) {
+      set = new Set<number>();
+      colsByRow.set(row, set);
+    }
+    set.add(col);
+  }
+
+  const out: SelectionRect[] = [];
+  // Rects still eligible to grow downward, keyed by their column run.
+  let open = new Map<string, SelectionRect>();
+  let previousRow: number | null = null;
+
+  for (const row of [...colsByRow.keys()].sort((a, b) => a - b)) {
+    const cols = [...(colsByRow.get(row) ?? [])].sort((a, b) => a - b);
+    const runs: SelectionRect[] = [];
+    for (const col of cols) {
+      const last = runs[runs.length - 1];
+      if (last !== undefined && col === last.c2 + 1) last.c2 = col;
+      else runs.push({ r1: row, c1: col, r2: row, c2: col });
+    }
+
+    const next = new Map<string, SelectionRect>();
+    const adjacent = previousRow !== null && row === previousRow + 1;
+    for (const run of runs) {
+      const key = `${run.c1}:${run.c2}`;
+      const growable = adjacent ? open.get(key) : undefined;
+      if (growable !== undefined) {
+        growable.r2 = row;
+        next.set(key, growable);
+      } else {
+        out.push(run);
+        next.set(key, run);
+      }
+    }
+    open = next;
+    previousRow = row;
+  }
+
+  return out;
 }

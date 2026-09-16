@@ -24,7 +24,11 @@ const TONE: Record<Exclude<VarianceStatus, 'open'>, string> = {
   match: 'bg-green-100 text-green-700',
 };
 
-export function VarianceBadge(props: { status: VarianceStatus; varianceQty: number; kind: 'delivery' | 'confirmation' }): JSX.Element {
+export function VarianceBadge(props: {
+  status: VarianceStatus;
+  varianceQty: number;
+  kind: 'delivery' | 'confirmation';
+}): JSX.Element {
   const magnitude = (): number => Math.abs(props.varianceQty);
   // Only `open` (still-filling delivery) is silent; both a delivery match ("Exact") and a confirmation
   // match ("Confirmed") render as positive reconciliation.
@@ -49,8 +53,8 @@ export function VarianceBadge(props: { status: VarianceStatus; varianceQty: numb
         return sprintf(__('Over +%d'), magnitude());
       case 'short':
         return magnitude() > 0
-          // translators: %d = units received short of the baseline quantity.
-          ? sprintf(__('Short −%d'), magnitude())
+          ? // translators: %d = units received short of the baseline quantity.
+            sprintf(__('Short −%d'), magnitude())
           : __('Short');
       default:
         return __('Exact');
@@ -61,7 +65,9 @@ export function VarianceBadge(props: { status: VarianceStatus; varianceQty: numb
 
   return (
     <Show when={visible()}>
-      <span class={`inline-flex items-center rounded px-2 py-0.5 text-xs font-medium ${tone()}`}>{text()}</span>
+      <span class={`inline-flex items-center rounded px-2 py-0.5 text-xs font-medium ${tone()}`}>
+        {text()}
+      </span>
     </Show>
   );
 }

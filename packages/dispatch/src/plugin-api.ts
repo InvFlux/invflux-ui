@@ -15,6 +15,7 @@ import {
   installPluginApi as installSharedPluginApi,
   type PluginApi,
 } from '@invflux/ui';
+import { queueSortEntitlements, queueSortRegistry, type QueueSortRule } from './queueSort';
 import {
   createEffect,
   createMemo,
@@ -65,6 +66,22 @@ export interface DispatchBridge {
    * component renders with the **host's** stylesheet, an add-on gets them pre-styled without
    * generating those utilities into its own sheet.
    */
+  /**
+   * Contribute a ranking rule to the dispatch queue's client-side sort.
+   *
+   * The queue loads its working set once and then polls for deltas, so after the first page every
+   * row an operator sees was ordered on the client. A capability that ranks orders therefore has to
+   * register **both** halves — this and the server's `QueueSortRegistry` fragment — with the same
+   * `order` number, or the two disagree the moment a delta arrives.
+   *
+   * Gate the registration on whatever gates the capability. The add-on's bundle loads whenever its
+   * plugin is active, which is not the same question as whether its licence currently allows the
+   * feature; registering unconditionally would leave a lapsed install sorting by something the
+   * server has stopped honouring.
+   */
+  registerQueueSort: (rule: QueueSortRule) => void;
+  /** This install's dispatch entitlements, for gating a contributed rule. */
+  entitlements: () => Record<string, boolean>;
   ui: {
     Button: typeof Button;
     IconButton: typeof IconButton;
@@ -92,10 +109,34 @@ export type DispatchPluginApi = PluginApi<DispatchBridge>;
  */
 export function installPluginApi(): DispatchPluginApi {
   return installSharedPluginApi<DispatchBridge>('dispatch', {
-    solid: { createSignal, createMemo, createEffect, onMount, onCleanup, Show, For, Switch, Match, Dynamic },
+    solid: {
+      createSignal,
+      createMemo,
+      createEffect,
+      onMount,
+      onCleanup,
+      Show,
+      For,
+      Switch,
+      Match,
+      Dynamic,
+    },
+    registerQueueSort: (rule) => queueSortRegistry.register(rule),
+    entitlements: () => queueSortEntitlements(),
     ui: {
-      Button, IconButton, Input, Select, Textarea, Checkbox, Pill, Spinner,
-      Combobox, Modal, StagePill, StockConcernBadge, ViewerBadge,
+      Button,
+      IconButton,
+      Input,
+      Select,
+      Textarea,
+      Checkbox,
+      Pill,
+      Spinner,
+      Combobox,
+      Modal,
+      StagePill,
+      StockConcernBadge,
+      ViewerBadge,
     },
   });
 }

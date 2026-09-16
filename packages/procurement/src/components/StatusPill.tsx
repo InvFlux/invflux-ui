@@ -37,8 +37,6 @@ function label(status: string): string {
       return __('Received');
     case 'cancelled':
       return __('Cancelled');
-    case 'archived':
-      return __('Archived');
     default:
       return status;
   }

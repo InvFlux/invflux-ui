@@ -1,10 +1,11 @@
-import { For, Show, createMemo, createSignal, type JSX } from 'solid-js';
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, type JSX } from 'solid-js';
 import { __, _n, _x, sprintf } from '@invflux/i18n';
 import { formatRelative as formatRelativeTime, formatWallClock } from './Timeline';
 import { TagDeltaPills, type TagPillResolver } from './AnnotationTimelineRow';
-import { tagColor, tagInk, type TagColor } from './tagPalette';
+import { paletteInk, paletteStyle } from './tagPalette';
 import { Button } from './Button';
 import { FoldingSection } from './FoldingSection';
+import { ErrorBanner } from './ErrorBanner';
 import {
   diffTokens,
   isThreadDeleted,
@@ -47,7 +48,6 @@ export function TagTogglePicker(props: {
       <For each={props.tags}>
         {(t) => {
           const on = (): boolean => props.selected.has(t.id);
-          const c = (): TagColor => tagColor(t.colorId);
           return (
             <button
               type="button"
@@ -56,8 +56,11 @@ export function TagTogglePicker(props: {
               classList={{ 'opacity-75 hover:opacity-100': !on() }}
               style={
                 on()
-                  ? { 'background-color': c().bg, color: c().fg }
-                  : { 'box-shadow': `inset 0 0 0 1px ${tagInk(c())}`, color: tagInk(c()) }
+                  ? paletteStyle(t.colorId)
+                  : {
+                      'box-shadow': `inset 0 0 0 1px ${paletteInk(t.colorId)}`,
+                      color: paletteInk(t.colorId),
+                    }
               }
               title={on() ? sprintf(__('Remove %s'), t.name) : sprintf(__('Add %s'), t.name)}
               onClick={() => props.onToggle(t.id)}
@@ -95,6 +98,8 @@ export interface AnnotationsPanelProps {
   onEdit: (threadId: string, body: string) => Promise<unknown> | void;
   /** Soft-delete a thread (append a delete marker). */
   onDelete: (threadId: string) => Promise<unknown> | void;
+  /** Report an unsent note draft, so a host tab can show unsaved work. */
+  onDraftChange?: (hasDraft: boolean) => void;
   /** Resolves a tag id → {name, colorId} so tag-delta annotations render as chips (notes carrying
    * a tag change). Omit on surfaces without tags. */
   resolveTag?: TagPillResolver;
@@ -110,7 +115,6 @@ export interface AnnotationsPanelProps {
   defaultExpanded?: boolean;
 }
 
-
 export function AnnotationsPanel(props: AnnotationsPanelProps): JSX.Element {
   const [expanded, setExpanded] = createSignal(props.defaultExpanded ?? false);
   const [composing, setComposing] = createSignal(false);
@@ -119,9 +123,7 @@ export function AnnotationsPanel(props: AnnotationsPanelProps): JSX.Element {
   const [editingId, setEditingId] = createSignal<string | null>(null);
   const collapsible = (): boolean => props.collapsible ?? true;
 
-  const liveCount = createMemo(
-    () => props.threads.filter((t) => !isThreadDeleted(t)).length,
-  );
+  const liveCount = createMemo(() => props.threads.filter((t) => !isThreadDeleted(t)).length);
 
   // Reveal the composer (expanding the panel if collapsed so it's visible).
   const startComposing = (): void => {
@@ -129,24 +131,19 @@ export function AnnotationsPanel(props: AnnotationsPanelProps): JSX.Element {
     setComposing(true);
   };
 
-  // Count folded into the title: "2 Notes" / "1 Note" / "Notes" (0). A custom title keeps its
-  // own wording with the count appended.
+  // Count in parentheses after the noun — "Notes (2)" — which is how every fold heading on a
+  // detail page states its size, so a stack of them reads as one list rather than three phrasings.
+  // Zero drops the parenthesis rather than printing "(0)": an empty section says so in its body.
   const headerLabel = (): string => {
     const n = liveCount();
-    if (props.title) return n > 0 ? `${props.title} (${n})` : props.title;
-    return n > 0
-      ? sprintf(_n('%d Note', '%d Notes', n), n)
-      : __('Notes');
+    const base = props.title ?? __('Notes');
+
+    return n > 0 ? sprintf(__('%1$s (%2$d)'), base, n) : base;
   };
 
   const newNoteButton = (): JSX.Element => (
     <Show when={props.canAdd && !composing()}>
-      <Button
-        variant="success"
-        weight="outline"
-        size="xs"
-        onClick={startComposing}
-      >
+      <Button variant="success" weight="outline" size="xs" onClick={startComposing}>
         {__('+ New note')}
       </Button>
     </Show>
@@ -167,6 +164,7 @@ export function AnnotationsPanel(props: AnnotationsPanelProps): JSX.Element {
           onClose={() => setComposing(false)}
           tags={props.tags}
           currentTagIds={props.currentTagIds}
+          onDraftChange={props.onDraftChange}
         />
       </Show>
 
@@ -174,9 +172,9 @@ export function AnnotationsPanel(props: AnnotationsPanelProps): JSX.Element {
         <div class="py-3 text-xs text-text-muted">{__('Loading notes…')}</div>
       </Show>
       <Show when={props.error}>
-        <div class="py-3 text-xs text-red-700">
+        <ErrorBanner as="div" class="py-3 text-xs">
           {sprintf(__('Notes failed to load: %s'), props.error ?? '')}
-        </div>
+        </ErrorBanner>
       </Show>
 
       <Show when={!props.loading && !props.error}>
@@ -219,8 +217,15 @@ function Composer(props: {
   onClose: () => void;
   tags?: ComposerTag[];
   currentTagIds?: number[];
+  /** Report an unsent draft, so a host can mark itself as holding unsaved work. */
+  onDraftChange?: (hasDraft: boolean) => void;
 }): JSX.Element {
   const [text, setText] = createSignal('');
+  // Typed-but-unsent text is the only thing here that a close or a navigation would destroy. Tag
+  // selections are not: they are only ever submitted together with the note that carries them.
+  createEffect(() => props.onDraftChange?.(text().trim() !== ''));
+  // The composer closing IS the draft ending — on save, on Cancel, or on the panel unmounting.
+  onCleanup(() => props.onDraftChange?.(false));
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const baseline = (): Set<number> => new Set(props.currentTagIds ?? []);
@@ -282,8 +287,10 @@ function Composer(props: {
         list(removing),
       );
     }
-    if (adding.length > 0) return sprintf(__('Add a note… (required when adding %s)'), list(adding));
-    if (removing.length > 0) return sprintf(__('Add a note… (required when removing %s)'), list(removing));
+    if (adding.length > 0)
+      return sprintf(__('Add a note… (required when adding %s)'), list(adding));
+    if (removing.length > 0)
+      return sprintf(__('Add a note… (required when removing %s)'), list(removing));
 
     return __('Add a note…');
   };
@@ -337,7 +344,9 @@ function Composer(props: {
       />
       <Show when={(props.tags?.length ?? 0) > 0}>
         <div class="mt-1.5 flex flex-wrap items-center gap-2">
-          <span class="text-2xs font-semibold uppercase tracking-wide text-text-muted">{__('Tags')}</span>
+          <span class="text-2xs font-semibold uppercase tracking-wide text-text-muted">
+            {__('Tags')}
+          </span>
           <TagTogglePicker
             tags={props.tags!}
             selected={selected()}
@@ -347,25 +356,17 @@ function Composer(props: {
         </div>
       </Show>
       <div class="mt-1.5 flex items-center gap-2">
-        <Button
-          variant="success"
-          size="sm"
-          disabled={!canSubmit()}
-          onClick={() => void submit()}
-        >
+        <Button variant="success" size="sm" disabled={!canSubmit()} onClick={() => void submit()}>
           {busy() ? __('Saving…') : __('Save note')}
         </Button>
-        <Button
-          variant="quiet"
-          size="sm"
-          disabled={busy()}
-          onClick={() => props.onClose()}
-        >
+        <Button variant="quiet" size="sm" disabled={busy()} onClick={() => props.onClose()}>
           {__('Cancel')}
         </Button>
         <span class="text-2xs text-text-muted">{__('⌘/Ctrl + Enter')}</span>
         <Show when={error()}>
-          <span class="text-2xs text-red-700">{error()}</span>
+          <ErrorBanner as="span" class="text-2xs">
+            {error()}
+          </ErrorBanner>
         </Show>
       </div>
     </div>
@@ -395,13 +396,16 @@ function ThreadRow(props: {
   const setEditing = (on: boolean): void => props.setEditingId(on ? props.thread.threadId : null);
   const someoneElseEditing = (): boolean => props.editingId() !== null && !editing();
 
-  // Default to the newest version (or the last non-deleted one if the tail is a delete marker).
-  const initialIdx = (): number => {
-    const v = versions();
-    if (v.length === 0) return 0;
-    const last = v[v.length - 1];
-    return last.action === 'deleted' && v.length > 1 ? v.length - 2 : v.length - 1;
-  };
+  /**
+   * Open on the newest version, including a delete marker.
+   *
+   * Opening on the last *live* version instead keeps a deleted note's text readable, which is
+   * appealing and wrong: it presents a note that no longer stands as though it were current, with
+   * nothing on the row saying otherwise — the reader has to notice `v1/2` and work out what the
+   * missing second version was. The newest version is the thread's actual state, so that is what
+   * it opens on; the text is one ‹ away and the version counter says so.
+   */
+  const initialIdx = (): number => Math.max(0, versions().length - 1);
   const [idx, setIdx] = createSignal(initialIdx());
   const [diffMode, setDiffMode] = createSignal<DiffMode>('plain');
   const [editText, setEditText] = createSignal('');
@@ -474,6 +478,7 @@ function ThreadRow(props: {
         fallback={
           <div>
             <textarea
+              aria-label={__('Note')}
               // Autofocus on open so focus lands in the field (not the "Edit" button) — else a
               // global single-key shortcut like "C" fires instead of typing into the note.
               ref={(el) => queueMicrotask(() => el.focus())}
@@ -503,16 +508,13 @@ function ThreadRow(props: {
               >
                 {busy() ? __('Saving…') : __('Save')}
               </Button>
-              <Button
-                variant="quiet"
-                size="sm"
-                disabled={busy()}
-                onClick={() => setEditing(false)}
-              >
+              <Button variant="quiet" size="sm" disabled={busy()} onClick={() => setEditing(false)}>
                 {__('Cancel')}
               </Button>
               <Show when={error()}>
-                <span class="text-2xs text-red-700">{error()}</span>
+                <ErrorBanner as="span" class="text-2xs">
+                  {error()}
+                </ErrorBanner>
               </Show>
             </div>
           </div>
@@ -520,9 +522,7 @@ function ThreadRow(props: {
       >
         <Show
           when={!deleted() || idx() < total() - 1}
-          fallback={
-            <div class="italic text-text-muted">{__('Note deleted.')}</div>
-          }
+          fallback={<div class="italic text-text-muted">{__('Note deleted.')}</div>}
         >
           <Show when={current().body}>
             <div class="whitespace-pre-wrap break-words text-gray-800">
@@ -551,7 +551,11 @@ function ThreadRow(props: {
         <Show when={deltaVersion()}>
           {(v) => (
             <div class="mt-1">
-              <TagDeltaPills added={v().tagActions?.added} removed={v().tagActions?.removed} resolve={props.resolveTag} />
+              <TagDeltaPills
+                added={v().tagActions?.added}
+                removed={v().tagActions?.removed}
+                resolve={props.resolveTag}
+              />
             </div>
           )}
         </Show>
@@ -574,13 +578,7 @@ function ThreadRow(props: {
               title={__('Toggle diff: plain → words → lines')}
               onClick={cycleDiff}
             >
-              <span>
-                {sprintf(
-                  __('edited · v%1$d/%2$d'),
-                  current().version,
-                  total(),
-                )}
-              </span>
+              <span>{sprintf(__('edited · v%1$d/%2$d'), current().version, total())}</span>
               <Show when={diffMode() !== 'plain'}>
                 <span class="rounded bg-gray-100 px-1 text-gray-500">
                   {diffMode() === 'words' ? __('words') : __('lines')}
@@ -614,12 +612,7 @@ function ThreadRow(props: {
 
           <Show when={props.thread.canEdit && !deleted() && !someoneElseEditing()}>
             <span class="text-gray-300">·</span>
-            <Button
-              variant="quiet"
-              size="xs"
-              disabled={busy()}
-              onClick={startEdit}
-            >
+            <Button variant="quiet" size="xs" disabled={busy()} onClick={startEdit}>
               {__('Edit')}
             </Button>
             {/* Two-step delete: a note delete is an immutable append, so guard the destructive
@@ -641,12 +634,7 @@ function ThreadRow(props: {
             >
               <span class="ml-auto inline-flex items-center gap-2">
                 <span class="text-gray-500">{__('Delete this note?')}</span>
-                <Button
-                  variant="danger"
-                  size="xs"
-                  disabled={busy()}
-                  onClick={() => void remove()}
-                >
+                <Button variant="danger" size="xs" disabled={busy()} onClick={() => void remove()}>
                   {busy() ? __('Deleting…') : __('Delete')}
                 </Button>
                 <Button
@@ -662,7 +650,7 @@ function ThreadRow(props: {
           </Show>
 
           <Show when={error() && !editing()}>
-            <span class="text-red-700">{error()}</span>
+            <ErrorBanner as="span">{error()}</ErrorBanner>
           </Show>
         </div>
       </Show>

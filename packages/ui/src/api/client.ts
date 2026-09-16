@@ -154,7 +154,8 @@ export function createInvFluxApi(context: ApiContext): InvFluxApi {
     // a timeout and a timeout does not leak past the caller's own lifetime.
     const timeout = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
     const signals = [options.signal, timeout].filter((s): s is AbortSignal => s !== undefined);
-    if (signals.length > 0) init.signal = signals.length === 1 ? signals[0] : AbortSignal.any(signals);
+    if (signals.length > 0)
+      init.signal = signals.length === 1 ? signals[0] : AbortSignal.any(signals);
 
     let res: Response;
     try {
@@ -163,7 +164,11 @@ export function createInvFluxApi(context: ApiContext): InvFluxApi {
       // Never reached the server. Status 0 is what `isNetworkFailure` keys on; the caller's own abort is
       // re-thrown untouched so a cancelled query is not reported to the user as a failure.
       if (options.signal?.aborted === true) throw cause;
-      throw new ApiError(0, null, cause instanceof Error ? cause.message : 'Network request failed');
+      throw new ApiError(
+        0,
+        null,
+        cause instanceof Error ? cause.message : 'Network request failed',
+      );
     }
 
     // Parse regardless of status: an error body carries the slug and message worth showing.

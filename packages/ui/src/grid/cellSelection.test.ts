@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   addRange,
+  selectionRectsFromCells,
   clampCoord,
   EMPTY_SELECTION,
   extendTo,
@@ -105,6 +106,8 @@ describe('cellSelection', () => {
     expect(isMultiCell(selectCell({ row: 1, col: 1 }))).toBe(false);
     expect(isMultiCell(extendTo(selectCell({ row: 1, col: 1 }), { row: 1, col: 2 }))).toBe(true);
     expect(isMultiCell(extendTo(selectCell({ row: 1, col: 1 }), { row: 3, col: 1 }))).toBe(true);
+    // Disjoint Ctrl-click cells: each range is 1×1, but two of them is still multi-cell (drives F2 → bulk edit).
+    expect(isMultiCell(toggleCell(selectCell({ row: 1, col: 1 }), { row: 5, col: 3 }))).toBe(true);
   });
 
   it('selectionEdges frames the boundary of a range with no internal borders', () => {
@@ -115,7 +118,12 @@ describe('cellSelection', () => {
     expect(selectionEdges(s, 2, 1)).toEqual({ top: false, right: false, bottom: true, left: true });
     expect(selectionEdges(s, 2, 2)).toEqual({ top: false, right: true, bottom: true, left: false });
     // Unselected cell → no edges.
-    expect(selectionEdges(s, 0, 0)).toEqual({ top: false, right: false, bottom: false, left: false });
+    expect(selectionEdges(s, 0, 0)).toEqual({
+      top: false,
+      right: false,
+      bottom: false,
+      left: false,
+    });
   });
 
   it('selectionEdges frames a 1×1 selection on all four sides', () => {
@@ -132,7 +140,10 @@ describe('cellSelection', () => {
   });
 
   it('toggleCell removes an already-selected single cell', () => {
-    const s = toggleCell(addRange(selectCell({ row: 0, col: 0 }), { row: 2, col: 2 }), { row: 2, col: 2 });
+    const s = toggleCell(addRange(selectCell({ row: 0, col: 0 }), { row: 2, col: 2 }), {
+      row: 2,
+      col: 2,
+    });
     expect(isSelected(s, 0, 0)).toBe(true);
     expect(isSelected(s, 2, 2)).toBe(false);
   });
@@ -171,7 +182,9 @@ describe('cellSelection', () => {
 
   it('isRectangularSelection: a single dragged range is rectangular', () => {
     expect(isRectangularSelection(selectCell({ row: 1, col: 1 }))).toBe(true);
-    expect(isRectangularSelection(extendTo(selectCell({ row: 1, col: 1 }), { row: 3, col: 3 }))).toBe(true);
+    expect(
+      isRectangularSelection(extendTo(selectCell({ row: 1, col: 1 }), { row: 3, col: 3 })),
+    ).toBe(true);
   });
 
   it('isRectangularSelection: two Ctrl-click ranges that tile a rectangle ARE rectangular', () => {
@@ -206,5 +219,62 @@ describe('cellSelection', () => {
     const withStray = addRange(block, { row: 2, col: 0 });
     expect(isRectangularSelection(withStray)).toBe(false);
     expect(isRectangularSelection(toggleCell(withStray, { row: 2, col: 0 }))).toBe(true);
+  });
+});
+
+describe('selectionRectsFromCells', () => {
+  const cells = (...pairs: Array<[number, number]>) => pairs.map(([row, col]) => ({ row, col }));
+  const norm = (rects: ReturnType<typeof selectionRectsFromCells>) =>
+    [...rects].sort((a, b) => a.r1 - b.r1 || a.c1 - b.c1);
+  /** Every coordinate the rects cover, as a comparable set. */
+  const covered = (rects: ReturnType<typeof selectionRectsFromCells>) => {
+    const out = new Set<string>();
+    for (const r of rects)
+      for (let row = r.r1; row <= r.r2; row++)
+        for (let col = r.c1; col <= r.c2; col++) out.add(`${row},${col}`);
+    return out;
+  };
+
+  it('returns nothing for no cells', () => {
+    expect(selectionRectsFromCells([])).toEqual([]);
+  });
+
+  it('merges a column run repeated down adjacent rows into one rect', () => {
+    // The case that matters: a parent's columns extended over its whole variation set.
+    const rects = selectionRectsFromCells(cells([3, 1], [3, 2], [4, 1], [4, 2], [5, 1], [5, 2]));
+    expect(rects).toEqual([{ r1: 3, c1: 1, r2: 5, c2: 2 }]);
+  });
+
+  it('keeps non-adjacent rows apart', () => {
+    expect(norm(selectionRectsFromCells(cells([1, 0], [3, 0])))).toEqual([
+      { r1: 1, c1: 0, r2: 1, c2: 0 },
+      { r1: 3, c1: 0, r2: 3, c2: 0 },
+    ]);
+  });
+
+  it('splits a row into separate runs across a gap', () => {
+    expect(norm(selectionRectsFromCells(cells([0, 0], [0, 1], [0, 3])))).toEqual([
+      { r1: 0, c1: 0, r2: 0, c2: 1 },
+      { r1: 0, c1: 3, r2: 0, c2: 3 },
+    ]);
+  });
+
+  it('does not merge rows whose runs differ', () => {
+    const rects = selectionRectsFromCells(cells([0, 0], [0, 1], [1, 0]));
+    expect(covered(rects)).toEqual(new Set(['0,0', '0,1', '1,0']));
+    expect(rects.length).toBe(2);
+  });
+
+  it('ignores duplicates and input order', () => {
+    const a = selectionRectsFromCells(cells([1, 1], [0, 0], [1, 1], [0, 1], [1, 0]));
+    expect(covered(a)).toEqual(new Set(['0,0', '0,1', '1,0', '1,1']));
+    expect(a).toEqual([{ r1: 0, c1: 0, r2: 1, c2: 1 }]);
+  });
+
+  it('covers exactly the input cells for a ragged shape', () => {
+    const input = cells([0, 2], [1, 0], [1, 1], [1, 2], [2, 2], [4, 4]);
+    expect(covered(selectionRectsFromCells(input))).toEqual(
+      new Set(input.map((c) => `${c.row},${c.col}`)),
+    );
   });
 });

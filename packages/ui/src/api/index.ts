@@ -15,3 +15,21 @@ export { ApiError, isRetryable } from './errors';
 // name, which is exactly why the grid was never told that receiving a PO had moved stock.
 export { qk, STOCK_MOVED } from './queryKeys';
 export type { Key } from './queryKeys';
+
+// Saved filters: the endpoints, plus the two pure helpers a surface needs before it can call them
+// (resolving a live filter state into a storable one, and recognising the view it is looking at).
+export {
+  resolveSavedQuery,
+  queryMatches,
+  fetchSavedFilters,
+  createSavedFilter,
+  updateSavedFilter,
+  deleteSavedFilter,
+  SAVED_FILTER_SURFACE,
+} from './savedFilters';
+export type {
+  SavedFilter,
+  SavedFilterIndex,
+  SavedFilterInput,
+  SavedFilterQuery,
+} from './savedFilters';

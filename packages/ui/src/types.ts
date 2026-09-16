@@ -38,6 +38,13 @@ export interface FieldMeta {
   dataType: string;
   /** Per-field config consumed by the component/codec (e.g. `{ taxonomy }`, `{ min, max }`). */
   editorConfig: Record<string, unknown>;
+  /**
+   * Display name, where the host has one — what an editor renders for this field can use to name
+   * itself. Optional here and required on {@link GridColumnMeta}, so a grid-hosted editor always
+   * has it: a cell editor with no accessible name is otherwise announced as a bare text box, and
+   * the datatype contract is the only place the name can come from.
+   */
+  label?: string;
 }
 
 /** Column kind: read-only, single-value editable, or multi-value editable (§11). */
@@ -51,9 +58,23 @@ export type GridColumnKind = 'read_only' | 'editable' | 'editable_multi';
  */
 export interface GridColumnMeta extends FieldMeta {
   id: string;
+  /** The name to render: the merchant's override where one is set, else the shipped translation. */
   label: string;
-  /** Optional header tooltip — the SPA-owned description shown on hover, preferred over the DataGrid's
-   *  built-in acronym glossary. Lets each grid document its own columns without touching the shared map. */
+  /**
+   * The shipped translation — what `label` would be with no merchant override.
+   *
+   * Carried alongside rather than derived, because the picker needs both: to show what a renamed
+   * column was called, to match a search against either name, and to recognise "typed the original
+   * back" as a reset. `label !== defaultLabel` is also the only thing that has to be true for a
+   * column to read as renamed, so there is no second piece of state to keep in step.
+   *
+   * Optional, and absent means "same as `label`". Only the workbench's server-driven columns can be
+   * renamed; the grids that build their own metadata (the PO grids, supplier products, the
+   * correction review) have no second name for a column and should not have to invent one.
+   */
+  defaultLabel?: string;
+  /** Optional header tooltip shown on hover. Server-provided with the column definition (absent = no
+   *  tooltip), so the grid, the column manager and any add-on-contributed column speak one description. */
   description?: string;
   kind: GridColumnKind;
   /** Resolved server-side for the current user (kind + the column's capability): may THIS user
@@ -85,6 +106,35 @@ export interface GridColumnMeta extends FieldMeta {
    *  (quantities, money values) in the grid's footer row; null = no footer total (e.g. per-unit cost,
    *  price, threshold — summing them is meaningless). */
   aggregate?: 'sum' | null;
+  /**
+   * Whether applying this column's write twice leaves the same result as applying it once.
+   *
+   * True for a column whose handler writes the value it was given (a price, a SKU, a visibility);
+   * false for one deriving a change from the prior state — the on-hand correction sends
+   * `new − original` as a stock movement, so a repeat invents stock.
+   *
+   * Only used to decide **how a large edit is transmitted**: a row may be sent apart from its
+   * neighbours, and retried, only when every column it edits is retry-safe. It relaxes no check the
+   * server makes on arrival.
+   *
+   * Optional, and **absent means unsafe** — the grids that build their own column metadata declare
+   * nothing, and a missing flag must never read as permission to retry. Same reasoning as the
+   * server-side default: forgetting costs speed, and the opposite default would cost stock.
+   */
+  retrySafe?: boolean;
+  /**
+   * The filter that constrains what this column shows, so its header menu can offer "Filter…".
+   *
+   * Declared by the server rather than derived from the ids: barely any column shares its filter's
+   * id (`price` is filtered by `price_range`, `product_type` by `subject_kind`), and several
+   * columns legitimately share one filter — `atp`, `res`, `ctd` and `total` all open `stock_level`,
+   * which measures whichever slots its own scope selector names.
+   *
+   * **A hint to be checked, never a promise.** The named filter may not exist in this install: a
+   * global attribute's column is always present, while its filter only appears once the merchant
+   * enables that taxonomy. Look it up before offering the menu item.
+   */
+  filterId?: string | null;
 }
 
 /** One value within a taxonomy (term), as exposed to datatype components. */

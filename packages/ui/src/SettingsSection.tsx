@@ -30,13 +30,19 @@ export function SettingsSection(props: SettingsSectionProps): JSX.Element {
     <div class="border-b border-border last:border-b-0">
       <button
         type="button"
-        class={menuItemClass(false, false, 'px-0 py-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary')}
+        class={menuItemClass(
+          false,
+          false,
+          'px-0 py-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+        )}
         aria-expanded={open()}
         aria-controls={bodyId}
         onClick={toggle}
       >
         <FoldChevron open={open()} />
-        <span class="text-xs font-semibold uppercase tracking-wide text-text-muted">{props.title}</span>
+        <span class="text-xs font-semibold uppercase tracking-wide text-text-muted">
+          {props.title}
+        </span>
         <Show when={props.badge}>
           <span class="ml-auto">{props.badge}</span>
         </Show>

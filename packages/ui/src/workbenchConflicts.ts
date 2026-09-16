@@ -31,21 +31,31 @@ export function explainConflict(reason: string, column: string): string | null {
     case 'base_currency_drift':
       return sprintf(
         /* translators: %s = column label, e.g. "Unit cost (WAC)" */
-        __('%s: cost changes are paused while your store currency and your stored costs disagree. Convert your stored costs (InvFlux → Base currency), or set the store currency back.'),
+        __(
+          '%s: cost changes are paused while your store currency and your stored costs disagree. Convert your stored costs (InvFlux → Base currency), or set the store currency back.',
+        ),
         column,
       );
     case 'cost_locked':
       return sprintf(
         /* translators: %s = column label */
-        __('%s: this product already has a weighted average cost, which only a goods receipt can move. The starting cost can no longer be edited.'),
+        __(
+          '%s: this product already has a weighted average cost, which only a goods receipt can move. The starting cost can no longer be edited.',
+        ),
         column,
       );
     case 'negative_stock':
       return sprintf(__('%s: that change would take stock below zero.'), column);
     case 'stale_original':
-      return sprintf(__('%s: changed on the server since you loaded it — review the new value and retry.'), column);
+      return sprintf(
+        __('%s: changed on the server since you loaded it — review the new value and retry.'),
+        column,
+      );
     case 'stock_management_locked':
-      return sprintf(__('%s: this product is busy in a stock workflow and cannot be un-governed yet.'), column);
+      return sprintf(
+        __('%s: this product is busy in a stock workflow and cannot be un-governed yet.'),
+        column,
+      );
     case 'forbidden':
       return sprintf(__('%s: you do not have permission to change this.'), column);
     case 'subject_not_resolvable':
@@ -88,7 +98,11 @@ export function describeConflicts(
   for (const c of conflicts) {
     const column = labelOf(c.column_id);
 
-    if (CARRIES_SERVER_MESSAGE.includes(c.reason) && 'string' === typeof c.actual && '' !== c.actual.trim()) {
+    if (
+      CARRIES_SERVER_MESSAGE.includes(c.reason) &&
+      'string' === typeof c.actual &&
+      '' !== c.actual.trim()
+    ) {
       parts.push(`${column}: ${c.actual.trim()}`);
       continue;
     }
@@ -112,5 +126,7 @@ export function describeConflicts(
     );
   }
 
-  return parts.length > 0 ? parts.join(' ') : __("Some changes couldn't be saved — review and retry.");
+  return parts.length > 0
+    ? parts.join(' ')
+    : __("Some changes couldn't be saved — review and retry.");
 }

@@ -9,4 +9,12 @@ export interface AdminContext {
   capabilities: {
     manageSettings: boolean;
   };
+  /**
+   * Open with the "needs a decision" filter already applied — set by the host when the page was
+   * reached from a link that promised exactly those settings (the first-run screen's count).
+   *
+   * The host owns this because the host owns the URL: this package has no router, and teaching it
+   * to read query params would couple it to a scheme it does not otherwise know about.
+   */
+  startOnDecisions?: boolean;
 }

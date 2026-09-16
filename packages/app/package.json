@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Unified InvFlux admin SPA — one persistent Solid app hosting every admin surface as a lazy route (arch-unified-admin-spa.md).",
+  "description": "Unified InvFlux admin SPA \u2014 one persistent Solid app hosting every admin surface as a lazy route (arch-unified-admin-spa.md).",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -18,7 +18,7 @@
     "@invflux/procurement": "*",
     "@invflux/ui": "*",
     "@invflux/workbench": "*",
-    "@kobalte/core": "^0.13.11",
+    "@kobalte/core": "^0.13.14",
     "@solidjs/router": "^0.15.3",
     "@tailwindcss/vite": "^4.2.4",
     "@tanstack/solid-query": "^5.0.0",

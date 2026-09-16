@@ -1,5 +1,7 @@
-import { __ } from '@invflux/i18n';
+import { __, _x } from '@invflux/i18n';
 import {
+  Button,
+  ColumnsSettingsIcon,
   DataGrid,
   EMPTY_SELECTION,
   SegmentedControl,
@@ -10,9 +12,13 @@ import {
   type StagedCell,
 } from '@invflux/ui';
 import { type ColumnDef, createColumnHelper } from '@tanstack/solid-table';
-import type { ColumnOrderState, RowSelectionState, SortingState, VisibilityState } from '@tanstack/solid-table';
+import type {
+  ColumnOrderState,
+  RowSelectionState,
+  SortingState,
+  VisibilityState,
+} from '@tanstack/solid-table';
 import { type Accessor, createMemo, createSignal, type JSX, Show } from 'solid-js';
-import { useProcurement } from '../../context';
 import { fuzzyMatches } from '../../grid/fuzzyMatch';
 import { persistedSignal } from '../../grid/persistedSignal';
 import { QuickFilter, isTypingInField } from '../../grid/QuickFilter';
@@ -24,7 +30,20 @@ import type { PoLine } from './types';
 // The receipt numeric editor (blank-start, `.`-fill, clamp) — registered once before any render.
 registerReceiptEditor();
 
-const COLUMN_ORDER = ['image', 'product', 'sku', 'supplier_sku', 'ordered', 'expected', 'received_so_far', 'received', 'damaged', 'good', 'variance'];
+const COLUMN_ORDER = [
+  'image',
+  'product',
+  'sku',
+  'supplier_sku',
+  'gtin',
+  'ordered',
+  'expected',
+  'received_so_far',
+  'received',
+  'damaged',
+  'good',
+  'variance',
+];
 
 /** GR-variance baseline the operator measures against — their choice persists (receiver → expected,
  *  purchasing → ordered). When `expected` is absent the "expected" view falls back to ordered. Shared
@@ -55,7 +74,9 @@ function reconcileColumnOrder(saved: string[], canonical: string[]): string[] {
 }
 
 /** GridColumnMeta with the reception-friendly defaults filled in; `over` carries the per-column bits. */
-function colMeta(over: Partial<GridColumnMeta> & { id: string; label: string; dataType: string }): GridColumnMeta {
+function colMeta(
+  over: Partial<GridColumnMeta> & { id: string; label: string; dataType: string },
+): GridColumnMeta {
   return {
     kind: 'read_only',
     editable: false,
@@ -86,6 +107,15 @@ interface PoReceiveGridProps {
   damaged: Accessor<Record<number, number | null>>;
   setRecv: (id: number, v: number | null) => void;
   setDmg: (id: number, v: number | null) => void;
+  /**
+   * Whether barcode (GTIN) matching is available — it is an add-on capability, while name, SKU and
+   * supplier-SKU matching are not.
+   *
+   * Taken as a prop rather than read from a surrounding context, because this grid is mounted from
+   * two surfaces now: the receiving surface a dock worker reaches, and procurement. A context lookup
+   * would tie the grid to the one that happens to provide it and throw on the other.
+   */
+  hasPro: boolean;
 }
 
 /**
@@ -112,8 +142,7 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
     return row.qtyReceived + (s ?? 0);
   };
 
-  const ctx = useProcurement();
-  const isPro = ctx.hasPro; // barcode (GTIN) matching is Pro; name / SKU / supplier-SKU are Essentials
+  const isPro = props.hasPro; // barcode (GTIN) matching is Pro; name / SKU / supplier-SKU are Essentials
 
   // ── Expected qty (read-only) ───────────────────────────────────────────────────────────────────
   // The supplier-confirmed baseline — a per-line order property set pre-arrival (ASN / invoice / a
@@ -121,11 +150,15 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
   // variance measures against it. Read straight off the line; there's no editing state here.
 
   // ── GR variance ────────────────────────────────────────────────────────────────────────────────
-  const [baseline, setBaseline] = persistedSignal<VarianceBaseline>('invflux:po-receive:variance-baseline', 'ordered');
+  const [baseline, setBaseline] = persistedSignal<VarianceBaseline>(
+    'invflux:po-receive:variance-baseline',
+    'ordered',
+  );
   // Cumulative good (prior committed receipts + this session) minus the chosen baseline. Null until the
   // line is counted. In "expected" mode a missing expected falls back to ordered (flagged by the cell).
   const baseFor = (row: PoLine): number => baselineQty(row, baseline());
-  const usesFallback = (row: PoLine): boolean => 'expected' === baseline() && null === row.expectedQty;
+  const usesFallback = (row: PoLine): boolean =>
+    'expected' === baseline() && null === row.qtyExpected;
   const varianceFor = (row: PoLine): number | null => {
     const g = goodFor(row); // cumulative good (received-so-far + this session)
     return null === g ? null : g - baseFor(row);
@@ -136,23 +169,131 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
   const matchFields = (l: PoLine): Array<string | null> =>
     isPro ? [l.productLabel, l.sku, l.supplierSku, l.gtin] : [l.productLabel, l.sku, l.supplierSku];
   const visibleLines = createMemo<PoLine[]>(() =>
-    '' === filterText().trim() ? props.lines : props.lines.filter((l) => fuzzyMatches(filterText(), matchFields(l))),
+    '' === filterText().trim()
+      ? props.lines
+      : props.lines.filter((l) => fuzzyMatches(filterText(), matchFields(l))),
   );
 
   const columnMetas = createMemo<GridColumnMeta[]>(() => [
-    colMeta({ id: 'image', label: __('Image'), description: __('Product thumbnail'), dataType: 'text', defaultWidth: 56 }),
-    colMeta({ id: 'product', label: __('Product'), description: __('Product name (and GTIN) — match the physical goods against it'), dataType: 'text', copyable: true, defaultWidth: 280 }),
-    colMeta({ id: 'sku', label: __('SKU'), description: __('Our Stock Keeping Unit for this product'), dataType: 'text', copyable: true, defaultWidth: 120 }),
-    colMeta({ id: 'supplier_sku', label: __('Supplier SKU'), description: __('The supplier’s own code for this product (matches their packing slip)'), dataType: 'text', copyable: true, defaultWidth: 130 }),
-    colMeta({ id: 'ordered', label: __('Ordered'), description: __('Quantity ordered on this PO line — the variance baseline (and what Expected inherits when unset). The “.” key still fills the outstanding remainder into Received.'), dataType: 'number', copyable: true, defaultWidth: 90 }),
+    colMeta({
+      id: 'image',
+      label: __('Image'),
+      description: __('Product thumbnail'),
+      dataType: 'text',
+      defaultWidth: 56,
+    }),
+    colMeta({
+      id: 'product',
+      label: __('Product'),
+      description: __('Product name — match the physical goods against it'),
+      dataType: 'text',
+      copyable: true,
+      defaultWidth: 280,
+    }),
+    colMeta({
+      id: 'sku',
+      label: __('SKU'),
+      description: __('Our Stock Keeping Unit for this product'),
+      dataType: 'text',
+      copyable: true,
+      defaultWidth: 120,
+    }),
+    colMeta({
+      id: 'supplier_sku',
+      label: __('Supplier SKU'),
+      description: __('The supplier’s own code for this product (matches their packing slip)'),
+      dataType: 'text',
+      copyable: true,
+      defaultWidth: 130,
+    }),
+    colMeta({
+      id: 'gtin',
+      label: __('GTIN'),
+      description: __(
+        'The barcode on the carton — the widest of the three codes, so it is the one a scanner reads',
+      ),
+      dataType: 'text',
+      copyable: true,
+      defaultWidth: 150,
+    }),
+    colMeta({
+      id: 'ordered',
+      label: __('Ordered'),
+      description: __(
+        'Quantity ordered on this PO line — the variance baseline (and what Expected inherits when unset). The “.” key still fills the outstanding remainder into Received.',
+      ),
+      dataType: 'number',
+      copyable: true,
+      defaultWidth: 90,
+    }),
     // Read-only: the supplier-confirmed baseline, set pre-arrival by a separate ASN/invoice workflow.
     // Inherits the ordered qty (shown faded) when unset.
-    colMeta({ id: 'expected', label: __('Expected'), description: __('What the supplier confirmed they’d ship (ASN / invoice) — the variance baseline. Inherits the ordered qty (faded) when not set.'), dataType: 'number', copyable: true, defaultWidth: 100 }),
-    colMeta({ id: 'received_so_far', label: __('Received so far'), description: __('Good units already committed from earlier deliveries on this PO — any damaged units received earlier show in red parentheses (read-only)'), dataType: 'number', copyable: true, defaultWidth: 120 }),
-    colMeta({ id: 'received', label: __('Received'), description: __('Units arriving in THIS delivery (including any damaged). “.” fills the outstanding qty; a negative value corrects a prior over-count.'), dataType: 'number:receipt', kind: 'editable', editable: true, copyable: true, pasteable: true, defaultWidth: 110 }),
-    colMeta({ id: 'damaged', label: __('Damaged'), description: __('Of the received units, how many are damaged / unfit — they don’t move into saleable stock'), dataType: 'number:receipt', kind: 'editable', editable: true, copyable: true, pasteable: true, defaultWidth: 110 }),
-    colMeta({ id: 'good', label: __('Good'), description: __('Total saleable units so far = received so far + received − damaged'), dataType: 'number', copyable: true, defaultWidth: 90 }),
-    colMeta({ id: 'variance', label: __('Variance'), description: __('Good received-so-far minus the chosen baseline (ordered or expected) — short shown red, over amber'), dataType: 'text', copyable: true, defaultWidth: 120 }),
+    colMeta({
+      id: 'expected',
+      label: __('Expected'),
+      description: __(
+        'What the supplier confirmed they’d ship (ASN / invoice) — the variance baseline. Inherits the ordered qty (faded) when not set.',
+      ),
+      dataType: 'number',
+      copyable: true,
+      defaultWidth: 100,
+    }),
+    colMeta({
+      id: 'received_so_far',
+      label: __('Received so far'),
+      description: __(
+        'Good units already committed from earlier deliveries on this PO — any damaged units received earlier show in red parentheses (read-only)',
+      ),
+      dataType: 'number',
+      copyable: true,
+      defaultWidth: 120,
+    }),
+    colMeta({
+      id: 'received',
+      // Not "Received": that is the column beside it, and past tense on the cell you are still
+      // filling reads as a figure already banked. This one is what is being counted right now.
+      label: _x('Receiving', 'goods-receipt column: units arriving in this delivery'),
+      description: __(
+        'Units arriving in THIS delivery (including any damaged). “.” fills the outstanding qty; a negative value corrects a prior over-count.',
+      ),
+      dataType: 'number:receipt',
+      kind: 'editable',
+      editable: true,
+      copyable: true,
+      pasteable: true,
+      defaultWidth: 110,
+    }),
+    colMeta({
+      id: 'damaged',
+      label: __('Damaged'),
+      description: __(
+        'Of the received units, how many are damaged / unfit — they don’t move into saleable stock',
+      ),
+      dataType: 'number:receipt',
+      kind: 'editable',
+      editable: true,
+      copyable: true,
+      pasteable: true,
+      defaultWidth: 110,
+    }),
+    colMeta({
+      id: 'good',
+      label: __('Good'),
+      description: __('Total saleable units so far = received so far + received − damaged'),
+      dataType: 'number',
+      copyable: true,
+      defaultWidth: 90,
+    }),
+    colMeta({
+      id: 'variance',
+      label: __('Variance'),
+      description: __(
+        'Good received-so-far minus the chosen baseline (ordered or expected) — short shown red, over amber',
+      ),
+      dataType: 'text',
+      copyable: true,
+      defaultWidth: 120,
+    }),
   ]);
 
   const ch = createColumnHelper<PoLine>();
@@ -163,7 +304,10 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
         id: 'image',
         header: () => __('Image'),
         cell: (info) => (
-          <Show when={info.row.original.imageUrl} fallback={<div class="h-9 w-9 rounded bg-slate-100" />}>
+          <Show
+            when={info.row.original.imageUrl}
+            fallback={<div class="h-9 w-9 rounded bg-slate-100" />}
+          >
             {(u) => <img src={u()} alt="" class="h-9 w-9 rounded object-cover" />}
           </Show>
         ),
@@ -194,11 +338,19 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
       }) as ColumnDef<PoLine, unknown>,
     ],
     [
+      'gtin',
+      ch.display({
+        id: 'gtin',
+        header: () => __('GTIN'),
+        cell: (info) => <CodeCell value={info.row.original.gtin} />,
+      }) as ColumnDef<PoLine, unknown>,
+    ],
+    [
       'ordered',
       ch.display({
         id: 'ordered',
         header: () => __('Ordered'),
-        cell: (info) => <span class="tabular-nums">{info.row.original.requestedQty}</span>,
+        cell: (info) => <span class="tabular-nums">{info.row.original.qtyRequested}</span>,
       }) as ColumnDef<PoLine, unknown>,
     ],
     [
@@ -206,7 +358,12 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
       ch.display({
         id: 'expected',
         header: () => __('Expected'),
-        cell: (info) => <ExpectedCell expected={info.row.original.expectedQty} ordered={info.row.original.requestedQty} />,
+        cell: (info) => (
+          <ExpectedCell
+            expected={info.row.original.qtyExpected}
+            ordered={info.row.original.qtyRequested}
+          />
+        ),
       }) as ColumnDef<PoLine, unknown>,
     ],
     [
@@ -214,14 +371,19 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
       ch.display({
         id: 'received_so_far',
         header: () => __('Received so far'),
-        cell: (info) => <ReceivedSoFarCell good={info.row.original.qtyReceived} damaged={info.row.original.damagedSoFar} />,
+        cell: (info) => (
+          <ReceivedSoFarCell
+            good={info.row.original.qtyReceived}
+            damaged={info.row.original.qtyDamagedSoFar}
+          />
+        ),
       }) as ColumnDef<PoLine, unknown>,
     ],
     [
       'received',
       ch.display({
         id: 'received',
-        header: () => __('Received'),
+        header: () => _x('Receiving', 'goods-receipt column: units arriving in this delivery'),
         cell: (info) => <NumCell value={recvFor(info.row.original.id)} />,
       }) as ColumnDef<PoLine, unknown>,
     ],
@@ -261,17 +423,29 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
   const [sorting, setSorting] = createSignal<SortingState>([]);
   // Column layout (visibility / order / sizing) persists per operator; default = all columns shown.
   // Identifier columns can be hidden via the column picker (Ctrl+M); they stay filter match-keys either way.
-  const [columnVisibility, setColumnVisibility] = persistedSignal<VisibilityState>('invflux:po-receive:colvis', {});
-  const [columnOrder, setColumnOrder] = persistedSignal<ColumnOrderState>('invflux:po-receive:colorder', COLUMN_ORDER);
+  const [columnVisibility, setColumnVisibility] = persistedSignal<VisibilityState>(
+    'invflux:po-receive:colvis',
+    {},
+  );
+  const [columnOrder, setColumnOrder] = persistedSignal<ColumnOrderState>(
+    'invflux:po-receive:colorder',
+    COLUMN_ORDER,
+  );
   // Migrate a pre-existing saved order so newly-added columns (expected / variance) appear at their
   // canonical spot rather than appended. Done synchronously at setup → no flash of the old order.
   {
     const reconciled = reconcileColumnOrder(columnOrder(), COLUMN_ORDER);
     if (reconciled.length !== columnOrder().length) setColumnOrder(reconciled);
   }
-  const [columnSizing, setColumnSizing] = persistedSignal<Record<string, number>>('invflux:po-receive:colsize', {});
+  const [columnSizing, setColumnSizing] = persistedSignal<Record<string, number>>(
+    'invflux:po-receive:colsize',
+    {},
+  );
   // The single column group starts expanded (folding one section of 8 is pointless); the choice persists.
-  const [expandedColumnSections, setExpandedColumnSections] = persistedSignal<string[]>('invflux:po-receive:colsections', ['goods-receipt']);
+  const [expandedColumnSections, setExpandedColumnSections] = persistedSignal<string[]>(
+    'invflux:po-receive:colsections',
+    ['goods-receipt'],
+  );
   const [rowSelection, setRowSelection] = createSignal<RowSelectionState>({});
   const [cellSelection, setCellSelection] = createSignal<SelectionState>(EMPTY_SELECTION);
 
@@ -285,10 +459,12 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
         return row.sku;
       case 'supplier_sku':
         return row.supplierSku;
+      case 'gtin':
+        return row.gtin;
       case 'ordered':
-        return row.requestedQty;
+        return row.qtyRequested;
       case 'expected':
-        return row.expectedQty ?? row.requestedQty; // effective baseline (inherits ordered)
+        return row.qtyExpected ?? row.qtyRequested; // effective baseline (inherits ordered)
       case 'received_so_far':
         return row.qtyReceived;
       case 'received':
@@ -315,11 +491,17 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
     return { staged: false, value: undefined };
   };
 
-  const canEdit = (_row: PoLine, meta: GridColumnMeta): boolean => 'received' === meta.id || 'damaged' === meta.id;
+  const canEdit = (_row: PoLine, meta: GridColumnMeta): boolean =>
+    'received' === meta.id || 'damaged' === meta.id;
 
   // Received/Damaged clear to blank (Del / Backspace → uncounted again); nothing else is clearable.
-  const resolveClearedValue = (_row: PoLine, meta: GridColumnMeta): { ok: boolean; value: unknown } =>
-    'received' === meta.id || 'damaged' === meta.id ? { ok: true, value: null } : { ok: false, value: null };
+  const resolveClearedValue = (
+    _row: PoLine,
+    meta: GridColumnMeta,
+  ): { ok: boolean; value: unknown } =>
+    'received' === meta.id || 'damaged' === meta.id
+      ? { ok: true, value: null }
+      : { ok: false, value: null };
 
   // Inject per-row editor config the row-blind editor can't compute: `.` fills the open qty (Received)
   // or the current received (Damaged); Damaged is capped at THIS session's received count (receipt-scoped
@@ -328,7 +510,15 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
   // otherwise damaged could exceed what was received.
   const resolveEditorMeta = (meta: GridColumnMeta, row: PoLine): GridColumnMeta => {
     if ('received' === meta.id) {
-      return { ...meta, editorConfig: { dotDefault: row.qtyOpen, ariaLabel: __('Received') } };
+      return {
+        ...meta,
+        editorConfig: {
+          dotDefault: row.qtyOpen,
+          // The header's own word: an editor announcing a different name than the column it sits in
+          // is the one place the distinction matters most, since the header is off-screen by then.
+          ariaLabel: _x('Receiving', 'goods-receipt column: units arriving in this delivery'),
+        },
+      };
     }
     if ('damaged' === meta.id) {
       const recv = recvFor(row.id) ?? 0;
@@ -423,7 +613,12 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
   const onFilterLeave = (key: 'Enter' | 'Escape'): void => {
     if ('Enter' === key && 1 === visibleLines().length) {
       const row = visibleLines()[0];
-      const colId = firstEditableColumnId(row, columnMetas(), canEdit, gridApi?.getSelectableColumnIds() ?? []);
+      const colId = firstEditableColumnId(
+        row,
+        columnMetas(),
+        canEdit,
+        gridApi?.getSelectableColumnIds() ?? [],
+      );
       if (undefined !== colId) {
         gridApi?.focusCellById(String(row.id), colId);
         return;
@@ -437,7 +632,12 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
   // for the next scan/type, no wasted keystroke. Tab (→ next column) and multi-row filters keep the
   // grid's default move.
   const onCommitNavigate = (row: PoLine, columnId: string, move: EditMove): boolean => {
-    if ('down' === move && ('received' === columnId || 'damaged' === columnId) && '' !== filterText().trim() && 1 === visibleLines().length) {
+    if (
+      'down' === move &&
+      ('received' === columnId || 'damaged' === columnId) &&
+      '' !== filterText().trim() &&
+      1 === visibleLines().length
+    ) {
       setFilterText('');
       // Keep the just-edited line in apparent focus by ID — clearing the filter changed its row index,
       // so re-anchor the active cell to where that same line now sits (not whatever row took index 0).
@@ -452,14 +652,16 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
 
   return (
     <div>
-      <div class="mb-2 flex items-center gap-3">
+      <div class="flex items-center gap-3">
         <div class="min-w-0 flex-1">
           <QuickFilter
             value={filterText}
             onInput={setFilterText}
             onLeave={onFilterLeave}
             ref={(focus) => (focusFilter = focus)}
-            placeholder={isPro ? __('Filter or scan — name / SKU / barcode…') : __('Filter — name or SKU…')}
+            placeholder={
+              isPro ? __('Filter or scan — name / SKU / barcode…') : __('Filter — name or SKU…')
+            }
           />
         </div>
         {/* GR-variance baseline toggle — the operator's choice persists (receiver vs expected, purchasing
@@ -477,6 +679,17 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
             onChange={(v: 'ordered' | 'expected') => setBaseline(v)}
           />
         </div>
+        {/* Right-most, after the controls that change what the grid *asks for*: this one changes only
+            what it shows. Ctrl+M still opens the same manager — the button is what makes it findable. */}
+        <Button
+          variant="secondary"
+          class="h-8 shrink-0 px-2!"
+          aria-label={`${__('Columns')} (Ctrl+M)`}
+          title={`${__('Columns')} (Ctrl+M)`}
+          onClick={() => gridApi?.openColumnManager()}
+        >
+          <ColumnsSettingsIcon class="h-5 w-5" />
+        </Button>
       </div>
       {/* Flex-column + viewport cap so the grid's internal scroll container (flex-1 min-h-0) gets a
           bounded height and scrolls; pt-6 leaves room for the gear (-top-2), and no overflow-hidden so
@@ -516,32 +729,32 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
           setRowSelection={(updater) => setRowSelection(updater)}
           cellSelection={cellSelection}
           setCellSelection={(updater) => setCellSelection(updater)}
-          fallback={<div class="px-3 py-6 text-sm text-slate-500">{__('No lines on this receipt.')}</div>}
+          fallback={
+            <div class="px-3 py-6 text-sm text-slate-500">{__('No lines on this receipt.')}</div>
+          }
         />
       </div>
     </div>
   );
 }
 
-/** Product label + the codes a receiver matches physical goods against (our SKU + supplier SKU + GTIN). */
+/**
+ * The product's name.
+ *
+ * Each of the three codes a receiver matches against — our SKU, the supplier's, the GTIN — is a
+ * column of its own, so this cell carries identity and nothing else. They are still every one of
+ * them a filter match-key whether their column is on screen or not, which is what lets a receiver
+ * scan a carton against a grid narrowed to the columns they are actually reading.
+ */
 function ProductCell(props: { line: PoLine }): JSX.Element {
-  // No wrapper div — label + GTIN are direct cell children so the grid's no-wrap truncation reaches them.
   return (
-    <>
-      <div class="font-medium" classList={{ 'text-text-muted italic': !props.line.exists }}>
-        {props.line.productLabel}
-      </div>
-      {/* SKU and supplier SKU now have their own columns; GTIN stays here as a sub-line (longest code). */}
-      <Show when={props.line.gtin}>
-        <div class="text-xs text-text-muted">
-          <span class="text-slate-300">{__('GTIN')}:</span> {props.line.gtin}
-        </div>
-      </Show>
-    </>
+    <div class="font-medium" classList={{ 'text-text-muted italic': !props.line.exists }}>
+      {props.line.productLabel}
+    </div>
   );
 }
 
-/** Monospaced code view cell (SKU / supplier SKU); blank renders an em dash. */
+/** Monospaced code view cell (SKU / supplier SKU / GTIN); blank renders an em dash. */
 function CodeCell(props: { value: string | null }): JSX.Element {
   return <span class="block font-mono text-slate-500">{props.value ?? '—'}</span>;
 }
@@ -562,7 +775,10 @@ function NumCell(props: { value: number | null; strong?: boolean }): JSX.Element
  */
 function ReceivedSoFarCell(props: { good: number; damaged: number }): JSX.Element {
   return (
-    <Show when={props.good > 0 || props.damaged > 0} fallback={<span class="block text-right text-slate-300">—</span>}>
+    <Show
+      when={props.good > 0 || props.damaged > 0}
+      fallback={<span class="block text-right text-slate-300">—</span>}
+    >
       <span class="block text-right tabular-nums">
         {props.good}
         <Show when={props.damaged > 0}>
@@ -579,7 +795,13 @@ function ReceivedSoFarCell(props: { good: number; damaged: number }): JSX.Elemen
 /** Expected qty (read-only): the set value in normal text, or the inherited ordered qty faded when unset. */
 function ExpectedCell(props: { expected: number | null; ordered: number }): JSX.Element {
   return (
-    <span class="block text-right tabular-nums" classList={{ 'text-text-muted italic': null === props.expected, 'text-slate-700': null !== props.expected }}>
+    <span
+      class="block text-right tabular-nums"
+      classList={{
+        'text-text-muted italic': null === props.expected,
+        'text-slate-700': null !== props.expected,
+      }}
+    >
       {props.expected ?? props.ordered}
     </span>
   );
@@ -591,7 +813,11 @@ function ExpectedCell(props: { expected: number | null; ordered: number }): JSX.
  * 0 baseline. A per-line fallback to ordered (when "vs expected" has no expected set) is flagged with a
  * subtle tag, so a `0` never misreads as "matched what they promised".
  */
-function VarianceCell(props: { delta: () => number | null; base: () => number; fallback: () => boolean }): JSX.Element {
+function VarianceCell(props: {
+  delta: () => number | null;
+  base: () => number;
+  fallback: () => boolean;
+}): JSX.Element {
   const pct = (): number | null => {
     const d = props.delta();
     const b = props.base();
@@ -599,7 +825,10 @@ function VarianceCell(props: { delta: () => number | null; base: () => number; f
   };
   const sign = (): string => ((props.delta() ?? 0) > 0 ? '+' : '');
   return (
-    <Show when={null !== props.delta()} fallback={<span class="block text-right text-slate-300">—</span>}>
+    <Show
+      when={null !== props.delta()}
+      fallback={<span class="block text-right text-slate-300">—</span>}
+    >
       <span
         class="block text-right tabular-nums"
         classList={{

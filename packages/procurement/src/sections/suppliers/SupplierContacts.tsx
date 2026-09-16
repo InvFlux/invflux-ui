@@ -24,17 +24,14 @@ export function SupplierContacts(props: { supplierId: number }): JSX.Element {
 
   const query = createQuery(() => ({
     queryKey: ['procurement', 'suppliers', props.supplierId, 'contacts'],
-    queryFn: () => api.get<SupplierContactsResponse>(`/procurement/suppliers/${props.supplierId}/contacts`),
+    queryFn: () =>
+      api.get<SupplierContactsResponse>(`/procurement/suppliers/${props.supplierId}/contacts`),
   }));
 
   return (
     <div class="max-w-2xl">
       <div class="mb-3 flex items-center justify-between">
-        <h2 class="text-sm font-semibold text-slate-600">{__('Contacts')}</h2>
-        <Button
-          size="sm"
-          onClick={() => setEditingId(0)}
-        >
+        <Button size="sm" onClick={() => setEditingId(0)}>
           {__('+ Add contact')}
         </Button>
       </div>
@@ -49,7 +46,9 @@ export function SupplierContacts(props: { supplierId: number }): JSX.Element {
       {/* `?.contacts` like the list below, not a bare `.contacts`: the two read the same field off
           the same response and only one of them defended it. */}
       <Show when={query.data && 0 === (query.data.contacts?.length ?? 0) && 0 !== editingId()}>
-        <p class="text-sm text-slate-500">{__('No contacts yet — add the people you order from.')}</p>
+        <p class="text-sm text-slate-500">
+          {__('No contacts yet — add the people you order from.')}
+        </p>
       </Show>
 
       <ul class="divide-y divide-slate-100">
@@ -57,10 +56,20 @@ export function SupplierContacts(props: { supplierId: number }): JSX.Element {
           {(c) => (
             <Show
               when={editingId() === c.id}
-              fallback={<ContactRow contact={c} supplierId={props.supplierId} onEdit={() => setEditingId(c.id)} />}
+              fallback={
+                <ContactRow
+                  contact={c}
+                  supplierId={props.supplierId}
+                  onEdit={() => setEditingId(c.id)}
+                />
+              }
             >
               <li class="py-2">
-                <ContactForm supplierId={props.supplierId} contact={c} onDone={() => setEditingId(null)} />
+                <ContactForm
+                  supplierId={props.supplierId}
+                  contact={c}
+                  onDone={() => setEditingId(null)}
+                />
               </li>
             </Show>
           )}
@@ -70,12 +79,18 @@ export function SupplierContacts(props: { supplierId: number }): JSX.Element {
   );
 }
 
-function ContactRow(props: { contact: SupplierContact; supplierId: number; onEdit: () => void }): JSX.Element {
+function ContactRow(props: {
+  contact: SupplierContact;
+  supplierId: number;
+  onEdit: () => void;
+}): JSX.Element {
   const api = createApi(useProcurement());
   const queryClient = useQueryClient();
   const c = (): SupplierContact => props.contact;
   const invalidate = (): void =>
-    void queryClient.invalidateQueries({ queryKey: ['procurement', 'suppliers', props.supplierId, 'contacts'] });
+    void queryClient.invalidateQueries({
+      queryKey: ['procurement', 'suppliers', props.supplierId, 'contacts'],
+    });
 
   const del = createMutation(() => ({
     mutationFn: () => api.del(`/procurement/suppliers/${props.supplierId}/contacts/${c().id}`),
@@ -84,7 +99,10 @@ function ContactRow(props: { contact: SupplierContact; supplierId: number; onEdi
   }));
 
   return (
-    <li class="flex items-center gap-3 py-2 text-sm" classList={{ 'opacity-60': 'inactive' === c().status }}>
+    <li
+      class="flex items-center gap-3 py-2 text-sm"
+      classList={{ 'opacity-60': 'inactive' === c().status }}
+    >
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-2">
           <span class="font-medium text-slate-800">{c().name}</span>
@@ -92,8 +110,8 @@ function ContactRow(props: { contact: SupplierContact; supplierId: number; onEdi
             <span class="text-xs text-text-muted">{c().role}</span>
           </Show>
           <Show when={c().poRecipient}>
-            <span class="rounded bg-primary/10 px-1.5 py-0.5 text-2xs font-medium uppercase tracking-wide text-primary">
-              {__('PO')}
+            <span class="rounded bg-primary/10 px-1.5 py-0.5 text-2xs font-medium tracking-wide text-primary">
+              {__('PO recipient')}
             </span>
           </Show>
           <Show when={'inactive' === c().status}>
@@ -104,11 +122,7 @@ function ContactRow(props: { contact: SupplierContact; supplierId: number; onEdi
           {[c().email, c().phone].filter(Boolean).join(' · ') || '—'}
         </div>
       </div>
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={props.onEdit}
-      >
+      <Button variant="ghost" size="sm" onClick={props.onEdit}>
         {__('Edit')}
       </Button>
       <IconButton
@@ -125,7 +139,11 @@ function ContactRow(props: { contact: SupplierContact; supplierId: number; onEdi
   );
 }
 
-function ContactForm(props: { supplierId: number; contact?: SupplierContact; onDone: () => void }): JSX.Element {
+function ContactForm(props: {
+  supplierId: number;
+  contact?: SupplierContact;
+  onDone: () => void;
+}): JSX.Element {
   const api = createApi(useProcurement());
   const queryClient = useQueryClient();
   const existing = props.contact;
@@ -144,7 +162,9 @@ function ContactForm(props: { supplierId: number; contact?: SupplierContact; onD
         ? api.post(`/procurement/suppliers/${props.supplierId}/contacts`, body)
         : api.patch(`/procurement/suppliers/${props.supplierId}/contacts/${existing.id}`, body),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['procurement', 'suppliers', props.supplierId, 'contacts'] });
+      void queryClient.invalidateQueries({
+        queryKey: ['procurement', 'suppliers', props.supplierId, 'contacts'],
+      });
       toast.success(__('Contact saved.'));
       props.onDone();
     },
@@ -170,7 +190,13 @@ function ContactForm(props: { supplierId: number; contact?: SupplierContact; onD
       <div class="grid grid-cols-2 gap-3">
         <label class={FIELD}>
           {__('Name')} <span class="text-red-600">*</span>
-          <input class={INPUT} value={name()} onInput={(e) => setName(e.currentTarget.value)} required autofocus />
+          <input
+            class={INPUT}
+            value={name()}
+            onInput={(e) => setName(e.currentTarget.value)}
+            required
+            autofocus
+          />
         </label>
         <label class={FIELD}>
           {__('Role')}
@@ -183,7 +209,12 @@ function ContactForm(props: { supplierId: number; contact?: SupplierContact; onD
         </label>
         <label class={FIELD}>
           {__('Email')}
-          <input class={INPUT} type="email" value={email()} onInput={(e) => setEmail(e.currentTarget.value)} />
+          <input
+            class={INPUT}
+            type="email"
+            value={email()}
+            onInput={(e) => setEmail(e.currentTarget.value)}
+          />
         </label>
         <label class={FIELD}>
           {__('Phone')}
@@ -192,16 +223,29 @@ function ContactForm(props: { supplierId: number; contact?: SupplierContact; onD
       </div>
       <label class={`${FIELD} mt-3`}>
         {__('Notes')}
-        <textarea class={INPUT} rows="2" value={notes()} onInput={(e) => setNotes(e.currentTarget.value)} />
+        <textarea
+          class={INPUT}
+          rows="2"
+          value={notes()}
+          onInput={(e) => setNotes(e.currentTarget.value)}
+        />
       </label>
       <div class="mt-3 flex items-center gap-4">
         <label class="flex items-center gap-2 text-sm text-slate-700">
-          <input type="checkbox" checked={poRecipient()} onChange={(e) => setPoRecipient(e.currentTarget.checked)} />
+          <input
+            type="checkbox"
+            checked={poRecipient()}
+            onChange={(e) => setPoRecipient(e.currentTarget.checked)}
+          />
           {__('PO recipient')}
         </label>
         <label class="flex items-center gap-2 text-sm text-slate-700">
           {__('Status')}
-          <select class="rounded border border-slate-300 px-2 py-1 text-sm" value={status()} onChange={(e) => setStatus(e.currentTarget.value)}>
+          <select
+            class="rounded border border-slate-300 px-2 py-1 text-sm"
+            value={status()}
+            onChange={(e) => setStatus(e.currentTarget.value)}
+          >
             <option value="active">{__('Active')}</option>
             <option value="inactive">{__('Inactive')}</option>
           </select>
@@ -209,16 +253,10 @@ function ContactForm(props: { supplierId: number; contact?: SupplierContact; onD
       </div>
 
       <div class="mt-3 flex gap-2">
-        <Button
-          type="submit"
-          disabled={mutation.isPending || '' === name().trim()}
-        >
+        <Button type="submit" disabled={mutation.isPending || '' === name().trim()}>
           {mutation.isPending ? __('Saving…') : __('Save')}
         </Button>
-        <Button
-          variant="ghost"
-          onClick={props.onDone}
-        >
+        <Button variant="ghost" onClick={props.onDone}>
           {__('Cancel')}
         </Button>
       </div>

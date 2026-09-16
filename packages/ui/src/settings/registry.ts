@@ -33,6 +33,29 @@ export interface SettingMeta {
 export interface SettingControlProps {
   value: unknown;
   definition: SettingMeta;
+  /**
+   * DOM id the control MUST put on the element the setting's visible name labels.
+   *
+   * Required, not optional, on the same principle as `IconButton`'s `label`: the host renders the
+   * name and can associate it, but only the control knows which of its elements is *the* field. A
+   * control that drops this renders an input with no accessible name at all — which is what every
+   * one of them did before, on the largest form surface in the SPA.
+   *
+   * A composite control (several inputs, each already named) puts this on its wrapper and adds
+   * `role="group"` + `aria-labelledby={labelId}` instead, so the group carries the setting's name
+   * and the children keep their own.
+   */
+  controlId: string;
+  /** DOM id of the element rendering the setting's visible name, for `aria-labelledby`. */
+  labelId: string;
+  /**
+   * DOM id of the row's error message while one is showing, else undefined.
+   *
+   * Put it on the same element as {@link controlId}. Without it the message is announced when it
+   * appears and then becomes unreachable: someone tabbing back to the field to fix the value hears
+   * the field's name and nothing about what was wrong with it.
+   */
+  describedBy?: string;
   /** True when the setting is gate-locked or policy-locked: the control renders read-only. */
   disabled: boolean;
   effectivePolicy: 'local' | 'replicated';

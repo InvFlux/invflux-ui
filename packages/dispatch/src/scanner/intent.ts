@@ -42,10 +42,10 @@ export function deriveEnterIntent(
 // ---------------------------------------------------------------------------
 
 export type AutoStageIntent =
-  | 'stage'       // auto-stage immediately (qty=1, scanner, autoValidation on)
-  | 'zoom-multi'  // zoom the qty cell and wait for dot-barcode confirmation
-  | 'hold-on'     // 0 scanner matches → play hold-on sound + show overlay
-  | null;         // no automatic action
+  | 'stage' // auto-stage immediately (qty=1, scanner, autoValidation on)
+  | 'zoom-multi' // zoom the qty cell and wait for dot-barcode confirmation
+  | 'hold-on' // 0 scanner matches → play hold-on sound + show overlay
+  | null; // no automatic action
 
 /**
  * Decide whether a filter value change should trigger an automatic action.

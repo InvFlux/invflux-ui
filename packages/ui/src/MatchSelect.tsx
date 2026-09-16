@@ -37,7 +37,7 @@ export interface MatchSelectProps {
   otherLabel?: string;
   /** Extra classes on the control box. */
   class?: string;
-  /** Portal target for the listbox (shadow-DOM SPAs pass the light-DOM portalRoot). */
+  /** Portal target for the listbox (shadow-DOM SPAs pass the shared portalRoot). */
   mount?: HTMLElement;
 }
 
@@ -76,20 +76,28 @@ export function MatchSelect(props: MatchSelectProps): JSX.Element {
   const ctxMount = usePortalRootOptional();
   const threshold = (): number => props.threshold ?? DEFAULT_MATCH_THRESHOLD;
 
-  const scoreOf = (o: MatchOption): number => (undefined !== o.score ? o.score : o.targets ? bestMatch(props.query, o.targets).score : 0);
+  const scoreOf = (o: MatchOption): number =>
+    undefined !== o.score ? o.score : o.targets ? bestMatch(props.query, o.targets).score : 0;
 
   const model = createMemo<{ groups: OptionGroup[]; flat: ScoredOption[] }>(() => {
     const scored: ScoredOption[] = props.options.map((o) => ({ ...o, _score: scoreOf(o) }));
-    const above = scored.filter((o) => o._score >= threshold()).sort((a, b) => b._score - a._score || a.label.localeCompare(b.label));
-    const below = scored.filter((o) => o._score < threshold()).sort((a, b) => a.label.localeCompare(b.label));
+    const above = scored
+      .filter((o) => o._score >= threshold())
+      .sort((a, b) => b._score - a._score || a.label.localeCompare(b.label));
+    const below = scored
+      .filter((o) => o._score < threshold())
+      .sort((a, b) => a.label.localeCompare(b.label));
     const both = above.length > 0 && below.length > 0;
     const groups: OptionGroup[] = [];
-    if (above.length > 0) groups.push({ label: both ? (props.matchedLabel ?? '') : '', options: above });
-    if (below.length > 0) groups.push({ label: both ? (props.otherLabel ?? '') : '', options: below });
+    if (above.length > 0)
+      groups.push({ label: both ? (props.matchedLabel ?? '') : '', options: above });
+    if (below.length > 0)
+      groups.push({ label: both ? (props.otherLabel ?? '') : '', options: below });
     return { groups, flat: [...above, ...below] };
   });
 
-  const selected = (): ScoredOption | null => (null === props.value ? null : (model().flat.find((o) => o.value === props.value) ?? null));
+  const selected = (): ScoredOption | null =>
+    null === props.value ? null : (model().flat.find((o) => o.value === props.value) ?? null);
   const controlStyle = (): { 'background-color': string } | undefined => {
     const s = selected();
     return null === s ? undefined : { 'background-color': scoreColor(s._score) };
@@ -113,12 +121,20 @@ export function MatchSelect(props: MatchSelectProps): JSX.Element {
       itemComponent={(itemProps) => (
         <Combobox.Item item={itemProps.item} class={ITEM}>
           <span class="flex min-w-0 items-center gap-2">
-            <span class="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/10" style={{ 'background-color': scoreColor(itemProps.item.rawValue._score) }} />
-            <Combobox.ItemLabel class="truncate">{itemProps.item.rawValue.label}</Combobox.ItemLabel>
+            <span
+              class="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/10"
+              style={{ 'background-color': scoreColor(itemProps.item.rawValue._score) }}
+            />
+            <Combobox.ItemLabel class="truncate">
+              {itemProps.item.rawValue.label}
+            </Combobox.ItemLabel>
           </span>
           <span class="flex shrink-0 items-center gap-2">
             <Show when={false !== props.showScore}>
-              <span class="text-xs tabular-nums text-text-muted group-data-[highlighted]:text-white/80" title={props.scoreTitle}>
+              <span
+                class="text-xs tabular-nums text-text-muted group-data-[highlighted]:text-white/80"
+                title={props.scoreTitle}
+              >
                 {pct(itemProps.item.rawValue._score)}
               </span>
             </Show>
@@ -137,8 +153,15 @@ export function MatchSelect(props: MatchSelectProps): JSX.Element {
         </Show>
       )}
     >
-      <Combobox.Control aria-label={props.ariaLabel} class={`${CONTROL} ${props.class ?? ''}`} style={controlStyle()}>
-        <Combobox.Input aria-label={props.ariaLabel} class="h-7 min-w-0 flex-1 border-0 bg-transparent p-0 text-sm outline-none placeholder:text-text-muted focus:ring-0" />
+      <Combobox.Control
+        aria-label={props.ariaLabel}
+        class={`${CONTROL} ${props.class ?? ''}`}
+        style={controlStyle()}
+      >
+        <Combobox.Input
+          aria-label={props.ariaLabel}
+          class="h-7 min-w-0 flex-1 border-0 bg-transparent p-0 text-sm outline-none placeholder:text-text-muted focus:ring-0"
+        />
         <Show when={null !== props.value}>
           <button
             type="button"

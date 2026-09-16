@@ -33,7 +33,8 @@ export const wordpressHostNav: HostNav = {
     const [surface, ...rest] = path.split('/');
     const page = PAGE_BY_SURFACE[surface ?? ''] ?? 'invflux-app';
     // The surface's own page serves it at the route remainder; the unified app keeps the full route.
-    const fragment = 'invflux-app' === page ? `#/${path}` : rest.length > 0 ? `#/${rest.join('/')}` : '';
+    const fragment =
+      'invflux-app' === page ? `#/${path}` : rest.length > 0 ? `#/${rest.join('/')}` : '';
     const q = query ? `&${query}` : '';
     return `admin.php?page=${page}${q}${fragment}`;
   },

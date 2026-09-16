@@ -1,13 +1,25 @@
-import { createEffect, createMemo, createSignal, For, type JSX, Match, onMount, Show, Switch, untrack } from 'solid-js';
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  type JSX,
+  Match,
+  onMount,
+  Show,
+  Switch,
+  untrack,
+} from 'solid-js';
 import { Button } from './Button';
 import { IconButton } from './IconButton';
 import { iconButtonClass } from './primitives';
 import { __, _n, sprintf } from '@invflux/i18n';
-import { Modal } from './Modal';
+import { Modal, ModalFooter, ModalHeader, ModalPanel } from './Modal';
 import { parseSpreadsheetTsv } from './excel-tsv-parser';
 import { bestMatch, foldKey } from './fuzzy-match';
 import { normalizeAlias } from './import-aliases';
 import { MatchSelect } from './MatchSelect';
+import { ErrorBanner } from './ErrorBanner';
 
 // Acceptance floor for treating a header→field pairing as an auto-map candidate and rendering it in the
 // "matched" group (above the separator + alpha-sorted no-match tail). Exact key/label/alias matches
@@ -150,7 +162,12 @@ export function ImportWizard(props: ImportWizardProps): JSX.Element {
       preview: __('Review & import'),
     };
     const current = step();
-    return sprintf(__('Step %1$d/%2$d: %3$s'), STEP_ORDER.indexOf(current) + 1, STEP_ORDER.length, titles[current]);
+    return sprintf(
+      __('Step %1$d/%2$d: %3$s'),
+      STEP_ORDER.indexOf(current) + 1,
+      STEP_ORDER.length,
+      titles[current],
+    );
   });
   const [error, setError] = createSignal<string | null>(null);
   const [results, setResults] = createSignal<ResolvedRow[]>([]);
@@ -160,7 +177,9 @@ export function ImportWizard(props: ImportWizardProps): JSX.Element {
   onMount(() => pasteRef?.focus());
 
   const grid = createMemo(() => fileGrid() ?? parseSpreadsheetTsv(raw()).rows);
-  const parseErrors = createMemo(() => (null !== fileGrid() ? [] : parseSpreadsheetTsv(raw()).errors));
+  const parseErrors = createMemo(() =>
+    null !== fileGrid() ? [] : parseSpreadsheetTsv(raw()).errors,
+  );
   // The raw grid's line count — drives the skip control's ceiling and keeps it visible even when the
   // skip would (temporarily) empty the trimmed grid, so the user can always dial it back down.
   const rawCount = createMemo(() => grid().length);
@@ -204,7 +223,8 @@ export function ImportWizard(props: ImportWizardProps): JSX.Element {
   });
   const dataRows = createMemo(() => (hasHeader() ? rows().slice(1) : rows()));
 
-  const fieldByKey = (k: string | null): ImportField | undefined => (k ? props.fields.find((f) => f.key === k) : undefined);
+  const fieldByKey = (k: string | null): ImportField | undefined =>
+    k ? props.fields.find((f) => f.key === k) : undefined;
 
   // Aliases the merchant has taught this session (optimistic), merged over the host-fetched map so a
   // just-remembered header stops offering "Remember" and auto-maps immediately.
@@ -213,12 +233,16 @@ export function ImportWizard(props: ImportWizardProps): JSX.Element {
   // column already matches, so there's nothing to teach).
   const [manualCols, setManualCols] = createSignal<Set<number>>(new Set());
   const conceptOf = (f: ImportField): string => f.aliasKey ?? f.key;
-  const learnedFor = (f: ImportField): string[] => [...(props.learnedAliases?.[conceptOf(f)] ?? []), ...(sessionLearned()[conceptOf(f)] ?? [])];
+  const learnedFor = (f: ImportField): string[] => [
+    ...(props.learnedAliases?.[conceptOf(f)] ?? []),
+    ...(sessionLearned()[conceptOf(f)] ?? []),
+  ];
 
   // The header labels a field matches from: its key, its (translated) label, host-supplied built-in
   // aliases, and any merchant-taught (learned) aliases for its concept. Raw (unfolded) — the scorer
   // tokenises them, so word boundaries must survive.
-  const fieldTargets = (f: ImportField): string[] => [f.key, f.label, ...(f.aliases ?? []), ...learnedFor(f)].filter((t) => '' !== t.trim());
+  const fieldTargets = (f: ImportField): string[] =>
+    [f.key, f.label, ...(f.aliases ?? []), ...learnedFor(f)].filter((t) => '' !== t.trim());
 
   // A header→field match: its best score (0–1) across the field's targets and the folded length of the
   // winning target (specificity — a longer matched alias is more specific, breaks score ties).
@@ -304,7 +328,12 @@ export function ImportWizard(props: ImportWizardProps): JSX.Element {
     setKeyColumn(autoKeyColumn(map));
   });
 
-  const keyCandidateCols = createMemo(() => mapping().map((k, i) => ({ k, i })).filter((c) => fieldByKey(c.k)?.keyCandidate).map((c) => c.i));
+  const keyCandidateCols = createMemo(() =>
+    mapping()
+      .map((k, i) => ({ k, i }))
+      .filter((c) => fieldByKey(c.k)?.keyCandidate)
+      .map((c) => c.i),
+  );
   // The chosen key, falling back to the priority auto-pick when the chosen column is no longer valid.
   const effectiveKeyCol = createMemo<number | null>(() => {
     const cands = keyCandidateCols();
@@ -327,7 +356,10 @@ export function ImportWizard(props: ImportWizardProps): JSX.Element {
     setMapping((m) => {
       const next = [...m];
       // A field maps to at most one column — clear any other column holding it.
-      if (null !== fieldKey) next.forEach((v, i) => { if (v === fieldKey && i !== col) next[i] = null; });
+      if (null !== fieldKey)
+        next.forEach((v, i) => {
+          if (v === fieldKey && i !== col) next[i] = null;
+        });
       next[col] = fieldKey;
       return next;
     });
@@ -343,7 +375,9 @@ export function ImportWizard(props: ImportWizardProps): JSX.Element {
   // The header a mapped column could teach, or null when there's nothing to learn. Offered whenever the
   // column is mapped to a field the header ISN'T already an exact target of — i.e. a hand-remap OR a
   // fuzzy/partial auto-match. Clicking "Remember" promotes that inexact match to an exact learned alias.
-  const learnableFor = (col: number): { concept: string; header: string; fieldLabel: string } | null => {
+  const learnableFor = (
+    col: number,
+  ): { concept: string; header: string; fieldLabel: string } | null => {
     if (!props.onLearnAlias) return null;
     const f = fieldByKey(mapping()[col]);
     const header = (headers()[col] ?? '').trim();
@@ -360,7 +394,10 @@ export function ImportWizard(props: ImportWizardProps): JSX.Element {
     if ('' === alias) return;
     props.onLearnAlias?.(learn.concept, alias);
     // Apply optimistically so the row's "Remember" disappears and the header auto-maps from now on.
-    setSessionLearned((prev) => ({ ...prev, [learn.concept]: [...(prev[learn.concept] ?? []), alias] }));
+    setSessionLearned((prev) => ({
+      ...prev,
+      [learn.concept]: [...(prev[learn.concept] ?? []), alias],
+    }));
     setManualCols((s) => {
       const next = new Set(s);
       next.delete(col);
@@ -378,14 +415,28 @@ export function ImportWizard(props: ImportWizardProps): JSX.Element {
     }
     const others = keyCandidateCols().filter((c) => c !== col);
     if (0 === others.length) return;
-    others.sort((a, b) => (fieldByKey(mapping()[a])?.keyPriority ?? 99) - (fieldByKey(mapping()[b])?.keyPriority ?? 99));
+    others.sort(
+      (a, b) =>
+        (fieldByKey(mapping()[a])?.keyPriority ?? 99) -
+        (fieldByKey(mapping()[b])?.keyPriority ?? 99),
+    );
     setKeyColumn(others[0]);
   };
 
   // The MatchSelect options for a column's "Maps to" picker — each field with its alias targets, so the
   // component scores/ranks/colours them against the header. Reactive (learned aliases feed fieldTargets).
-  const fieldOptions = (): Array<{ value: string; label: string; targets: string[]; disabled?: boolean }> =>
-    props.fields.map((f) => ({ value: f.key, label: f.label, targets: fieldTargets(f), disabled: f.disabled }));
+  const fieldOptions = (): Array<{
+    value: string;
+    label: string;
+    targets: string[];
+    disabled?: boolean;
+  }> =>
+    props.fields.map((f) => ({
+      value: f.key,
+      label: f.label,
+      targets: fieldTargets(f),
+      disabled: f.disabled,
+    }));
 
   // A column is "imported" (an update target) when it's mapped to a non-key-only field and isn't the
   // active key — i.e. the value columns (qty / cost; supplier SKU / barcode at Pro). Drives the Import
@@ -411,7 +462,9 @@ export function ImportWizard(props: ImportWizardProps): JSX.Element {
       }),
   );
 
-  const requiredMissing = createMemo(() => props.fields.filter((f) => f.required && !mapping().includes(f.key)).map((f) => f.label));
+  const requiredMissing = createMemo(() =>
+    props.fields.filter((f) => f.required && !mapping().includes(f.key)).map((f) => f.label),
+  );
   // At least one value column is needed to upsert (qty OR cost OR …); cost and quantity can legitimately
   // arrive from separate sources / separate imports.
   const upsertableMappedCount = createMemo(() => valueFields().length);
@@ -492,26 +545,24 @@ export function ImportWizard(props: ImportWizardProps): JSX.Element {
   };
 
   return (
-    <Modal onClose={props.onClose} closeOnBackdrop={false} backdropClass="flex items-start justify-center bg-black/30 p-6" label={props.title}>
-      <div class="mt-10 flex max-h-[80vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-border bg-surface shadow-xl" onClick={(e) => e.stopPropagation()}>
-        <div class="flex items-start justify-between border-b border-border bg-surface-raised p-4">
-          <div>
-            <h2 class="text-lg font-semibold text-text">{props.title}</h2>
-            <p class="mt-0.5 text-xs text-text-muted">{stepLabel()}</p>
-          </div>
-          <IconButton
-            size="sm"
-            label={__('Close')}
-            onClick={props.onClose}
-          >
-            ✕
-          </IconButton>
-        </div>
+    <Modal onClose={props.onClose} closeOnBackdrop={false} align="top" label={props.title}>
+      <ModalPanel size="3xl" class="mt-10">
+        <ModalHeader
+          title={props.title}
+          subtitle={stepLabel()}
+          actions={
+            <IconButton size="sm" label={__('Close')} onClick={props.onClose}>
+              ✕
+            </IconButton>
+          }
+        />
 
         <div class="flex-1 overflow-y-auto p-4 text-sm text-text">
           <Show when={'map' === step()}>
             <div class="flex items-baseline justify-between">
-              <label class="block font-medium text-text">{__('Paste rows from a spreadsheet')}</label>
+              <label class="block font-medium text-text">
+                {__('Paste rows from a spreadsheet')}
+              </label>
               <Show when={undefined !== props.onParseFile}>
                 <label class="inline-flex cursor-pointer items-center gap-1.5 text-xs font-medium text-primary hover:underline">
                   <input
@@ -545,7 +596,10 @@ export function ImportWizard(props: ImportWizardProps): JSX.Element {
             />
             <Show when={null !== fileName()}>
               <p class="mt-1 text-xs text-text-muted">
-                {sprintf(__('Loaded from %s — edit above to switch back to pasted text.'), fileName() ?? '')}
+                {sprintf(
+                  __('Loaded from %s — edit above to switch back to pasted text.'),
+                  fileName() ?? '',
+                )}
               </p>
             </Show>
             <Show when={parseErrors().length > 0}>
@@ -555,7 +609,12 @@ export function ImportWizard(props: ImportWizardProps): JSX.Element {
             <Show when={rawCount() > 0}>
               <div class="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5">
                 <label class="inline-flex items-center gap-1.5 text-xs text-text-muted">
-                  <input type="checkbox" class="rounded border-border" checked={hasHeader()} onChange={() => setHasHeader((v) => !v)} />
+                  <input
+                    type="checkbox"
+                    class="rounded border-border"
+                    checked={hasHeader()}
+                    onChange={() => setHasHeader((v) => !v)}
+                  />
                   {__('First row is a header')}
                 </label>
                 <label class="inline-flex items-center gap-1.5 text-xs text-text-muted">
@@ -566,14 +625,18 @@ export function ImportWizard(props: ImportWizardProps): JSX.Element {
                     max={rawCount()}
                     class="w-14 rounded border border-border bg-surface px-1.5 py-0.5 text-xs focus:outline-none focus:ring-2 focus:ring-primary/50"
                     value={skipRows()}
-                    onInput={(e) => setSkipRows(Math.max(0, Math.floor(Number(e.currentTarget.value) || 0)))}
+                    onInput={(e) =>
+                      setSkipRows(Math.max(0, Math.floor(Number(e.currentTarget.value) || 0)))
+                    }
                   />
                   {_n('line', 'lines', skipRows())}
                 </label>
               </div>
 
               <Show when={0 === colCount()}>
-                <p class="mt-2 text-xs text-amber-700">{__('All rows are skipped — reduce the skip count.')}</p>
+                <p class="mt-2 text-xs text-amber-700">
+                  {__('All rows are skipped — reduce the skip count.')}
+                </p>
               </Show>
 
               <table class="mt-2 w-full border-collapse">
@@ -591,7 +654,9 @@ export function ImportWizard(props: ImportWizardProps): JSX.Element {
                     {(i) => (
                       <tr>
                         <td class="border-b border-border py-1 pr-3 font-medium">{headers()[i]}</td>
-                        <td class="border-b border-border py-1 pr-3 text-text-muted">{(dataRows()[0]?.[i] ?? '').trim() || '—'}</td>
+                        <td class="border-b border-border py-1 pr-3 text-text-muted">
+                          {(dataRows()[0]?.[i] ?? '').trim() || '—'}
+                        </td>
                         <td class="border-b border-border py-1 pr-3">
                           <MatchSelect
                             query={headers()[i] ?? ''}
@@ -615,7 +680,9 @@ export function ImportWizard(props: ImportWizardProps): JSX.Element {
                                 onClick={() => rememberAlias(i)}
                               >
                                 {sprintf(__('Remember “%s”'), learn().fieldLabel)}{' '}
-                                <span class="text-text-muted">{sprintf(__('↔ “%s”'), learn().header)}</span>
+                                <span class="text-text-muted">
+                                  {sprintf(__('↔ “%s”'), learn().header)}
+                                </span>
                               </Button>
                             )}
                           </Show>
@@ -625,13 +692,30 @@ export function ImportWizard(props: ImportWizardProps): JSX.Element {
                             <button
                               type="button"
                               class={iconButtonClass('xs', false, 'hover:bg-transparent')}
-                              classList={{ 'text-primary': effectiveKeyCol() === i, 'text-gray-300 hover:text-gray-500': effectiveKeyCol() !== i }}
-                              title={effectiveKeyCol() === i ? __('Matching on this column (click to switch away)') : __('Use this column to match')}
+                              classList={{
+                                'text-primary': effectiveKeyCol() === i,
+                                'text-gray-300 hover:text-gray-500': effectiveKeyCol() !== i,
+                              }}
+                              title={
+                                effectiveKeyCol() === i
+                                  ? __('Matching on this column (click to switch away)')
+                                  : __('Use this column to match')
+                              }
                               aria-pressed={effectiveKeyCol() === i}
                               onClick={() => toggleKey(i)}
                             >
-                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />
+                              <svg
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                class="h-4 w-4"
+                              >
+                                <path
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                  d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"
+                                />
                               </svg>
                             </button>
                           </Show>
@@ -639,9 +723,22 @@ export function ImportWizard(props: ImportWizardProps): JSX.Element {
                         {/* Import: derived, read-only — marks columns whose values get imported (value/update columns). */}
                         <td class="border-b border-border py-1">
                           <Show when={isImportCol(i)}>
-                            <span class="text-primary" title={props.importColumnTitle ?? __('This column is imported')}>
-                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                            <span
+                              class="text-primary"
+                              title={props.importColumnTitle ?? __('This column is imported')}
+                            >
+                              <svg
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                class="h-4 w-4"
+                              >
+                                <path
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                  d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"
+                                />
                               </svg>
                             </span>
                           </Show>
@@ -653,13 +750,21 @@ export function ImportWizard(props: ImportWizardProps): JSX.Element {
               </table>
 
               <Show when={requiredMissing().length > 0}>
-                <p class="mt-2 text-xs text-amber-700">{sprintf(__('Map the required column(s): %s'), requiredMissing().join(', '))}</p>
+                <p class="mt-2 text-xs text-amber-700">
+                  {sprintf(__('Map the required column(s): %s'), requiredMissing().join(', '))}
+                </p>
               </Show>
               <Show when={null === keyField()}>
-                <p class="mt-2 text-xs text-amber-700">{__('Map a key column (SKU / supplier SKU / barcode) to match products.')}</p>
+                <p class="mt-2 text-xs text-amber-700">
+                  {__('Map a key column (SKU / supplier SKU / barcode) to match products.')}
+                </p>
               </Show>
-              <Show when={needsValueColumn() && null !== keyField() && 0 === upsertableMappedCount()}>
-                <p class="mt-2 text-xs text-amber-700">{props.valueColumnHint ?? __('Map at least one column to import.')}</p>
+              <Show
+                when={needsValueColumn() && null !== keyField() && 0 === upsertableMappedCount()}
+              >
+                <p class="mt-2 text-xs text-amber-700">
+                  {props.valueColumnHint ?? __('Map at least one column to import.')}
+                </p>
               </Show>
             </Show>
           </Show>
@@ -672,9 +777,22 @@ export function ImportWizard(props: ImportWizardProps): JSX.Element {
               <thead>
                 <tr class="text-left text-xs text-text-muted">
                   <th class="border-b border-border py-1 pr-2 font-normal" />
-                  <th class="border-b border-border py-1 pr-3 font-normal">{previewFields()[0]?.label}</th>
-                  <th class="border-b border-border py-1 pr-3 font-normal">{__('Matched product')}</th>
-                  <For each={previewFields().slice(1)}>{(f) => <th class="border-b border-border py-1 pr-3 font-normal" classList={{ 'text-right': f.numeric }}>{f.label}</th>}</For>
+                  <th class="border-b border-border py-1 pr-3 font-normal">
+                    {previewFields()[0]?.label}
+                  </th>
+                  <th class="border-b border-border py-1 pr-3 font-normal">
+                    {__('Matched product')}
+                  </th>
+                  <For each={previewFields().slice(1)}>
+                    {(f) => (
+                      <th
+                        class="border-b border-border py-1 pr-3 font-normal"
+                        classList={{ 'text-right': f.numeric }}
+                      >
+                        {f.label}
+                      </th>
+                    )}
+                  </For>
                 </tr>
               </thead>
               <tbody>
@@ -684,12 +802,20 @@ export function ImportWizard(props: ImportWizardProps): JSX.Element {
                     return (
                       <tr classList={{ 'opacity-60': 'matched' !== r.status }}>
                         <td class="border-b border-border py-1 pr-2 align-top">
-                          <span classList={{ 'text-green-600': 'matched' === r.status, 'text-red-600': 'unmatched' === r.status, 'text-amber-600': 'ambiguous' === r.status }}>
+                          <span
+                            classList={{
+                              'text-green-600': 'matched' === r.status,
+                              'text-red-600': 'unmatched' === r.status,
+                              'text-amber-600': 'ambiguous' === r.status,
+                            }}
+                          >
                             {'matched' === r.status ? '✓' : 'unmatched' === r.status ? '✕' : '?'}
                           </span>
                         </td>
                         {/* Key column (row header) — the matched value, shown plain. */}
-                        <td class="border-b border-border py-1 pr-3 align-top font-medium">{row()[previewFields()[0]?.key ?? ''] ?? ''}</td>
+                        <td class="border-b border-border py-1 pr-3 align-top font-medium">
+                          {row()[previewFields()[0]?.key ?? ''] ?? ''}
+                        </td>
                         {/* Matched product, right after the key. */}
                         <td class="border-b border-border py-1 pr-3 align-top text-text-muted">
                           {'matched' === r.status ? r.label : (r.note ?? '—')}
@@ -705,22 +831,46 @@ export function ImportWizard(props: ImportWizardProps): JSX.Element {
                             // blanks; a current value → empty leaves as-is (black), '-' deletes (struck red),
                             // a value sets it (unchanged → black, changed → old red / new green). Comparison
                             // uses the raw values; only the display is formatted.
-                            const mode = (): 'add' | 'blank' | 'noop' | 'delete' | 'same' | 'change' =>
+                            const mode = ():
+                              'add' | 'blank' | 'noop' | 'delete' | 'same' | 'change' =>
                               '' === old()
-                                ? '' === nw() || '-' === nw() ? 'blank' : 'add'
-                                : '' === nw() ? 'noop' : '-' === nw() ? 'delete' : sameValue(nw(), old()) ? 'same' : 'change';
+                                ? '' === nw() || '-' === nw()
+                                  ? 'blank'
+                                  : 'add'
+                                : '' === nw()
+                                  ? 'noop'
+                                  : '-' === nw()
+                                    ? 'delete'
+                                    : sameValue(nw(), old())
+                                      ? 'same'
+                                      : 'change';
                             return (
-                              <td class="border-b border-border py-1 pr-3 align-top" classList={{ 'text-right': f.numeric }}>
+                              <td
+                                class="border-b border-border py-1 pr-3 align-top"
+                                classList={{ 'text-right': f.numeric }}
+                              >
                                 {/* No product ⇒ nothing to import for this column. */}
                                 <Show when={'matched' === r.status} fallback={<span />}>
                                   <Switch>
-                                    <Match when={'add' === mode()}><span class="text-green-700">{fmt(nw())}</span></Match>
-                                    <Match when={'blank' === mode()}><span /></Match>
-                                    <Match when={'noop' === mode()}><span>{fmt(old())}</span></Match>
-                                    <Match when={'same' === mode()}><span>{fmt(nw())}</span></Match>
-                                    <Match when={'delete' === mode()}><span class="text-red-600 line-through">{fmt(old())}</span></Match>
+                                    <Match when={'add' === mode()}>
+                                      <span class="text-green-700">{fmt(nw())}</span>
+                                    </Match>
+                                    <Match when={'blank' === mode()}>
+                                      <span />
+                                    </Match>
+                                    <Match when={'noop' === mode()}>
+                                      <span>{fmt(old())}</span>
+                                    </Match>
+                                    <Match when={'same' === mode()}>
+                                      <span>{fmt(nw())}</span>
+                                    </Match>
+                                    <Match when={'delete' === mode()}>
+                                      <span class="text-red-600 line-through">{fmt(old())}</span>
+                                    </Match>
                                     <Match when={'change' === mode()}>
-                                      <span class="block text-red-600 line-through">{fmt(old())}</span>
+                                      <span class="block text-red-600 line-through">
+                                        {fmt(old())}
+                                      </span>
                                       <span class="block text-green-700">{fmt(nw())}</span>
                                     </Match>
                                   </Switch>
@@ -738,45 +888,33 @@ export function ImportWizard(props: ImportWizardProps): JSX.Element {
           </Show>
 
           <Show when={error()}>
-            <p class="mt-3 text-sm text-red-700">{error()}</p>
+            <ErrorBanner class="mt-3 text-sm">{error()}</ErrorBanner>
           </Show>
         </div>
 
-        <div class="flex justify-end gap-2 border-t border-border bg-surface-raised p-4">
+        <ModalFooter>
           <Show
             when={'preview' === step()}
             fallback={
               <>
-                <Button
-                  variant="secondary"
-                  onClick={props.onClose}
-                >
+                <Button variant="secondary" onClick={props.onClose}>
                   {__('Cancel')}
                 </Button>
-                <Button
-                  disabled={!canContinue() || busy()}
-                  onClick={() => void doResolve()}
-                >
+                <Button disabled={!canContinue() || busy()} onClick={() => void doResolve()}>
                   {busy() ? __('Matching…') : __('Continue')}
                 </Button>
               </>
             }
           >
-            <Button
-              variant="secondary"
-              onClick={() => setStep('map')}
-            >
+            <Button variant="secondary" onClick={() => setStep('map')}>
               {__('Back')}
             </Button>
-            <Button
-              disabled={!hasChanges() || busy()}
-              onClick={() => void doCommit()}
-            >
+            <Button disabled={!hasChanges() || busy()} onClick={() => void doCommit()}>
               {busy() ? __('Importing…') : commitLabel()}
             </Button>
           </Show>
-        </div>
-      </div>
+        </ModalFooter>
+      </ModalPanel>
     </Modal>
   );
 }

@@ -1,7 +1,21 @@
-import { __, _n, sprintf } from '@invflux/i18n';
-import { DataGrid, type DataGridMenuItem, drilldownRegistry, EMPTY_SELECTION, type GridColumnMeta, type SearchSelectOption, type SelectionState, type StagedCell } from '@invflux/ui';
+import { __, _n, _x, sprintf } from '@invflux/i18n';
+import {
+  DataGrid,
+  type DataGridMenuItem,
+  drilldownRegistry,
+  EMPTY_SELECTION,
+  type GridColumnMeta,
+  type SearchSelectOption,
+  type SelectionState,
+  type StagedCell,
+} from '@invflux/ui';
 import { type ColumnDef, createColumnHelper } from '@tanstack/solid-table';
-import type { ColumnOrderState, RowSelectionState, SortingState, VisibilityState } from '@tanstack/solid-table';
+import type {
+  ColumnOrderState,
+  RowSelectionState,
+  SortingState,
+  VisibilityState,
+} from '@tanstack/solid-table';
 import { createEffect, createMemo, createSignal, type JSX, Show } from 'solid-js';
 import { useProcurement } from '../../context';
 import { createApi } from '../../lib/api';
@@ -15,6 +29,8 @@ import { belowMoq, offCasePack } from '../../grid/qtyRules';
 import { QuickFilter, isTypingInField } from '../../grid/QuickFilter';
 import { usePortalRoot } from '../../portal';
 import type { AddOption } from './AddPicker';
+import { atSupplierPrecision, formatDiscount } from './linePrice';
+import { SkuCell } from './SkuCell';
 import type { PoLine } from './types';
 
 // Register the "On order" drill-down once, at module load: double-clicking the green +N cell resolves
@@ -36,18 +52,35 @@ const PRODUCT_EDITOR_TYPE = 'text:catalogue-add';
 
 /** Patch a single editable field of an existing draft line (immediate, optimistic — the host owns it). */
 export interface DraftLinePatch {
-  requested_qty?: number;
+  qty_requested?: number;
+  /** The price before any discount; `null` returns the line to the catalogue price. */
   unit_cost?: string | null;
+  /** The supplier's discount in percent, taken off `unit_cost`; `null` removes it. */
+  discount_pct?: string | null;
   note?: string | null;
 }
 
 const COLUMN_ORDER = [
-  'image', 'product', 'sku', 'supplier_sku', 'available', 'on_order', 'reorder', 'moq', 'case_pack',
-  'requested_qty', 'unit_cost', 'line_total', 'note',
+  'image',
+  'product',
+  'sku',
+  'supplier_sku',
+  'available',
+  'on_order',
+  'reorder',
+  'moq',
+  'case_pack',
+  'qty_requested',
+  'unit_cost',
+  'discount_pct',
+  'line_total',
+  'note',
 ];
 
 /** GridColumnMeta with draft-editor defaults filled in; all columns share the one "Procurement" group. */
-function colMeta(over: Partial<GridColumnMeta> & { id: string; label: string; dataType: string }): GridColumnMeta {
+function colMeta(
+  over: Partial<GridColumnMeta> & { id: string; label: string; dataType: string },
+): GridColumnMeta {
   return {
     kind: 'read_only',
     editable: false,
@@ -105,12 +138,23 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
 
   // On-order drill-down data source (only the on_order column carries hasDrilldown). Fetched by the
   // subject (not the line id) — the grid hands us the full row. Tier-gating is server-side (`locked`).
-  const fetchDrilldown = async (_columnId: string, row: PoLine): Promise<{ title?: () => JSX.Element; detail: unknown; subtitle?: () => JSX.Element }> => {
-    const res = await api.get<OnOrderResponse>('/procurement/purchase-orders/on-order', { subject_id: row.subjectId });
+  const fetchDrilldown = async (
+    _columnId: string,
+    row: PoLine,
+  ): Promise<{ title?: () => JSX.Element; detail: unknown; subtitle?: () => JSX.Element }> => {
+    const res = await api.get<OnOrderResponse>('/procurement/purchase-orders/on-order', {
+      subject_id: row.subjectId,
+    });
     // Override the frame's default title (the "On order" column label) with a richer one carrying the
     // SKU (smaller/gray); product name goes on the subtitle line. No SKU → fall back to the plain label.
     return {
-      title: row.sku ? () => <>{__('On order')} <span class="text-xs font-normal text-text-muted">- {row.sku}</span></> : undefined,
+      title: row.sku
+        ? () => (
+            <>
+              {__('On order')} <span class="text-xs font-normal text-text-muted">- {row.sku}</span>
+            </>
+          )
+        : undefined,
       subtitle: row.productLabel ? () => row.productLabel : undefined,
       detail: res,
     };
@@ -120,7 +164,7 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
   const effectiveCost = (l: PoLine): string | null => l.unitCost ?? l.catalogUnitCost;
   const lineTotalNum = (l: PoLine): number => {
     const cost = effectiveCost(l);
-    return null === cost ? 0 : l.requestedQty * Number(cost);
+    return null === cost ? 0 : l.qtyRequested * Number(cost);
   };
 
   // Quick-filter: fuzzy-match the rows on the identifier fields; non-matching lines hide immediately.
@@ -128,7 +172,9 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
   const matchFields = (l: PoLine): Array<string | null> =>
     isPro ? [l.productLabel, l.sku, l.supplierSku, l.gtin] : [l.productLabel, l.sku, l.supplierSku];
   const visibleLines = createMemo<PoLine[]>(() =>
-    '' === filterText().trim() ? props.lines : props.lines.filter((l) => fuzzyMatches(filterText(), matchFields(l))),
+    '' === filterText().trim()
+      ? props.lines
+      : props.lines.filter((l) => fuzzyMatches(filterText(), matchFields(l))),
   );
 
   // ── Append row (MS-Access style) ────────────────────────────────────────────────────────────────
@@ -139,9 +185,33 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
   registerCataloguePickerEditor();
 
   const draftLine = (): PoLine => ({
-    id: DRAFT_ID, subjectId: 0, postId: null, productLabel: '', sku: null, supplierSku: null, gtin: null,
-    imageUrl: null, exists: true, requestedQty: 0, expectedQty: null, qtyReceived: 0, damagedSoFar: 0, qtyClosedShort: 0, qtyOpen: 0, unitCost: null, lineTotal: null,
-    available: null, onOrder: null, reorderThreshold: null, suggestedQty: null, catalogUnitCost: null, note: null,
+    id: DRAFT_ID,
+    subjectId: 0,
+    postId: null,
+    productLabel: '',
+    sku: null,
+    supplierSku: null,
+    gtin: null,
+    imageUrl: null,
+    exists: true,
+    qtyRequested: 0,
+    qtyExpected: null,
+    qtyReceived: 0,
+    qtyDamagedSoFar: 0,
+    qtyClosedShort: 0,
+    qtyOpen: 0,
+    unitCost: null,
+    listUnitCost: null,
+    discountPct: null,
+    unitCostInvoiced: null,
+    qtyInvoiced: 0,
+    lineTotal: null,
+    available: null,
+    onOrder: null,
+    reorderThreshold: null,
+    suggestedQty: null,
+    catalogUnitCost: null,
+    note: null,
   });
   const isDraft = (l: PoLine): boolean => DRAFT_ID === l.id;
   const gridRows = createMemo<PoLine[]>(() => [...visibleLines(), draftLine()]);
@@ -151,80 +221,419 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
   const addAndEdit = async (subjectId: number): Promise<void> => {
     const newId = await props.onAddLine(subjectId);
     if (null === newId) return;
-    queueMicrotask(() => gridApi?.focusCellById(String(newId), 'requested_qty', true));
+    queueMicrotask(() => gridApi?.focusCellById(String(newId), 'qty_requested', true));
   };
 
   const columnMetas = createMemo<GridColumnMeta[]>(() => [
-    colMeta({ id: 'image', label: __('Image'), description: __('Product thumbnail'), dataType: 'text', defaultWidth: 56 }),
-    colMeta({ id: 'product', label: __('Product'), description: __('Product name (and GTIN). Use the blank bottom row to add another product from the supplier catalogue.'), dataType: PRODUCT_EDITOR_TYPE, copyable: true, defaultWidth: 280 }),
-    colMeta({ id: 'sku', label: __('SKU'), description: __('Our Stock Keeping Unit for this product'), dataType: 'text', copyable: true, defaultWidth: 120 }),
-    colMeta({ id: 'supplier_sku', label: __('Supplier SKU'), description: __('The supplier’s own code for this product'), dataType: 'text', copyable: true, defaultWidth: 130 }),
-    colMeta({ id: 'available', label: __('Avail'), description: __('Available to promise now (on-hand minus reserved). Negative = a deficit already promised beyond stock.'), dataType: 'number', defaultWidth: 72 }),
-    colMeta({ id: 'on_order', label: __('On order'), description: __('Units already inbound on other submitted purchase orders. Double-click to see which POs.'), dataType: 'number:on-order', hasDrilldown: true, drilldownMaxWidth: 'max-w-[26rem]', defaultWidth: 80 }),
-    colMeta({ id: 'reorder', label: __('Reorder'), description: __('The reorder threshold — replenishment tops the product back up to here when it drops below.'), dataType: 'number', defaultWidth: 76 }),
-    colMeta({ id: 'moq', label: __('MOQ'), description: __('Minimum order quantity the supplier accepts for this product'), dataType: 'number', defaultWidth: 64 }),
-    colMeta({ id: 'case_pack', label: __('Case pack'), description: __('Units per case — order quantities should be whole multiples of this'), dataType: 'number', defaultWidth: 84 }),
-    colMeta({ id: 'requested_qty', label: __('Qty'), description: __('Quantity to order. “.” fills the suggested replenishment quantity; red flags a MOQ / case-pack issue.'), dataType: 'number:receipt', kind: 'editable', editable: true, copyable: true, pasteable: true, defaultWidth: 80 }),
-    colMeta({ id: 'unit_cost', label: __('Unit cost'), description: __('Cost per unit. Left blank it inherits the supplier catalogue price (shown faded) and is frozen at submission.'), dataType: 'decimal:money', kind: 'editable', editable: true, copyable: true, pasteable: true, defaultWidth: 110 }),
-    colMeta({ id: 'line_total', label: __('Line total'), description: __('Quantity × effective unit cost'), dataType: 'decimal:money', copyable: true, defaultWidth: 110 }),
-    colMeta({ id: 'note', label: __('Note'), description: __('Optional line note — printed on the purchase order sent to the supplier'), dataType: 'text', kind: 'editable', editable: true, copyable: true, pasteable: true, defaultWidth: 220 }),
+    colMeta({
+      id: 'image',
+      label: __('Image'),
+      description: __('Product thumbnail'),
+      dataType: 'text',
+      defaultWidth: 56,
+    }),
+    colMeta({
+      id: 'product',
+      label: __('Product'),
+      description: __(
+        'Product name. Use the blank bottom row to add another product from the supplier catalogue.',
+      ),
+      dataType: PRODUCT_EDITOR_TYPE,
+      copyable: true,
+      defaultWidth: 280,
+    }),
+    colMeta({
+      id: 'sku',
+      label: __('SKU'),
+      description: __(
+        'Our Stock Keeping Unit for this product, with its GTIN beneath where the two differ',
+      ),
+      dataType: 'text',
+      copyable: true,
+      defaultWidth: 120,
+    }),
+    colMeta({
+      id: 'supplier_sku',
+      label: __('Supplier SKU'),
+      description: __('The supplier’s own code for this product'),
+      dataType: 'text',
+      copyable: true,
+      defaultWidth: 130,
+    }),
+    colMeta({
+      id: 'available',
+      label: __('Avail'),
+      description: __(
+        'Available to promise now (on-hand minus reserved). Negative = a deficit already promised beyond stock.',
+      ),
+      dataType: 'number',
+      defaultWidth: 72,
+    }),
+    colMeta({
+      id: 'on_order',
+      label: __('On order'),
+      description: __(
+        'Units already inbound on other submitted purchase orders. Double-click to see which POs.',
+      ),
+      dataType: 'number:on-order',
+      hasDrilldown: true,
+      drilldownMaxWidth: 'max-w-[26rem]',
+      defaultWidth: 80,
+    }),
+    colMeta({
+      id: 'reorder',
+      label: _x(
+        'Reorder',
+        'column header: the reorder threshold, the stock level that triggers a reorder',
+      ),
+      description: __(
+        'The reorder threshold — replenishment tops the product back up to here when it drops below.',
+      ),
+      dataType: 'number',
+      defaultWidth: 76,
+    }),
+    colMeta({
+      id: 'moq',
+      label: __('MOQ'),
+      description: __('Minimum order quantity the supplier accepts for this product'),
+      dataType: 'number',
+      defaultWidth: 64,
+    }),
+    colMeta({
+      id: 'case_pack',
+      label: __('Case pack'),
+      description: __('Units per case — order quantities should be whole multiples of this'),
+      dataType: 'number',
+      defaultWidth: 84,
+    }),
+    colMeta({
+      id: 'qty_requested',
+      label: __('Qty'),
+      description: __(
+        'Quantity to order. “.” fills the suggested replenishment quantity; red flags a MOQ / case-pack issue.',
+      ),
+      dataType: 'number:receipt',
+      kind: 'editable',
+      editable: true,
+      copyable: true,
+      pasteable: true,
+      defaultWidth: 80,
+    }),
+    colMeta({
+      id: 'unit_cost',
+      label: __('Unit cost'),
+      description: __(
+        'Cost per unit, before any supplier discount. Left blank it inherits the supplier catalogue price (shown faded) and is frozen at submission.',
+      ),
+      dataType: 'decimal:money',
+      kind: 'editable',
+      editable: true,
+      copyable: true,
+      pasteable: true,
+      defaultWidth: 110,
+    }),
+    colMeta({
+      id: 'discount_pct',
+      label: __('Disc. %'),
+      description: __(
+        'The supplier’s discount on this line, in percent, taken off the unit cost — the line total is the net. Select the whole column to give every line the same discount.',
+      ),
+      dataType: 'decimal',
+      kind: 'editable',
+      editable: true,
+      copyable: true,
+      pasteable: true,
+      defaultWidth: 80,
+    }),
+    colMeta({
+      id: 'line_total',
+      label: __('Line total'),
+      description: __('Quantity × effective unit cost'),
+      dataType: 'decimal:money',
+      copyable: true,
+      defaultWidth: 110,
+    }),
+    colMeta({
+      id: 'note',
+      label: __('Note'),
+      description: __('Optional line note — printed on the purchase order sent to the supplier'),
+      dataType: 'text',
+      kind: 'editable',
+      editable: true,
+      copyable: true,
+      pasteable: true,
+      defaultWidth: 220,
+    }),
   ]);
 
   const ch = createColumnHelper<PoLine>();
-  const money = (v: number | string | null): string => (null === v || '' === v ? '—' : Number(v).toFixed(props.costDecimals));
+  const money = (v: number | string | null): string =>
+    null === v || '' === v ? '—' : Number(v).toFixed(props.costDecimals);
   const bespokeColumns = new Map<string, ColumnDef<PoLine, unknown>>([
-    ['image', ch.display({ id: 'image', header: () => __('Image'), cell: (info) => (
-      <Show when={!isDraft(info.row.original)} fallback={<span class="block text-center text-slate-300">＋</span>}>
-        <Show when={info.row.original.imageUrl} fallback={<div class="h-9 w-9 rounded bg-slate-100" />}>{(u) => <img src={u()} alt="" class="h-9 w-9 rounded object-cover" />}</Show>
-      </Show>
-    ) }) as ColumnDef<PoLine, unknown>],
-    ['product', ch.display({ id: 'product', header: () => __('Product'), cell: (info) => (
-      <Show when={!isDraft(info.row.original)} fallback={
-        // Display only — the grid swaps in the catalogue-picker editor (PRODUCT_EDITOR_TYPE) on edit.
-        <span class="italic text-text-muted">{__('＊ Add a product ＊')}</span>
-      }>
-        <ProductCell line={info.row.original} />
-      </Show>
-    ) }) as ColumnDef<PoLine, unknown>],
-    ['sku', ch.display({ id: 'sku', header: () => __('SKU'), cell: (info) => <Show when={!isDraft(info.row.original)}><CodeCell value={info.row.original.sku} /></Show> }) as ColumnDef<PoLine, unknown>],
-    ['supplier_sku', ch.display({ id: 'supplier_sku', header: () => __('Supplier SKU'), cell: (info) => <Show when={!isDraft(info.row.original)}><CodeCell value={info.row.original.supplierSku} /></Show> }) as ColumnDef<PoLine, unknown>],
-    ['available', ch.display({ id: 'available', header: () => __('Avail'), cell: (info) => <Show when={!isDraft(info.row.original)}><SignedCell value={info.row.original.available} /></Show> }) as ColumnDef<PoLine, unknown>],
-    ['on_order', ch.display({ id: 'on_order', header: () => __('On order'), cell: (info) => <Show when={!isDraft(info.row.original)}><OnOrderCell value={info.row.original.onOrder} /></Show> }) as ColumnDef<PoLine, unknown>],
-    ['reorder', ch.display({ id: 'reorder', header: () => __('Reorder'), cell: (info) => <Show when={!isDraft(info.row.original)}><NumCell value={info.row.original.reorderThreshold} /></Show> }) as ColumnDef<PoLine, unknown>],
-    ['moq', ch.display({ id: 'moq', header: () => __('MOQ'), cell: (info) => <Show when={!isDraft(info.row.original)}><MoqCell moq={props.moqFor(info.row.original.subjectId)} qty={info.row.original.requestedQty} /></Show> }) as ColumnDef<PoLine, unknown>],
-    ['case_pack', ch.display({ id: 'case_pack', header: () => __('Case pack'), cell: (info) => <Show when={!isDraft(info.row.original)}><CasePackCell casePack={props.casePackFor(info.row.original.subjectId)} qty={info.row.original.requestedQty} /></Show> }) as ColumnDef<PoLine, unknown>],
-    ['requested_qty', ch.display({ id: 'requested_qty', header: () => __('Qty'), cell: (info) => <Show when={!isDraft(info.row.original)}><QtyCell qty={info.row.original.requestedQty} moq={props.moqFor(info.row.original.subjectId)} casePack={props.casePackFor(info.row.original.subjectId)} /></Show> }) as ColumnDef<PoLine, unknown>],
-    ['unit_cost', ch.display({ id: 'unit_cost', header: () => __('Unit cost'), cell: (info) => <Show when={!isDraft(info.row.original)}><UnitCostCell own={info.row.original.unitCost} inherited={info.row.original.catalogUnitCost} fmt={money} /></Show> }) as ColumnDef<PoLine, unknown>],
-    ['line_total', ch.display({ id: 'line_total', header: () => __('Line total'), cell: (info) => <Show when={!isDraft(info.row.original)}><span class="block text-right font-medium tabular-nums">{money(lineTotalNum(info.row.original))}</span></Show> }) as ColumnDef<PoLine, unknown>],
-    ['note', ch.display({ id: 'note', header: () => __('Note'), cell: (info) => <Show when={!isDraft(info.row.original)}><span class="text-slate-600">{info.row.original.note ?? ''}</span></Show> }) as ColumnDef<PoLine, unknown>],
+    [
+      'image',
+      ch.display({
+        id: 'image',
+        header: () => __('Image'),
+        cell: (info) => (
+          <Show
+            when={!isDraft(info.row.original)}
+            fallback={<span class="block text-center text-slate-300">＋</span>}
+          >
+            <Show
+              when={info.row.original.imageUrl}
+              fallback={<div class="h-9 w-9 rounded bg-slate-100" />}
+            >
+              {(u) => <img src={u()} alt="" class="h-9 w-9 rounded object-cover" />}
+            </Show>
+          </Show>
+        ),
+      }) as ColumnDef<PoLine, unknown>,
+    ],
+    [
+      'product',
+      ch.display({
+        id: 'product',
+        header: () => __('Product'),
+        cell: (info) => (
+          <Show
+            when={!isDraft(info.row.original)}
+            fallback={
+              // Display only — the grid swaps in the catalogue-picker editor (PRODUCT_EDITOR_TYPE) on edit.
+              <span class="italic text-text-muted">{__('＊ Add a product ＊')}</span>
+            }
+          >
+            <ProductCell line={info.row.original} />
+          </Show>
+        ),
+      }) as ColumnDef<PoLine, unknown>,
+    ],
+    [
+      'sku',
+      ch.display({
+        id: 'sku',
+        header: () => __('SKU'),
+        cell: (info) => (
+          <Show when={!isDraft(info.row.original)}>
+            <SkuCell line={info.row.original} />
+          </Show>
+        ),
+      }) as ColumnDef<PoLine, unknown>,
+    ],
+    [
+      'supplier_sku',
+      ch.display({
+        id: 'supplier_sku',
+        header: () => __('Supplier SKU'),
+        cell: (info) => (
+          <Show when={!isDraft(info.row.original)}>
+            <CodeCell value={info.row.original.supplierSku} />
+          </Show>
+        ),
+      }) as ColumnDef<PoLine, unknown>,
+    ],
+    [
+      'available',
+      ch.display({
+        id: 'available',
+        header: () => __('Avail'),
+        cell: (info) => (
+          <Show when={!isDraft(info.row.original)}>
+            <SignedCell value={info.row.original.available} />
+          </Show>
+        ),
+      }) as ColumnDef<PoLine, unknown>,
+    ],
+    [
+      'on_order',
+      ch.display({
+        id: 'on_order',
+        header: () => __('On order'),
+        cell: (info) => (
+          <Show when={!isDraft(info.row.original)}>
+            <OnOrderCell value={info.row.original.onOrder} />
+          </Show>
+        ),
+      }) as ColumnDef<PoLine, unknown>,
+    ],
+    [
+      'reorder',
+      ch.display({
+        id: 'reorder',
+        header: () =>
+          _x(
+            'Reorder',
+            'column header: the reorder threshold, the stock level that triggers a reorder',
+          ),
+        cell: (info) => (
+          <Show when={!isDraft(info.row.original)}>
+            <NumCell value={info.row.original.reorderThreshold} />
+          </Show>
+        ),
+      }) as ColumnDef<PoLine, unknown>,
+    ],
+    [
+      'moq',
+      ch.display({
+        id: 'moq',
+        header: () => __('MOQ'),
+        cell: (info) => (
+          <Show when={!isDraft(info.row.original)}>
+            <MoqCell
+              moq={props.moqFor(info.row.original.subjectId)}
+              qty={info.row.original.qtyRequested}
+            />
+          </Show>
+        ),
+      }) as ColumnDef<PoLine, unknown>,
+    ],
+    [
+      'case_pack',
+      ch.display({
+        id: 'case_pack',
+        header: () => __('Case pack'),
+        cell: (info) => (
+          <Show when={!isDraft(info.row.original)}>
+            <CasePackCell
+              casePack={props.casePackFor(info.row.original.subjectId)}
+              qty={info.row.original.qtyRequested}
+            />
+          </Show>
+        ),
+      }) as ColumnDef<PoLine, unknown>,
+    ],
+    [
+      'qty_requested',
+      ch.display({
+        id: 'qty_requested',
+        header: () => __('Qty'),
+        cell: (info) => (
+          <Show when={!isDraft(info.row.original)}>
+            <QtyCell
+              qty={info.row.original.qtyRequested}
+              moq={props.moqFor(info.row.original.subjectId)}
+              casePack={props.casePackFor(info.row.original.subjectId)}
+            />
+          </Show>
+        ),
+      }) as ColumnDef<PoLine, unknown>,
+    ],
+    [
+      'unit_cost',
+      ch.display({
+        id: 'unit_cost',
+        header: () => __('Unit cost'),
+        cell: (info) => (
+          <Show when={!isDraft(info.row.original)}>
+            {/* The price before the discount — what the supplier quoted; the net is in the total. */}
+            <UnitCostCell
+              own={info.row.original.listUnitCost ?? info.row.original.unitCost}
+              inherited={info.row.original.catalogUnitCost}
+              fmt={money}
+            />
+          </Show>
+        ),
+      }) as ColumnDef<PoLine, unknown>,
+    ],
+    [
+      'discount_pct',
+      ch.display({
+        id: 'discount_pct',
+        header: () => __('Disc. %'),
+        cell: (info) => (
+          <Show when={!isDraft(info.row.original)}>
+            <span class="block text-right tabular-nums">
+              {formatDiscount(info.row.original.discountPct)}
+            </span>
+          </Show>
+        ),
+      }) as ColumnDef<PoLine, unknown>,
+    ],
+    [
+      'line_total',
+      ch.display({
+        id: 'line_total',
+        header: () => __('Line total'),
+        cell: (info) => (
+          <Show when={!isDraft(info.row.original)}>
+            <span class="block text-right font-medium tabular-nums">
+              {money(lineTotalNum(info.row.original))}
+            </span>
+          </Show>
+        ),
+      }) as ColumnDef<PoLine, unknown>,
+    ],
+    [
+      'note',
+      ch.display({
+        id: 'note',
+        header: () => __('Note'),
+        cell: (info) => (
+          <Show when={!isDraft(info.row.original)}>
+            <span class="text-slate-600">{info.row.original.note ?? ''}</span>
+          </Show>
+        ),
+      }) as ColumnDef<PoLine, unknown>,
+    ],
   ]);
 
   // ── DataGrid state ────────────────────────────────────────────────────────────────────────────
   const [sorting, setSorting] = createSignal<SortingState>([]);
-  const [columnVisibility, setColumnVisibility] = persistedSignal<VisibilityState>('invflux:po-draft:colvis', {});
-  const [columnOrder, setColumnOrder] = persistedSignal<ColumnOrderState>('invflux:po-draft:colorder', COLUMN_ORDER);
-  const [columnSizing, setColumnSizing] = persistedSignal<Record<string, number>>('invflux:po-draft:colsize', {});
-  const [expandedColumnSections, setExpandedColumnSections] = persistedSignal<string[]>('invflux:po-draft:colsections', ['po-draft']);
+  const [columnVisibility, setColumnVisibility] = persistedSignal<VisibilityState>(
+    'invflux:po-draft:colvis',
+    {},
+  );
+  // Versioned: a saved order predating a column would show that column at the far end, away from
+  // the neighbours it belongs with. Bump the suffix when a column joins the middle of the order.
+  const [columnOrder, setColumnOrder] = persistedSignal<ColumnOrderState>(
+    'invflux:po-draft:colorder:v2',
+    COLUMN_ORDER,
+  );
+  const [columnSizing, setColumnSizing] = persistedSignal<Record<string, number>>(
+    'invflux:po-draft:colsize',
+    {},
+  );
+  const [expandedColumnSections, setExpandedColumnSections] = persistedSignal<string[]>(
+    'invflux:po-draft:colsections',
+    ['po-draft'],
+  );
   const [rowSelection, setRowSelection] = createSignal<RowSelectionState>({});
   const [cellSelection, setCellSelection] = createSignal<SelectionState>(EMPTY_SELECTION);
 
   const getValue = (row: PoLine, columnId: string): unknown => {
     if (isDraft(row)) return undefined; // the append row renders its own controls; no grid value
     switch (columnId) {
-      case 'image': return row.imageUrl;
-      case 'product': return row.productLabel;
-      case 'sku': return row.sku;
-      case 'supplier_sku': return row.supplierSku;
-      case 'available': return row.available;
-      case 'on_order': return row.onOrder;
-      case 'reorder': return row.reorderThreshold;
-      case 'moq': return props.moqFor(row.subjectId);
-      case 'case_pack': return props.casePackFor(row.subjectId);
-      case 'requested_qty': return row.requestedQty;
-      case 'unit_cost': return row.unitCost;
-      case 'line_total': return lineTotalNum(row);
-      case 'note': return row.note;
-      default: return undefined;
+      case 'image':
+        return row.imageUrl;
+      case 'product':
+        return row.productLabel;
+      case 'sku':
+        return row.sku;
+      case 'supplier_sku':
+        return row.supplierSku;
+      case 'available':
+        return row.available;
+      case 'on_order':
+        return row.onOrder;
+      case 'reorder':
+        return row.reorderThreshold;
+      case 'moq':
+        return props.moqFor(row.subjectId);
+      case 'case_pack':
+        return props.casePackFor(row.subjectId);
+      case 'qty_requested':
+        return row.qtyRequested;
+      case 'unit_cost':
+        // At the supplier's precision, so the cell opens on the figure they quoted, not the stored scale.
+        return atSupplierPrecision(row.listUnitCost ?? row.unitCost, props.costDecimals);
+      case 'discount_pct':
+        return row.discountPct;
+      case 'line_total':
+        return lineTotalNum(row);
+      case 'note':
+        return row.note;
+      default:
+        return undefined;
     }
   };
 
@@ -234,10 +643,13 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
     // The append row is editable only at its product cell (the catalogue picker); real rows edit
     // qty / cost / note.
     isDraft(row) ? 'product' === meta.id : EDITABLE_COLS.has(meta.id);
-  const resolveClearedValue = (_row: PoLine, meta: GridColumnMeta): { ok: boolean; value: unknown } =>
-    'unit_cost' === meta.id || 'note' === meta.id
+  const resolveClearedValue = (
+    _row: PoLine,
+    meta: GridColumnMeta,
+  ): { ok: boolean; value: unknown } =>
+    'unit_cost' === meta.id || 'discount_pct' === meta.id || 'note' === meta.id
       ? { ok: true, value: null } // nullable → clear to empty
-      : 'requested_qty' === meta.id
+      : 'qty_requested' === meta.id
         ? { ok: true, value: 0 } // non-nullable → Del sets it to 0
         : { ok: false, value: null };
 
@@ -245,12 +657,22 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
   // editorConfig for the append row only (real rows have no editable product cell).
   const resolveEditorMeta = (meta: GridColumnMeta, row: PoLine): GridColumnMeta => {
     if (isDraft(row) && 'product' === meta.id) {
-      return { ...meta, editorConfig: { addOptions: props.addOptions, portalRoot, supplierLabel: props.supplierLabel } };
+      return {
+        ...meta,
+        editorConfig: {
+          addOptions: props.addOptions,
+          portalRoot,
+          supplierLabel: props.supplierLabel,
+        },
+      };
     }
     // Qty cell: "." on an empty cell fills the per-line replenishment suggestion (mirrors GR's "." →
     // outstanding qty). dotDefault is absent when there's no suggestion, so "." then does nothing.
-    if ('requested_qty' === meta.id) {
-      return { ...meta, editorConfig: { dotDefault: row.suggestedQty ?? undefined, ariaLabel: __('Qty') } };
+    if ('qty_requested' === meta.id) {
+      return {
+        ...meta,
+        editorConfig: { dotDefault: row.suggestedQty ?? undefined, ariaLabel: __('Qty') },
+      };
     }
     return meta;
   };
@@ -260,39 +682,53 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
       // The catalogue picker committed a product → persist the line + jump into its qty.
       const opt = next as SearchSelectOption | null;
       if (null !== opt) void addAndEdit(Number(opt.value));
-    } else if ('requested_qty' === columnId) {
-      props.onEdit(row.id, { requested_qty: null === next || undefined === next ? 0 : Number(next) });
+    } else if ('qty_requested' === columnId) {
+      props.onEdit(row.id, {
+        qty_requested: null === next || undefined === next ? 0 : Number(next),
+      });
     } else if ('unit_cost' === columnId) {
-      props.onEdit(row.id, { unit_cost: null === next || undefined === next || '' === next ? null : String(next) });
+      props.onEdit(row.id, {
+        unit_cost: null === next || undefined === next || '' === next ? null : String(next),
+      });
+    } else if ('discount_pct' === columnId) {
+      props.onEdit(row.id, {
+        discount_pct: null === next || undefined === next || '' === next ? null : String(next),
+      });
     } else if ('note' === columnId) {
-      props.onEdit(row.id, { note: null === next || undefined === next || '' === next ? null : String(next) });
+      props.onEdit(row.id, {
+        note: null === next || undefined === next || '' === next ? null : String(next),
+      });
     }
   };
   // After committing the append-row product the host drives focus to the new line's qty itself, so the
   // grid skips its default post-commit move. (Landing on the append row from elsewhere is handled by the
   // selection guard above — it bounces to the product cell in cell-nav mode.)
-  const onCommitNavigate = (row: PoLine, columnId: string): boolean => isDraft(row) && 'product' === columnId;
+  const onCommitNavigate = (row: PoLine, columnId: string): boolean =>
+    isDraft(row) && 'product' === columnId;
   const onClearCells = (cells: Array<{ row: PoLine; columnId: string }>): void => {
     for (const { row, columnId } of cells) {
       if ('unit_cost' === columnId) props.onEdit(row.id, { unit_cost: null });
+      else if ('discount_pct' === columnId) props.onEdit(row.id, { discount_pct: null });
       else if ('note' === columnId) props.onEdit(row.id, { note: null });
-      else if ('requested_qty' === columnId) props.onEdit(row.id, { requested_qty: 0 });
+      else if ('qty_requested' === columnId) props.onEdit(row.id, { qty_requested: 0 });
     }
   };
 
   let focusFilter: (() => void) | undefined;
-  let gridApi: {
-    focusGrid: () => void;
-    focusCellById: (rowId: string, columnId: string, editMode?: boolean) => void;
-    openColumnManager: () => void;
-    openGridSettings: () => void;
-    getSelectedCells: () => Array<{ row: PoLine; columnId: string }>;
-    getSelectableColumnIds: () => string[];
-    enterEdit: (seed?: string) => void;
-  } | undefined;
+  let gridApi:
+    | {
+        focusGrid: () => void;
+        focusCellById: (rowId: string, columnId: string, editMode?: boolean) => void;
+        openColumnManager: () => void;
+        openGridSettings: () => void;
+        getSelectedCells: () => Array<{ row: PoLine; columnId: string }>;
+        getSelectableColumnIds: () => string[];
+        enterEdit: (seed?: string) => void;
+      }
+    | undefined;
 
   // Editable line columns (the grid edit-guard set for real rows).
-  const EDITABLE_COLS = new Set(['requested_qty', 'unit_cost', 'note']);
+  const EDITABLE_COLS = new Set(['qty_requested', 'unit_cost', 'discount_pct', 'note']);
   // The product cell is the only useful cell on the append row, so bounce any selection that lands on
   // another of its cells (arrow / click / Tab / Enter-from-the-last-line) straight there (cell-nav).
   // The draft row is appended last → its index is visibleLines().length.
@@ -300,22 +736,30 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
     const active = cellSelection().active;
     if (null === active || active.row !== visibleLines().length) return;
     const productCol = (gridApi?.getSelectableColumnIds() ?? []).indexOf('product');
-    if (productCol >= 0 && active.col !== productCol) gridApi?.focusCellById(String(DRAFT_ID), 'product', false);
+    if (productCol >= 0 && active.col !== productCol)
+      gridApi?.focusCellById(String(DRAFT_ID), 'product', false);
   });
 
   // Right-click "Delete N selected rows" — there's no per-row delete column; deletion is driven off the
   // cell selection (distinct rows that have at least one selected cell), excluding the append row.
   const contextMenuExtras = (): DataGridMenuItem[] => {
-    const ids = [...new Set((gridApi?.getSelectedCells() ?? []).map((c) => c.row.id))].filter((id) => DRAFT_ID !== id);
+    const ids = [...new Set((gridApi?.getSelectedCells() ?? []).map((c) => c.row.id))].filter(
+      (id) => DRAFT_ID !== id,
+    );
     if (0 === ids.length) return [];
-    return [{
-      id: 'delete-rows',
-      label: sprintf(_n('Delete %d selected row', 'Delete %d selected rows', ids.length), ids.length),
-      run: () => {
-        props.onRemoveMany(ids);
-        setCellSelection(EMPTY_SELECTION); // the selection pointed at rows that are now gone
+    return [
+      {
+        id: 'delete-rows',
+        label: sprintf(
+          _n('Delete %d selected row', 'Delete %d selected rows', ids.length),
+          ids.length,
+        ),
+        run: () => {
+          props.onRemoveMany(ids);
+          setCellSelection(EMPTY_SELECTION); // the selection pointed at rows that are now gone
+        },
       },
-    }];
+    ];
   };
   const inGridKeyHandlers = [
     (e: KeyboardEvent): boolean => {
@@ -361,7 +805,12 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
   const onFilterLeave = (key: 'Enter' | 'Escape'): void => {
     if ('Enter' === key && 1 === visibleLines().length) {
       const row = visibleLines()[0];
-      const colId = firstEditableColumnId(row, columnMetas(), canEdit, gridApi?.getSelectableColumnIds() ?? []);
+      const colId = firstEditableColumnId(
+        row,
+        columnMetas(),
+        canEdit,
+        gridApi?.getSelectableColumnIds() ?? [],
+      );
       if (undefined !== colId) {
         gridApi?.focusCellById(String(row.id), colId);
         return;
@@ -417,23 +866,23 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
           setRowSelection={(updater) => setRowSelection(updater)}
           cellSelection={cellSelection}
           setCellSelection={(updater) => setCellSelection(updater)}
-          fallback={<div class="px-3 py-6 text-sm text-slate-500">{__('No lines yet — use + Add to pick from the supplier catalogue.')}</div>}
+          fallback={
+            <div class="px-3 py-6 text-sm text-slate-500">
+              {__('No lines yet — use + Add to pick from the supplier catalogue.')}
+            </div>
+          }
         />
       </div>
     </div>
   );
 }
 
-/** Product label + GTIN sub-line (SKU / supplier SKU have their own columns). */
+/** Product label (the codes have their own columns). */
 function ProductCell(props: { line: PoLine }): JSX.Element {
-  // No wrapper div — label + GTIN are direct cell children so the grid's no-wrap truncation reaches them.
   return (
-    <>
-      <div class="font-medium" classList={{ 'text-text-muted italic': !props.line.exists }}>{props.line.productLabel}</div>
-      <Show when={props.line.gtin}>
-        <div class="text-xs text-text-muted"><span class="text-slate-300">{__('GTIN')}:</span> {props.line.gtin}</div>
-      </Show>
-    </>
+    <div class="font-medium" classList={{ 'text-text-muted italic': !props.line.exists }}>
+      {props.line.productLabel}
+    </div>
   );
 }
 
@@ -442,7 +891,11 @@ function CodeCell(props: { value: string | null }): JSX.Element {
 }
 
 function NumCell(props: { value: number | null }): JSX.Element {
-  return <span class="block text-right tabular-nums text-slate-500">{null === props.value ? '—' : props.value}</span>;
+  return (
+    <span class="block text-right tabular-nums text-slate-500">
+      {null === props.value ? '—' : props.value}
+    </span>
+  );
 }
 
 /** Qty cell with MOQ / case-pack validation: red + bold when the entered qty breaks either supplier
@@ -455,7 +908,11 @@ function QtyCell(props: { qty: number; moq: number | null; casePack: number | nu
     return msgs;
   };
   return (
-    <span class="block text-right tabular-nums" classList={{ 'font-medium text-red-600': tips().length > 0 }} title={tips().length > 0 ? tips().join('\n') : undefined}>
+    <span
+      class="block text-right tabular-nums"
+      classList={{ 'font-medium text-red-600': tips().length > 0 }}
+      title={tips().length > 0 ? tips().join('\n') : undefined}
+    >
       {props.qty}
     </span>
   );
@@ -465,7 +922,11 @@ function QtyCell(props: { qty: number; moq: number | null; casePack: number | nu
 function MoqCell(props: { moq: number | null; qty: number }): JSX.Element {
   const bad = (): boolean => belowMoq(props.qty, props.moq);
   return (
-    <span class="block text-right tabular-nums" classList={{ 'font-medium text-red-600': bad(), 'text-slate-500': !bad() }} title={bad() ? __('qty < MOQ') : undefined}>
+    <span
+      class="block text-right tabular-nums"
+      classList={{ 'font-medium text-red-600': bad(), 'text-slate-500': !bad() }}
+      title={bad() ? __('qty < MOQ') : undefined}
+    >
       {null === props.moq ? '—' : props.moq}
     </span>
   );
@@ -475,7 +936,11 @@ function MoqCell(props: { moq: number | null; qty: number }): JSX.Element {
 function CasePackCell(props: { casePack: number | null; qty: number }): JSX.Element {
   const bad = (): boolean => offCasePack(props.qty, props.casePack);
   return (
-    <span class="block text-right tabular-nums" classList={{ 'font-medium text-red-600': bad(), 'text-slate-500': !bad() }} title={bad() ? __('case pack ∤ qty') : undefined}>
+    <span
+      class="block text-right tabular-nums"
+      classList={{ 'font-medium text-red-600': bad(), 'text-slate-500': !bad() }}
+      title={bad() ? __('case pack ∤ qty') : undefined}
+    >
       {null === props.casePack ? '—' : props.casePack}
     </span>
   );
@@ -488,7 +953,11 @@ function OnOrderCell(props: { value: number | null }): JSX.Element {
   return (
     <Show
       when={null !== props.value && (props.value as number) > 0}
-      fallback={<span class="block text-right tabular-nums text-text-muted">{null === props.value ? '—' : 0}</span>}
+      fallback={
+        <span class="block text-right tabular-nums text-text-muted">
+          {null === props.value ? '—' : 0}
+        </span>
+      }
     >
       <span
         class="block cursor-pointer text-right font-medium tabular-nums text-emerald-600 underline decoration-dotted underline-offset-2 hover:text-emerald-700"
@@ -502,11 +971,22 @@ function OnOrderCell(props: { value: number | null }): JSX.Element {
 
 /** Unit cost: the line's own override in normal text; when unset, the inherited catalogue price shown
  *  faded (italic) — or "—" when the catalogue has no price either. Frozen to the catalogue at submit. */
-function UnitCostCell(props: { own: string | null; inherited: string | null; fmt: (v: string | number | null) => string }): JSX.Element {
+function UnitCostCell(props: {
+  own: string | null;
+  inherited: string | null;
+  fmt: (v: string | number | null) => string;
+}): JSX.Element {
   return (
     <Show
       when={null !== props.own}
-      fallback={<span class="block text-right italic tabular-nums text-text-muted" title={__('Inherited from the supplier catalogue')}>{props.fmt(props.inherited)}</span>}
+      fallback={
+        <span
+          class="block text-right italic tabular-nums text-text-muted"
+          title={__('Inherited from the supplier catalogue')}
+        >
+          {props.fmt(props.inherited)}
+        </span>
+      }
     >
       <span class="block text-right tabular-nums">{props.fmt(props.own)}</span>
     </Show>
@@ -516,7 +996,13 @@ function UnitCostCell(props: { own: string | null; inherited: string | null; fmt
 /** Signed available — negative (deficit) in red. */
 function SignedCell(props: { value: number | null }): JSX.Element {
   return (
-    <span class="block text-right tabular-nums" classList={{ 'text-red-600': null !== props.value && props.value < 0, 'text-slate-500': null === props.value || props.value >= 0 }}>
+    <span
+      class="block text-right tabular-nums"
+      classList={{
+        'text-red-600': null !== props.value && props.value < 0,
+        'text-slate-500': null === props.value || props.value >= 0,
+      }}
+    >
       {null === props.value ? '—' : props.value}
     </span>
   );

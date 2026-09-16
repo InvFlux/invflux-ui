@@ -42,14 +42,14 @@ export const TAG_PALETTE: readonly TagColor[] = [
   { bg: 'rgb(255,222,181)', fg: 'rgb(122,71,6)', name: 'Light orange' },
   { bg: 'rgb(251,233,131)', fg: 'rgb(89,76,5)', name: 'Light yellow' },
   { bg: 'rgb(253,237,193)', fg: 'rgb(104,78,7)', name: 'Cream' },
-  { bg: 'rgb(179,239,211)', fg: 'rgb(11,79,48)', name: 'Light green' },
-  { bg: 'rgb(162,220,193)', fg: 'rgb(4,80,46)', name: 'Sage' },
+  { bg: 'rgb(198,236,182)', fg: 'rgb(20,89,13)', name: 'Light green' },
+  { bg: 'rgb(166,217,210)', fg: 'rgb(4,78,70)', name: 'Mint' },
   { bg: 'rgb(255,117,55)', fg: 'rgb(84,36,14)', name: 'Orange' },
   { bg: 'rgb(255,173,70)', fg: 'rgb(99,62,4)', name: 'Amber' },
   { bg: 'rgb(235,219,222)', fg: 'rgb(102,46,55)', name: 'Pale rose' },
   { bg: 'rgb(204,166,172)', fg: 'rgb(82,29,40)', name: 'Dusty rose' },
-  { bg: 'rgb(66,214,146)', fg: 'rgb(32,33,36)', ink: 'rgb(20,90,20)', name: 'Bright green' },
-  { bg: 'rgb(22,167,101)', fg: 'rgb(8,48,24)', name: 'Dark green' },
+  { bg: 'rgb(66,215,195)', fg: 'rgb(32,33,36)', ink: 'rgb(21,101,90)', name: 'Bright mint' },
+  { bg: 'rgb(63,167,22)', fg: 'rgb(28,48,8)', name: 'Dark green' },
 ];
 
 /**
@@ -68,16 +68,16 @@ export const TAG_PALETTE: readonly TagColor[] = [
  * a family the pair differs by lightness while saturation barely moves (blue 76% vs 72%, teal 58%
  * vs 100% being the widest). So the honest second axis is lightness, not saturation.
  *
- * Columns run neutral, rose 350°, pink 336°, red 4°, orange 19°, amber 33°, yellow 51°, green 152°,
- * mint 152°, teal 190°, blue 216°, purple 258°. The neutrals are parked first because they have no
+ * Columns run neutral, rose 350°, pink 336°, red 4°, orange 19°, amber 33°, yellow 51°, green 103°,
+ * mint 172°, teal 190°, blue 216°, purple 258°. The neutrals are parked first because they have no
  * hue to place, and the rose family follows them rather than closing the row: at 29% and 27%
  * saturation it is the closest thing here to a second pair of greys, so it belongs with them.
  * Saturation then climbs into pink and red, and hue carries the rest of the sweep to purple.
  */
 export const TAG_PALETTE_DISPLAY_ORDER: readonly number[] = [
   //  neutral  rose  pink  red  orange      amber  yellow  green  mint  teal  blue  purple
-  /* light */ 0, 20, 4, 5, 12, 13, 15, 16, 17, 2, 1, 3,
-  /* dark  */ 6, 21, 10, 11, 18, 19, 14, 23, 22, 8, 7, 9,
+  /* light */ 0, 20, 4, 5, 12, 13, 15, 16, 17, 2, 1, 3, /* dark  */ 6, 21, 10, 11, 18, 19, 14, 23,
+  22, 8, 7, 9,
 ];
 
 /**
@@ -95,9 +95,14 @@ export const TAG_PALETTE_DISPLAY_COLUMNS = 12;
  * configured entry); there is no class to name it.
  */
 export function paletteStyle(colorId: number): { 'background-color': string; color: string } {
-  const c = tagColor(colorId);
+  // Names the pair's CSS variables rather than its literal colours. The value is still data — an
+  // inline style is the only way a runtime-chosen colour reaches the DOM — but an inline *literal*
+  // can never answer `prefers-color-scheme`, so pills would have stayed light on a dark page. The
+  // variables are defined for both themes in `styles/theme.css`; out-of-range ids clamp to 0 there
+  // as they do here.
+  const id = TAG_PALETTE[colorId] === undefined ? 0 : colorId;
 
-  return { 'background-color': c.bg, color: c.fg };
+  return { 'background-color': `var(--tag-${id}-bg)`, color: `var(--tag-${id}-fg)` };
 }
 
 /** Resolve a `colorId` to its palette entry, clamping out-of-range to the grey default. */
@@ -147,14 +152,37 @@ const SURFACE = 'rgb(255,255,255)';
  * outline `Cream` tag reads as brown-gold ink, its solid form as gold with brown text. Where even
  * that fails — a pair whose usable member carries no hue — the entry names an explicit
  * {@link TagColor.ink}, which wins outright.
+ *
+ * **This is the definition, not the render path** — see {@link paletteInk}. `SURFACE` is white, so
+ * every answer here is a *light-theme* answer, and the pick genuinely inverts between themes: the
+ * member that stands out on white is the one that disappears on a dark ground.
  */
-export function tagInk(color: TagColor): string {
+export function tagInk(color: TagColor, surface: string = SURFACE): string {
   if (color.ink) return color.ink;
-  return contrastRatio(color.bg, SURFACE) >= contrastRatio(color.fg, SURFACE) ? color.bg : color.fg;
+  return contrastRatio(color.bg, surface) >= contrastRatio(color.fg, surface) ? color.bg : color.fg;
 }
 
 /**
- * Diagonal hatch marking a **archived** tag that is still attached to something — present, but no
+ * The ink an **outline** tag affordance draws in — border and text — as a CSS variable.
+ *
+ * The variable is the whole point. {@link tagInk} answers "which member reads against the page",
+ * and *which page* is a question only CSS can answer: the same tag needs its saturated member on
+ * white and its pale one on the dark ground. Solved in JS it was solved against white always,
+ * which left all 24 entries between 1.24:1 and 3.90:1 on a dark page — a picker grid of outlines
+ * nobody could see. `--tag-N-ink` is solved once per theme in `styles/theme.css`.
+ *
+ * Callers compose it themselves rather than receiving a style object, because the three outline
+ * affordances draw their edge differently — a `border-color`, an inset `box-shadow` ring — and only
+ * the ink is shared.
+ */
+export function paletteInk(colorId: number): string {
+  const id = TAG_PALETTE[colorId] === undefined ? 0 : colorId;
+
+  return `var(--tag-${id}-ink)`;
+}
+
+/**
+ * Diagonal hatch marking an **archived** tag that is still attached to something — present, but no
  * longer doing anything.
  *
  * It has to be a channel of its own, because the chip vocabulary is already spoken for: solid means
@@ -166,24 +194,58 @@ export function tagInk(color: TagColor): string {
  * being a pattern rather than a hue — though it is decoration either way, so the words belong in
  * the element's `title`.
  *
- * The stripes are drawn in the pair's **own `fg`**, not a fixed white: half this palette is dark
+ * The stripes are drawn in the chip's **own ink**, not a fixed white: half this palette is dark
  * fills carrying white text and half is near-white fills carrying dark text, so one fixed stripe
- * colour would vanish on one half. `fg` is by definition the member tuned to be legible on `bg`,
- * which makes contrast automatic for every entry. Alpha is kept low — the hatch must stay under
- * the label, never compete with it.
+ * colour would vanish on one half. `currentColor` *is* that ink — {@link paletteStyle} has already
+ * set `color` to the pair's `fg` variable — so one literal serves all 24 entries in both themes
+ * with no per-tag value to keep in step. Alpha is kept low: the hatch must stay under the label,
+ * never compete with it.
  */
-export function tagHatch(color: TagColor): string {
-  const [r, g, b] = channels(color.fg);
-  const stripe = `rgba(${r}, ${g}, ${b}, 0.28)`;
-  return `repeating-linear-gradient(45deg, transparent 0 3px, ${stripe} 3px 5px)`;
+export const TAG_HATCH_IMAGE =
+  'repeating-linear-gradient(45deg, transparent 0 3px, color-mix(in srgb, currentColor 28%, transparent) 3px 5px)';
+
+/**
+ * The complete inline style for an **archived** tag pill: the drained fill, the hatch over it, and
+ * the pair's ink.
+ *
+ * One function rather than three values at the call site, because the three only work together.
+ * Applying the fill without the ink is exactly the bug this replaced: the fill was computed in JS
+ * from the *light* pair while `color` came from a variable that had already answered
+ * `prefers-color-scheme`, so on a dark page every one of the 24 entries painted a light-theme fill
+ * under dark-theme text. Measured across the palette: all 24 below AA, the pale entries at
+ * 1.02–1.20:1 — the label was not dim, it was absent.
+ *
+ * So the fill is named, not computed. `--tag-N-archived-bg` is {@link tagArchivedFill} applied to
+ * each theme's own `bg` and written into `styles/theme.css` beside the pair it derives from; the
+ * test parses that file back and re-derives it, so the table cannot drift from the function.
+ */
+export function paletteArchivedStyle(colorId: number): {
+  'background-color': string;
+  'background-image': string;
+  color: string;
+} {
+  const id = TAG_PALETTE[colorId] === undefined ? 0 : colorId;
+
+  return {
+    ...paletteStyle(id),
+    'background-color': `var(--tag-${id}-archived-bg)`,
+    'background-image': TAG_HATCH_IMAGE,
+  };
 }
 
 /**
- * The fill for a **archived** tag: the palette entry's own colour, half drained toward grey.
+ * The fill for an **archived** tag: the given colour, half drained toward grey.
  *
  * The hatch says *what* changed; this says it at a glance, from across the row, before anyone reads
  * a pattern. Together they read as faded-and-struck-out-of-service, which is the state — still
  * attached, no longer acting.
+ *
+ * **This is the definition, not the render path.** A pill paints `--tag-N-archived-bg` via
+ * {@link paletteArchivedStyle}; this function is what produced that table, once per theme, from
+ * that theme's own `bg`. It has to work that way round: an inline style computed in JS cannot
+ * answer `prefers-color-scheme`, so a fill derived here at render time is a light-theme fill
+ * wherever the page is dark. Keep them in step by regenerating the table, not by calling this from
+ * a component.
  *
  * **Desaturated at constant luminance**, never lightened. Each channel is mixed toward the colour's
  * own luminance, which drains the hue while leaving brightness where it was — so the `fg` that was

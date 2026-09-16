@@ -86,6 +86,33 @@ export default tseslint.config(
     languageOptions: { globals: { ...globals.node } },
   },
 
+  // ── Dates, numbers and sorting follow the host's locale, never the browser's ─────────
+  // WordPress resolves a site (and per-user) language that has nothing to do with the browser's, so
+  // a bare `toLocaleDateString()` or `new Intl.NumberFormat()` renders US dates and grouping beside
+  // French labels. Format through @invflux/i18n (`formatDate`, `formatDateOnly`, `formatNumber`, …),
+  // or pass `getLocale()` as the first argument when no helper fits (a collator, say).
+  {
+    files: ['packages/*/src/**/*.{ts,tsx}'],
+    ignores: ['packages/i18n/**', 'packages/*/src/**/*.test.{ts,tsx}'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            "CallExpression[callee.property.name=/^toLocale(Date|Time)?String$/]:not([arguments.0.callee.name='getLocale'])",
+          message:
+            "Formats in the browser's locale. Use formatDate / formatDateTime / formatTime / formatNumber from @invflux/i18n, or pass getLocale().",
+        },
+        {
+          selector:
+            "NewExpression[callee.object.name='Intl']:not([arguments.0.callee.name='getLocale'])",
+          message:
+            "Binds the browser's locale. Use a formatter from @invflux/i18n, or pass getLocale() as the first argument.",
+        },
+      ],
+    },
+  },
+
   // ── Plain-JS tooling (the Vite factory) ──────────────────────────────────────────────
   {
     files: ['packages/build/**/*.js'],

@@ -1,5 +1,11 @@
 import { __ } from '@invflux/i18n';
-import { editRegistry, type EditProps, SearchSelectAsync, type SearchSelectOption } from '@invflux/ui';
+import {
+  createSearchFailure,
+  editRegistry,
+  type EditProps,
+  SearchSelectAsync,
+  type SearchSelectOption,
+} from '@invflux/ui';
 import { createSignal, type JSX, onCleanup, onMount } from 'solid-js';
 
 const MIN_QUERY = 2;
@@ -26,6 +32,9 @@ function ProductSearchEditor(props: EditProps): JSX.Element {
   const [query, setQuery] = createSignal(props.initialText ?? '');
   const [options, setOptions] = createSignal<SearchSelectOption[]>([]);
   const [loading, setLoading] = createSignal(false);
+  // A buyer adding lines to a PO: a failed lookup that read as "no matching products" would tell
+  // them the product is not in the catalogue, and they would go and create a duplicate.
+  const searchFailed = createSearchFailure();
   let committed = false;
   let rootEl: HTMLDivElement | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -37,6 +46,7 @@ function ProductSearchEditor(props: EditProps): JSX.Element {
     const q = text.trim();
     if (q.length < MIN_QUERY) {
       setOptions([]);
+      searchFailed.clear();
       setLoading(false);
       return;
     }
@@ -45,8 +55,10 @@ function ProductSearchEditor(props: EditProps): JSX.Element {
       void (async () => {
         try {
           setOptions(await (cfg().search?.(q) ?? Promise.resolve([])));
-        } catch {
+          searchFailed.clear();
+        } catch (e: unknown) {
           setOptions([]);
+          searchFailed.record(e);
         } finally {
           setLoading(false);
         }
@@ -101,7 +113,12 @@ function ProductSearchEditor(props: EditProps): JSX.Element {
         initialQuery={props.initialText}
         mount={cfg().portalRoot}
         placeholder={__('Search products…')}
-        emptyMessage={query().trim().length < MIN_QUERY ? __('Type to search products') : __('No matching products')}
+        emptyMessage={
+          searchFailed.line() ??
+          (query().trim().length < MIN_QUERY
+            ? __('Type to search products')
+            : __('No matching products'))
+        }
       />
     </div>
   );
@@ -115,5 +132,7 @@ export function registerProductSearchEditor(): void {
     return;
   }
   registered = true;
-  editRegistry.register('text:product-search', 'invflux.product-search', ProductSearchEditor, { default: true });
+  editRegistry.register('text:product-search', 'invflux.product-search', ProductSearchEditor, {
+    default: true,
+  });
 }

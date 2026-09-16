@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError } from './api';
-import { classify, mergeCatalog, pendingEmail, PLATFORM_SKU, shouldShowOwnedLicenses } from './catalog';
+import {
+  classify,
+  mergeCatalog,
+  pendingEmail,
+  PLATFORM_SKU,
+  shouldShowOwnedLicenses,
+} from './catalog';
 import type { AddonState, CatalogSku, OwnedLicense } from './types';
 
 const sku = (over: Partial<CatalogSku> & { sku: string }): CatalogSku => ({
@@ -98,7 +104,11 @@ describe('mergeCatalog', () => {
   });
 
   it('falls back to the SKU key when nothing in the payload knows a name for it', () => {
-    const [row] = mergeCatalog([sku({ sku: 'bridge-pdj', subsumed_by: ['pro'] })], [license('pro')], []);
+    const [row] = mergeCatalog(
+      [sku({ sku: 'bridge-pdj', subsumed_by: ['pro'] })],
+      [license('pro')],
+      [],
+    );
 
     expect(row.includedIn).toBe('pro');
   });
@@ -199,7 +209,9 @@ describe('classify', () => {
   it('keeps a site awaiting confirmation apart from one that never registered', () => {
     // Both are 409s meaning "no account token", and conflating them shows an already-registered
     // site the registration form — whose only effect is to mail a second confirmation link.
-    expect(classify(new ApiError(409, { error: 'verification_required' }))).toBe('awaiting_confirmation');
+    expect(classify(new ApiError(409, { error: 'verification_required' }))).toBe(
+      'awaiting_confirmation',
+    );
   });
 
   it('keeps a site that withdrew apart from one that never registered', () => {
@@ -212,15 +224,22 @@ describe('classify', () => {
 
 describe('pendingEmail', () => {
   it('reads the address the confirmation went to', () => {
-    const err = new ApiError(409, { error: 'verification_required', pending_email: 'owner@example.com' });
+    const err = new ApiError(409, {
+      error: 'verification_required',
+      pending_email: 'owner@example.com',
+    });
 
     expect(pendingEmail(err)).toBe('owner@example.com');
   });
 
   it('is null for anything that does not carry one', () => {
     expect(pendingEmail(new ApiError(409, { error: 'not_activated' }))).toBeNull();
-    expect(pendingEmail(new ApiError(409, { error: 'verification_required', pending_email: '' }))).toBeNull();
-    expect(pendingEmail(new ApiError(409, { error: 'verification_required', pending_email: 42 }))).toBeNull();
+    expect(
+      pendingEmail(new ApiError(409, { error: 'verification_required', pending_email: '' })),
+    ).toBeNull();
+    expect(
+      pendingEmail(new ApiError(409, { error: 'verification_required', pending_email: 42 })),
+    ).toBeNull();
     expect(pendingEmail(new TypeError('network'))).toBeNull();
     expect(pendingEmail(null)).toBeNull();
   });
@@ -242,7 +261,9 @@ describe('shouldShowOwnedLicenses', () => {
     paid_through: null,
     grace_until: null,
     cancellable: false,
-    seats: [{ activation_id: HERE, site_url: 'https://shop.test', env_class: null, last_seen_at: null }],
+    seats: [
+      { activation_id: HERE, site_url: 'https://shop.test', env_class: null, last_seen_at: null },
+    ],
     ...over,
   });
 
@@ -261,7 +282,9 @@ describe('shouldShowOwnedLicenses', () => {
   });
 
   it('shows an add-on, which is bought and its own thing', () => {
-    expect(shouldShowOwnedLicenses([base({ kind: 'addon', addon_key: 'pro', sku: 'pro' })], HERE)).toBe(true);
+    expect(
+      shouldShowOwnedLicenses([base({ kind: 'addon', addon_key: 'pro', sku: 'pro' })], HERE),
+    ).toBe(true);
   });
 
   it.each([
@@ -277,10 +300,24 @@ describe('shouldShowOwnedLicenses', () => {
     // "Where else is this running" is the section's whole reason to exist.
     expect(
       shouldShowOwnedLicenses(
-        [base({ seats: [
-          { activation_id: HERE, site_url: 'https://shop.test', env_class: null, last_seen_at: null },
-          { activation_id: 'act-other', site_url: 'https://other.test', env_class: null, last_seen_at: null },
-        ] })],
+        [
+          base({
+            seats: [
+              {
+                activation_id: HERE,
+                site_url: 'https://shop.test',
+                env_class: null,
+                last_seen_at: null,
+              },
+              {
+                activation_id: 'act-other',
+                site_url: 'https://other.test',
+                env_class: null,
+                last_seen_at: null,
+              },
+            ],
+          }),
+        ],
         HERE,
       ),
     ).toBe(true);

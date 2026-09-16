@@ -33,11 +33,16 @@ describe('entity-action registry', () => {
     const r = createEntityActionRegistry();
     r.register<PoCtx>('po.detail', base({ id: 'hidden', isAvailable: () => false }));
     r.register<PoCtx>('po.detail', base({ id: 'print' }));
-    r.register<PoCtx>('po.detail', base({ id: 'recv', disabledReason: () => 'Count every line first' }));
+    r.register<PoCtx>(
+      'po.detail',
+      base({ id: 'recv', disabledReason: () => 'Count every line first' }),
+    );
     const res = r.resolve<PoCtx>('po.detail', ctx());
     const ids = res.secondary.map((a) => a.id);
     expect(ids).toEqual(['print', 'recv']);
-    expect(res.secondary.find((a) => a.id === 'recv')?.disabledReason).toBe('Count every line first');
+    expect(res.secondary.find((a) => a.id === 'recv')?.disabledReason).toBe(
+      'Count every line first',
+    );
     expect(res.secondary.find((a) => a.id === 'print')?.disabledReason).toBeUndefined();
   });
 
@@ -45,9 +50,15 @@ describe('entity-action registry', () => {
     const r = createEntityActionRegistry();
     r.register<PoCtx>('po.detail', base({ id: 'plain' }));
     r.register<PoCtx>('po.detail', base({ id: 'static', hint: 'Only records that you sent it' }));
-    r.register<PoCtx>('po.detail', base({ id: 'derived', hint: (c) => `sends nothing at ${c.stage}` }));
+    r.register<PoCtx>(
+      'po.detail',
+      base({ id: 'derived', hint: (c) => `sends nothing at ${c.stage}` }),
+    );
     // A hint and a reason coexist on the resolved action; the renderer, not the resolver, picks.
-    r.register<PoCtx>('po.detail', base({ id: 'both', hint: 'what it does', disabledReason: () => "why you can't" }));
+    r.register<PoCtx>(
+      'po.detail',
+      base({ id: 'both', hint: 'what it does', disabledReason: () => "why you can't" }),
+    );
     const res = r.resolve<PoCtx>('po.detail', ctx({ stage: 'in_prep' }));
     const byId = (id: string): ResolvedAction | undefined => res.secondary.find((a) => a.id === id);
     expect(byId('plain')?.hint).toBeUndefined();
@@ -60,7 +71,10 @@ describe('entity-action registry', () => {
   it('resolves context-derived label/icon/order and sorts by (order, registration)', () => {
     const r = createEntityActionRegistry();
     r.register<PoCtx>('po.detail', base({ id: 'b', order: 100 }));
-    r.register<PoCtx>('po.detail', base({ id: 'a', order: () => 50, label: (c) => `A-${c.stage}` }));
+    r.register<PoCtx>(
+      'po.detail',
+      base({ id: 'a', order: () => 50, label: (c) => `A-${c.stage}` }),
+    );
     r.register<PoCtx>('po.detail', base({ id: 'c', order: 100 })); // ties b → registration order
     const res = r.resolve<PoCtx>('po.detail', ctx({ stage: 'received' }));
     expect(res.secondary.map((a) => a.id)).toEqual(['a', 'b', 'c']);
@@ -69,7 +83,10 @@ describe('entity-action registry', () => {
 
   it('destructive actions render last, never as the headline', () => {
     const r = createEntityActionRegistry();
-    r.register<PoCtx>('po.detail', base({ id: 'cancel', group: 'destructive', owner: 'core', promoteWhen: () => 9999 }));
+    r.register<PoCtx>(
+      'po.detail',
+      base({ id: 'cancel', group: 'destructive', owner: 'core', promoteWhen: () => 9999 }),
+    );
     r.register<PoCtx>('po.detail', base({ id: 'print' }));
     const res = r.resolve<PoCtx>('po.detail', ctx());
     expect(res.primary).toBeNull(); // destructive can't headline even with a huge weight
@@ -103,7 +120,10 @@ describe('entity-action registry', () => {
 
   it('a locked core headline is uncontestable by any weight', () => {
     const r = createEntityActionRegistry();
-    r.register<PoCtx>('po.detail', base({ id: 'receive', group: 'primary', owner: 'core', locked: true }));
+    r.register<PoCtx>(
+      'po.detail',
+      base({ id: 'receive', group: 'primary', owner: 'core', locked: true }),
+    );
     r.register<PoCtx>('po.detail', base({ id: 'greedy', promoteWhen: () => 100000 }));
     expect(r.resolve<PoCtx>('po.detail', ctx()).primary?.id).toBe('receive');
   });

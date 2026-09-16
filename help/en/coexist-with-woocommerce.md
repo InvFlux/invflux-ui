@@ -2,7 +2,8 @@
 id: coexist-with-woocommerce
 title: How InvFlux works with WooCommerce stock
 category: Concepts
-keywords: [stock management, woocommerce, coexist, adopt, managed by, external, not tracked, governed]
+keywords:
+  [stock management, woocommerce, coexist, adopt, managed by, external, not tracked, governed]
 related: [workbench-bulk-editing]
 ---
 
@@ -38,7 +39,7 @@ items, digital goods.
 
 ## Adopting a product into InvFlux
 
-Switching a product to **InvFlux** is called *adopting* it. When you do, InvFlux takes WooCommerce's
+Switching a product to **InvFlux** is called _adopting_ it. When you do, InvFlux takes WooCommerce's
 current stock quantity as the opening figure and starts managing it from there — so the number your
 customers see doesn't jump. You can adopt one product from its Inventory tab, adopt many at once from
 the Workbench (see [Bulk-editing products](#/help/workbench-bulk-editing)), or accept the one-click
@@ -50,5 +51,5 @@ history it recorded, in case you adopt the product again later.
 ## Two plugins, one number
 
 Once InvFlux manages a product, it protects that product's stock: if another plugin tries to overwrite
-the quantity, InvFlux keeps its own figure so the two don't quietly drift apart. If you *want* another
+the quantity, InvFlux keeps its own figure so the two don't quietly drift apart. If you _want_ another
 plugin to keep writing a product's stock, leave that product on **Other** rather than adopting it.

@@ -1,6 +1,15 @@
 import { windowUrlPort, type UrlParamsPort } from '../urlPort';
-import { useHostNav } from '@invflux/ui';
-import { createEffect, createMemo, createSignal, For, on, onCleanup, Show, untrack } from 'solid-js';
+import { createViewportFill, ErrorBanner, useHostNav } from '@invflux/ui';
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  on,
+  onCleanup,
+  Show,
+  untrack,
+} from 'solid-js';
 import { Dynamic } from 'solid-js/web';
 // Built-in datatype components register themselves as a side effect of importing @invflux/ui, which
 // also provides the shared datatype registries + the reusable WorkbenchGrid (arch-ui-principles §3.2).
@@ -27,6 +36,7 @@ import {
   writeFilterModifiersToParams,
   deleteFilterModifierParams,
   workbenchValueFor,
+  orderTaxonomyValues,
   FilterModeToggle,
   FilterScopePicker,
   RefreshIcon,
@@ -42,8 +52,13 @@ import {
   type RegistrationInfo,
   type WorkbenchRow,
   type WorkbenchHandles,
+  ModalFooter,
+  ModalHeader,
+  ModalPanel,
 } from '@invflux/ui';
-import { __, _n, sprintf } from '@invflux/i18n';
+import { __, _n, _x, formatNumber, sprintf } from '@invflux/i18n';
+import type { SelectedCellRef } from '@invflux/ui';
+import { BringInControl } from '../components/BringInControl';
 import { useWorkbench } from '../context';
 import type {
   ComponentRole,
@@ -127,6 +142,12 @@ type QueryState = {
    *  variations of a matched parent are loaded even if they don't match (as `matched===false` context).
    *  Affects what the server returns → part of the server query key. */
   bringChildren: boolean;
+  /** "Related rows" → bring in variable parents: the UPWARD brought-with pass, and the one flag here
+   *  that is an opt-OUT — `true` is the resting state, because the parent is a matched variation's
+   *  fold home. Turning it off asks for a flat list of exactly what matched: the variation arrives
+   *  as a caret-less top-level row. SERVER-side (`bring_parents=0`) → part of the query key.
+   *  Distinct from {@link hideBroughtParents}, which still LOADS parents and only hides them. */
+  bringParents: boolean;
   /** "Related rows" → hide brought-in children: CLIENT-side, hides those brought-with variations
    *  (`matched===false`). Only meaningful (and only shown) while {@link bringChildren} is on. */
   hideBroughtChildren: boolean;
@@ -214,7 +235,7 @@ function isTypingInField(): boolean {
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
 
-const fmt = (n: number) => new Intl.NumberFormat().format(n);
+const fmt = (n: number) => formatNumber(n);
 
 function reorderStatusFor(atp: number, threshold: number | null): ReorderStatus {
   if (threshold === null) return 'none';
@@ -244,7 +265,10 @@ function SupplierAssignModal(props: {
   createEffect(() => {
     void (async () => {
       try {
-        const res = await getJson<{ suppliers: SupplierOption[] }>(props.ctx, '/procurement/suppliers');
+        const res = await getJson<{ suppliers: SupplierOption[] }>(
+          props.ctx,
+          '/procurement/suppliers',
+        );
         setSuppliers(res.suppliers);
         if (res.suppliers[0]) setSupplierId(res.suppliers[0].id);
       } catch (e) {
@@ -287,27 +311,26 @@ function SupplierAssignModal(props: {
   }
 
   return (
-    <Modal
-      onClose={props.onClose}
-      closeOnBackdrop={false}
-      backdropClass="flex items-center justify-center bg-black/30 p-6"
-      label={__('Add to supplier catalog')}
-    >
-      <div class="flex w-full max-w-md flex-col rounded border border-border bg-surface shadow-xl">
-        <div class="border-b border-border p-5">
-          <h2 class="text-lg font-semibold text-text">{__('Add to supplier catalog')}</h2>
-          <p class="text-sm text-text-muted">
-            {sprintf(
-              /* translators: %d: number of selected products */
-              __("Add %d selected product(s) to a supplier's catalogue."),
-              props.subjectIds.length,
-            )}
-          </p>
-        </div>
+    <Modal onClose={props.onClose} closeOnBackdrop={false} label={__('Add to supplier catalog')}>
+      <ModalPanel size="md">
+        <ModalHeader
+          title={__('Add to supplier catalog')}
+          subtitle={
+            <p>
+              {sprintf(
+                /* translators: %d: number of selected products */
+                __("Add %d selected product(s) to a supplier's catalogue."),
+                props.subjectIds.length,
+              )}
+            </p>
+          }
+        />
 
-        <div class="flex-1 p-5">
+        <div class="flex-1 p-4">
           <Show when={error()}>
-            <p class="mb-3 rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{error()}</p>
+            <ErrorBanner class="mb-3 rounded border border-red-300 bg-red-50 px-3 py-2 text-sm">
+              {error()}
+            </ErrorBanner>
           </Show>
           <Show
             when={loaded() && suppliers().length > 0}
@@ -319,33 +342,34 @@ function SupplierAssignModal(props: {
               </p>
             }
           >
-            <label class="mb-1 block text-sm font-medium text-text">{__('Supplier')}</label>
+            {/* `for`/`id` rather than an aria-label: the name is already on screen, and repeating
+                it in an attribute is a second copy to keep in step with the first. */}
+            <label for="workbench-bulk-supplier" class="mb-1 block text-sm font-medium text-text">
+              {__('Supplier')}
+            </label>
             <select
+              id="workbench-bulk-supplier"
               class="h-9 w-full rounded border border-border bg-surface px-3 text-sm shadow-sm"
               disabled={busy()}
               value={supplierId() ?? ''}
-              onChange={(e) => setSupplierId(e.currentTarget.value === '' ? null : Number(e.currentTarget.value))}
+              onChange={(e) =>
+                setSupplierId(e.currentTarget.value === '' ? null : Number(e.currentTarget.value))
+              }
             >
               <For each={suppliers()}>{(s) => <option value={s.id}>{s.displayName}</option>}</For>
             </select>
           </Show>
         </div>
 
-        <div class="flex items-center justify-end gap-2 border-t border-border p-5">
-          <Button
-            variant="secondary"
-            onClick={props.onClose}
-          >
+        <ModalFooter>
+          <Button variant="secondary" onClick={props.onClose}>
             {__('Cancel')}
           </Button>
-          <Button
-            disabled={busy() || supplierId() === null}
-            onClick={() => void assign()}
-          >
+          <Button disabled={busy() || supplierId() === null} onClick={() => void assign()}>
             {sprintf(__('Add %d'), props.subjectIds.length)}
           </Button>
-        </div>
-      </div>
+        </ModalFooter>
+      </ModalPanel>
     </Modal>
   );
 }
@@ -374,7 +398,10 @@ function GeneratePoModal(props: {
   createEffect(() => {
     void (async () => {
       try {
-        const res = await getJson<{ suppliers: SupplierOption[] }>(props.ctx, '/procurement/suppliers');
+        const res = await getJson<{ suppliers: SupplierOption[] }>(
+          props.ctx,
+          '/procurement/suppliers',
+        );
         setSupplierName(res.suppliers.find((s) => s.id === props.supplierId)?.displayName ?? '');
       } catch {
         /* the name is cosmetic — a failed lookup must not block PO creation */
@@ -405,7 +432,9 @@ function GeneratePoModal(props: {
       // Cross-SPA hand-off: land on the new draft in the Procurement app for review + submit.
       // Cross-surface hand-off through the host port: a separate admin page standalone, an
       // in-app route when embedded (assigning a `#/…` href just moves the shell router).
-      window.location.href = hostNav.routeHref(`/procurement/purchase-orders/${res.purchaseOrder.id}`);
+      window.location.href = hostNav.routeHref(
+        `/procurement/purchase-orders/${res.purchaseOrder.id}`,
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setBusy(false);
@@ -413,65 +442,76 @@ function GeneratePoModal(props: {
   }
 
   return (
-    <Modal
-      onClose={props.onClose}
-      closeOnBackdrop={false}
-      backdropClass="flex items-center justify-center bg-black/30 p-6"
-      label={__('Create replenishment PO')}
-    >
-      <div class="flex w-full max-w-md flex-col rounded border border-border bg-surface shadow-xl">
-        <div class="border-b border-border p-5">
-          <h2 class="text-lg font-semibold text-text">{__('Create replenishment PO')}</h2>
-          <p class="mt-1 text-sm text-text-muted">
-            {props.explicit
-              ? sprintf(
-                  /* translators: 1: supplier name, 2: number of selected products */
-                  __('Generate a draft purchase order for %1$s with the %2$d selected product(s).'),
-                  supplierName() || __('the filtered supplier'),
-                  props.subjectIds.length,
-                )
-              : sprintf(
-                  /* translators: 1: supplier name, 2: number of products in view */
-                  __('Generate a draft purchase order for %1$s from the %2$d product(s) in view.'),
-                  supplierName() || __('the filtered supplier'),
-                  props.subjectIds.length,
-                )}
-          </p>
-          <p class="mt-2 text-xs text-text-muted">
-            {props.explicit
-              ? __('Each selected product is added at a suggested quantity (its shortfall, or the minimum order quantity). You review and edit the draft before submitting.')
-              : __("Only products that need reordering (below reorder point, or oversold beyond what's on order) are added, at suggested quantities. You review and edit the draft before submitting.")}
-          </p>
-        </div>
+    <Modal onClose={props.onClose} closeOnBackdrop={false} label={__('Create replenishment PO')}>
+      <ModalPanel size="md">
+        <ModalHeader
+          title={__('Create replenishment PO')}
+          subtitle={
+            <>
+              <p>
+                {props.explicit
+                  ? sprintf(
+                      /* translators: 1: supplier name, 2: number of selected products */
+                      __(
+                        'Generate a draft purchase order for %1$s with the %2$d selected product(s).',
+                      ),
+                      supplierName() || __('the filtered supplier'),
+                      props.subjectIds.length,
+                    )
+                  : sprintf(
+                      /* translators: 1: supplier name, 2: number of products in view */
+                      __(
+                        'Generate a draft purchase order for %1$s from the %2$d product(s) in view.',
+                      ),
+                      supplierName() || __('the filtered supplier'),
+                      props.subjectIds.length,
+                    )}
+              </p>
+              <p class="mt-2">
+                {props.explicit
+                  ? __(
+                      'Each selected product is added at a suggested quantity (its shortfall, or the minimum order quantity). You review and edit the draft before submitting.',
+                    )
+                  : __(
+                      "Only products that need reordering (below their reorder threshold, or oversold beyond what's on order) are added, at suggested quantities. You review and edit the draft before submitting.",
+                    )}
+              </p>
+            </>
+          }
+        />
 
         <Show when={error()}>
-          <div class="px-5 pt-4">
-            <p class="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{error()}</p>
+          <div class="px-4 pt-4">
+            <ErrorBanner class="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm">
+              {error()}
+            </ErrorBanner>
           </div>
         </Show>
 
-        <div class="flex items-center justify-end gap-2 border-t border-border p-5">
-          <Button
-            variant="secondary"
-            onClick={props.onClose}
-          >
+        <ModalFooter>
+          <Button variant="secondary" onClick={props.onClose}>
             {__('Cancel')}
           </Button>
-          <Button
-            disabled={busy()}
-            onClick={() => void generate()}
-          >
+          <Button disabled={busy()} onClick={() => void generate()}>
             {busy() ? __('Creating…') : __('Create draft PO')}
           </Button>
-        </div>
-      </div>
+        </ModalFooter>
+      </ModalPanel>
     </Modal>
   );
 }
 
 // ─── URL state helpers ────────────────────────────────────────────────────────
 
-const INVFLUX_URL_PARAMS = ['search', 'sort_by', 'sort_dir', 'hide_parents', 'bring_children', 'hide_children', 'worksheet_id'] as const;
+const INVFLUX_URL_PARAMS = [
+  'search',
+  'sort_by',
+  'sort_dir',
+  'hide_parents',
+  'bring_children',
+  'hide_children',
+  'worksheet_id',
+] as const;
 
 function readQueryFromUrl(
   defaults: QueryState,
@@ -503,6 +543,9 @@ function readQueryFromUrl(
     filterModifiers: readFilterModifiersFromParams(params),
     hideBroughtParents: params.get('hide_parents') === '1' || defaults.hideBroughtParents,
     bringChildren: params.get('bring_children') === '1' || defaults.bringChildren,
+    // Opt-out: absent means ON, so only an explicit `0` clears it. Written the other way round from
+    // every flag beside it, which is exactly why it reads `!== '0'` rather than `=== '1'`.
+    bringParents: params.get('bring_parents') !== '0' && defaults.bringParents,
     // Only meaningful while bringing children in; ignore a stale flag otherwise.
     hideBroughtChildren:
       (params.get('bring_children') === '1' || defaults.bringChildren) &&
@@ -536,6 +579,9 @@ function syncQueryToUrl(
   if (q.hideBroughtParents) current.searchParams.set('hide_parents', '1');
   if (q.bringChildren) current.searchParams.set('bring_children', '1');
   if (q.bringChildren && q.hideBroughtChildren) current.searchParams.set('hide_children', '1');
+  // Only the OPT-OUT is written; the resting state leaves the URL clean, the same way every flag
+  // above only appears once it departs from its default.
+  if (!q.bringParents) current.searchParams.set('bring_parents', '0');
 
   port.replace(current.searchParams);
 }
@@ -612,7 +658,10 @@ type ComponentChoiceEntry = {
 
 /** Datatype/role pairs with more than one registered component — nothing until plug-ins contend. */
 function choosableComponentEntries(): ComponentChoiceEntry[] {
-  const registries: [ComponentRole, { dataTypes(): string[]; list(dt: string): RegistrationInfo[] }][] = [
+  const registries: [
+    ComponentRole,
+    { dataTypes(): string[]; list(dt: string): RegistrationInfo[] },
+  ][] = [
     ['view', viewRegistry],
     ['edit', editRegistry],
     ['drilldown', drilldownRegistry],
@@ -621,7 +670,8 @@ function choosableComponentEntries(): ComponentChoiceEntry[] {
   for (const [role, reg] of registries) {
     for (const dataType of reg.dataTypes()) {
       const options = reg.list(dataType);
-      if (options.length >= 2) entries.push({ key: `${role}:${dataType}`, dataType, role, options });
+      if (options.length >= 2)
+        entries.push({ key: `${role}:${dataType}`, dataType, role, options });
     }
   }
   return entries;
@@ -659,7 +709,9 @@ function WorkbenchSettingsPanel(props: {
             value={props.loadSize}
             onChange={(e) => props.onLoadSize(Number(e.currentTarget.value))}
           >
-            <For each={props.loadSizeOptions}>{(opt) => <option value={opt}>{fmt(opt)}</option>}</For>
+            <For each={props.loadSizeOptions}>
+              {(opt) => <option value={opt}>{fmt(opt)}</option>}
+            </For>
           </select>
         </label>
       </SettingsSection>
@@ -692,7 +744,9 @@ function CellComponentsPanel(props: {
   onRequestClose: () => void;
 }) {
   const initialFor = (e: ComponentChoiceEntry): string =>
-    props.choices[e.dataType]?.[e.role] ?? e.options.find((o) => o.isDefault)?.id ?? e.options[0].id;
+    props.choices[e.dataType]?.[e.role] ??
+    e.options.find((o) => o.isDefault)?.id ??
+    e.options[0].id;
   const [draft, setDraft] = createSignal<Record<string, string>>(
     Object.fromEntries(props.entries.map((e) => [e.key, initialFor(e)])),
   );
@@ -710,11 +764,7 @@ function CellComponentsPanel(props: {
   }
 
   const roleLabel = (role: ComponentRole): string =>
-    role === 'view'
-      ? __('Display')
-      : role === 'edit'
-        ? __('Editor')
-        : __('Drill-down');
+    role === 'view' ? __('Display') : role === 'edit' ? __('Editor') : __('Drill-down');
 
   return (
     <SettingsSection title={__('Cell components')}>
@@ -783,17 +833,16 @@ function WorksheetsModal(props: {
   // Whether a per-worksheet item action (add/remove/replace the selection) is offered.
   const itemMode = (): boolean => props.mode !== 'manage';
   const verb = (): string =>
-    props.mode === 'remove'
-      ? __('Remove')
-      : props.mode === 'replace'
-        ? __('Replace')
-        : __('Add');
+    props.mode === 'remove' ? __('Remove') : props.mode === 'replace' ? __('Replace') : __('Add');
   const itemMethod = (): 'POST' | 'DELETE' | 'PUT' =>
     props.mode === 'remove' ? 'DELETE' : props.mode === 'replace' ? 'PUT' : 'POST';
 
   async function reload(): Promise<void> {
     try {
-      const res = await getJson<{ worksheets: WorkbenchWorksheet[] }>(props.ctx, '/workbench/worksheets');
+      const res = await getJson<{ worksheets: WorkbenchWorksheet[] }>(
+        props.ctx,
+        '/workbench/worksheets',
+      );
       setWorksheets(res.worksheets);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -826,7 +875,11 @@ function WorksheetsModal(props: {
     const name = newName().trim();
     if (name === '') return;
     await run(async () => {
-      const res = await postJson<{ worksheet: WorkbenchWorksheet }>(props.ctx, '/workbench/worksheets', { name });
+      const res = await postJson<{ worksheet: WorkbenchWorksheet }>(
+        props.ctx,
+        '/workbench/worksheets',
+        { name },
+      );
       setNewName('');
       if (createApplies()) {
         await postJson(props.ctx, `/workbench/worksheets/${res.worksheet.id}/items`, {
@@ -850,14 +903,21 @@ function WorksheetsModal(props: {
       return Promise.resolve();
     }
     return run(async () => {
-      await postJson(props.ctx, `/workbench/worksheets/${id}/items`, { subject_ids: props.subjectIds }, itemMethod());
+      await postJson(
+        props.ctx,
+        `/workbench/worksheets/${id}/items`,
+        { subject_ids: props.subjectIds },
+        itemMethod(),
+      );
     }).then(() => props.onClose());
   };
 
   const rename = (w: WorkbenchWorksheet): Promise<void> | void => {
     const name = window.prompt(__('Rename worksheet'), w.name);
     if (name === null || name.trim() === '' || name.trim() === w.name) return;
-    return run(() => postJson(props.ctx, `/workbench/worksheets/${w.id}`, { name: name.trim() }, 'PATCH'));
+    return run(() =>
+      postJson(props.ctx, `/workbench/worksheets/${w.id}`, { name: name.trim() }, 'PATCH'),
+    );
   };
 
   const remove = (w: WorkbenchWorksheet): Promise<void> | void => {
@@ -867,37 +927,34 @@ function WorksheetsModal(props: {
   };
 
   return (
-    <Modal
-      onClose={props.onClose}
-      closeOnBackdrop={true}
-      backdropClass="flex items-center justify-center bg-black/30 p-6"
-      label={__('Worksheets')}
-    >
-      <div class="flex max-h-[80vh] w-full max-w-lg flex-col rounded border border-border bg-surface shadow-xl">
-        <div class="border-b border-border p-5">
-          <h2 class="text-lg font-semibold text-text">{__('Worksheets')}</h2>
-          <Show when={itemMode()}>
-            <p class="text-sm text-text-muted">
-              {props.mode === 'remove'
-                ? sprintf(
-                    __('Remove %d selected product(s) from a worksheet'),
-                    props.subjectIds.length,
-                  )
-                : props.mode === 'replace'
+    <Modal onClose={props.onClose} closeOnBackdrop={true} label={__('Worksheets')}>
+      <ModalPanel size="lg">
+        <ModalHeader
+          title={__('Worksheets')}
+          subtitle={
+            <Show when={itemMode()}>
+              <p>
+                {props.mode === 'remove'
                   ? sprintf(
-                      __("Replace a worksheet's contents with %d selected product(s)"),
+                      __('Remove %d selected product(s) from a worksheet'),
                       props.subjectIds.length,
                     )
-                  : sprintf(
-                      __('Add %d selected product(s) to a worksheet'),
-                      props.subjectIds.length,
-                    )}
-            </p>
-          </Show>
-        </div>
+                  : props.mode === 'replace'
+                    ? sprintf(
+                        __("Replace a worksheet's contents with %d selected product(s)"),
+                        props.subjectIds.length,
+                      )
+                    : sprintf(
+                        __('Add %d selected product(s) to a worksheet'),
+                        props.subjectIds.length,
+                      )}
+              </p>
+            </Show>
+          }
+        />
 
         {/* Create (top) + quick-filter, above the list. */}
-        <div class="flex flex-col gap-3 border-b border-border p-5">
+        <div class="flex flex-col gap-3 border-b border-border p-4">
           <div class="flex items-center gap-2">
             <input
               class="h-9 flex-1 rounded border border-border bg-surface px-3 text-sm shadow-sm"
@@ -924,9 +981,11 @@ function WorksheetsModal(props: {
           />
         </div>
 
-        <div class="flex-1 overflow-auto p-5">
+        <div class="flex-1 overflow-auto p-4">
           <Show when={error()}>
-            <p class="mb-3 rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{error()}</p>
+            <ErrorBanner class="mb-3 rounded border border-red-300 bg-red-50 px-3 py-2 text-sm">
+              {error()}
+            </ErrorBanner>
           </Show>
           <ul class="divide-y divide-border rounded border border-border">
             <For
@@ -989,15 +1048,12 @@ function WorksheetsModal(props: {
           </ul>
         </div>
 
-        <div class="flex items-center justify-end gap-2 border-t border-border p-5">
-          <Button
-            variant="secondary"
-            onClick={props.onClose}
-          >
+        <ModalFooter>
+          <Button variant="secondary" onClick={props.onClose}>
             {__('Close')}
           </Button>
-        </div>
-      </div>
+        </ModalFooter>
+      </ModalPanel>
     </Modal>
   );
 }
@@ -1020,7 +1076,7 @@ export function WorkbenchGrid(
      * Where filter state lives in the address bar. Defaults to the page's real query string;
      * the unified app passes a port bound to its hash search instead.
      */
-     urlPort?: UrlParamsPort;
+    urlPort?: UrlParamsPort;
   } = {},
 ) {
   const urlPort = (): UrlParamsPort => props.urlPort ?? windowUrlPort;
@@ -1040,8 +1096,14 @@ export function WorkbenchGrid(
     subjectIds: number[];
     mode: 'add' | 'remove' | 'replace' | 'manage';
   } | null>(null);
-  const [supplierAssignModal, setSupplierAssignModal] = createSignal<{ subjectIds: number[] } | null>(null);
-  const [generatePoModal, setGeneratePoModal] = createSignal<{ supplierId: number; subjectIds: number[]; explicit: boolean } | null>(null);
+  const [supplierAssignModal, setSupplierAssignModal] = createSignal<{
+    subjectIds: number[];
+  } | null>(null);
+  const [generatePoModal, setGeneratePoModal] = createSignal<{
+    supplierId: number;
+    subjectIds: number[];
+    explicit: boolean;
+  } | null>(null);
 
   // Imperative handles the reusable grid registers back to the shell (apiRef).
   let focusGrid: () => void = () => {};
@@ -1049,10 +1111,27 @@ export function WorkbenchGrid(
   let scrollGridToTop: () => void = () => {};
   // Reactive fetching mirror pushed from the base grid (onFetchingChange) — drives the Refresh spinner.
   const [isRefreshing, setIsRefreshing] = createSignal(false);
+  // Reactive save-progress mirror (onSaveProgressChange) — drives the readout-row progress bar while a
+  // multi-chunk save sends; null when no save is active.
+  const [saveProgress, setSaveProgress] = createSignal<{
+    done: number;
+    total: number;
+    multiChunk: boolean;
+  } | null>(null);
+  // The progress to show in the readout row: only while a MULTI-CHUNK save is sending (a single-chunk
+  // save is one quick request — not worth a bar). Null otherwise, so the "Load all pages" link shows.
+  const savingBar = (): { done: number; total: number } | null => {
+    const p = saveProgress();
+    return p !== null && p.multiChunk ? { done: p.done, total: p.total } : null;
+  };
   let refreshGrid: () => void = () => {};
   let getSelectedCells: () => Array<{ row: WorkbenchRow; columnId: string }> = () => [];
   let loadAllPagesHandle: () => Promise<void> = async () => {};
-  let selectSubjectRows: (subjectIds: number[]) => void = () => {};
+  let selectCells: (
+    cells: readonly SelectedCellRef[],
+    active?: SelectedCellRef | null,
+  ) => void = () => {};
+  let getActiveCell: () => SelectedCellRef | null = () => null;
   let toggleLayout: () => void = () => {};
   let openSaveReview: () => void = () => {};
 
@@ -1109,6 +1188,7 @@ export function WorkbenchGrid(
     filterModifiers: {},
     hideBroughtParents: false,
     bringChildren: false,
+    bringParents: true,
     hideBroughtChildren: false,
   });
   const initialQuery = readQueryFromUrl(baseDefaults(loadLoadSize()), [], urlPort());
@@ -1132,7 +1212,8 @@ export function WorkbenchGrid(
   // the Add-filter slot + chips (one contained Tab loop; Escape exits to the grid).
   let toolbarRef: HTMLFormElement | undefined;
   const [query, setQuery] = createSignal<QueryState>(initialQuery);
-  const [collapsedProductIds, setCollapsedProductIds] = createSignal<Set<number>>(loadCollapsedProductIds());
+  const [collapsedProductIds, setCollapsedProductIds] =
+    createSignal<Set<number>>(loadCollapsedProductIds());
 
   // Server metadata + result counts surfaced by the grid's single fetch via `onMeta` — the shell
   // relies on that one fetch and runs no products query of its own. Kept stable (last non-empty) so
@@ -1144,7 +1225,10 @@ export function WorkbenchGrid(
   const [loadedCount, setLoadedCount] = createSignal(0);
   // Mirrors of grid state the shell renders in its own bar (the grid's toolbar is hidden here).
   const [gridDirty, setGridDirty] = createSignal(false);
-  const [layoutInfo, setLayoutInfo] = createSignal<{ layout: 'grid' | 'record'; canToggle: boolean }>({
+  const [layoutInfo, setLayoutInfo] = createSignal<{
+    layout: 'grid' | 'record';
+    canToggle: boolean;
+  }>({
     layout: 'grid',
     canToggle: false,
   });
@@ -1181,11 +1265,19 @@ export function WorkbenchGrid(
     const bespokeTypes = new Set(['numeric_ids']);
     const relevant = metas.filter((m) => bespokeTypes.has(m.type));
     if (relevant.length === 0) return;
-    const decoded = readUnreservedFilterValuesFromParams(initialUrlParams, RESERVED_FILTER_PARAMS, relevant);
+    const decoded = readUnreservedFilterValuesFromParams(
+      initialUrlParams,
+      RESERVED_FILTER_PARAMS,
+      relevant,
+    );
     const missing: Record<string, string[]> = {};
     for (const m of relevant) {
       const vals = decoded[m.id];
-      if (vals !== undefined && vals.length > 0 && (query().filterValues[m.id] ?? []).length === 0) {
+      if (
+        vals !== undefined &&
+        vals.length > 0 &&
+        (query().filterValues[m.id] ?? []).length === 0
+      ) {
         missing[m.id] = vals;
       }
     }
@@ -1227,7 +1319,17 @@ export function WorkbenchGrid(
   // under `untrack`, and we skip the write unless the incoming URL genuinely decodes to a different
   // query than the one we already hold.
   const querySig = (q: QueryState): string =>
-    JSON.stringify([q.search, q.sortBy, q.sortDir, q.filterValues, q.filterModifiers, q.hideBroughtParents, q.bringChildren, q.hideBroughtChildren]);
+    JSON.stringify([
+      q.search,
+      q.sortBy,
+      q.sortDir,
+      q.filterValues,
+      q.filterModifiers,
+      q.hideBroughtParents,
+      q.bringChildren,
+      q.bringParents,
+      q.hideBroughtChildren,
+    ]);
   createEffect(
     on(
       // Track the URL ONLY — not query() (self-write loop) nor stableFilters() (would re-fire on
@@ -1276,12 +1378,25 @@ export function WorkbenchGrid(
   // to the top on every check).
   const scrollResetKey = createMemo(() => {
     const q = query();
-    return JSON.stringify([q.search, q.sortBy, q.sortDir, q.loadSize, q.filterValues, q.filterModifiers, q.bringChildren]);
+    return JSON.stringify([
+      q.search,
+      q.sortBy,
+      q.sortDir,
+      q.loadSize,
+      q.filterValues,
+      q.filterModifiers,
+      q.bringChildren,
+      q.bringParents,
+    ]);
   });
   createEffect(
-    on(scrollResetKey, () => {
-      scrollGridToTop();
-    }, { defer: true }),
+    on(
+      scrollResetKey,
+      () => {
+        scrollGridToTop();
+      },
+      { defer: true },
+    ),
   );
 
   // Re-query the server SEARCH_DEBOUNCE_MS after the last keystroke (the transformRows loaded-set
@@ -1290,7 +1405,10 @@ export function WorkbenchGrid(
     on(searchInput, (draft) => {
       const trimmed = draft.trim();
       if (trimmed === query().search.trim()) return;
-      const timer = setTimeout(() => setQuery((q) => ({ ...q, search: trimmed })), SEARCH_DEBOUNCE_MS);
+      const timer = setTimeout(
+        () => setQuery((q) => ({ ...q, search: trimmed })),
+        SEARCH_DEBOUNCE_MS,
+      );
       onCleanup(() => clearTimeout(timer));
     }),
   );
@@ -1311,7 +1429,15 @@ export function WorkbenchGrid(
     }
     if (q.search.trim() !== '') params['search'] = q.search.trim();
     if (q.bringChildren) params['bring_children'] = '1';
+    // Opt-out: only the departure from the default is sent.
+    if (!q.bringParents) params['bring_parents'] = '0';
     for (const [id, mods] of Object.entries(q.filterModifiers)) {
+      // A modifier qualifies its filter's values — which slots a stock band measures, whether a
+      // selection means any/all/none. With no values there is nothing to qualify: the server skips
+      // a filter that sent none before it ever looks at the modifiers. Sending them anyway changes
+      // the query key, so picking a scope on a stock-level chip with both bounds empty costs a full
+      // refetch of the catalogue to arrive at exactly the rows already on screen.
+      if ((q.filterValues[id]?.length ?? 0) === 0) continue;
       for (const [key, value] of Object.entries(mods)) params[`fmod[${id}][${key}]`] = value;
     }
     return params;
@@ -1343,7 +1469,9 @@ export function WorkbenchGrid(
   };
 
   // The current row-selection narrowed to purchasable units (toolbar bulk-action variant).
-  const selectedUnitSubjectIds = createMemo<number[]>(() => unitSubjectIdsFrom(selectedSubjectIds()));
+  const selectedUnitSubjectIds = createMemo<number[]>(() =>
+    unitSubjectIdsFrom(selectedSubjectIds()),
+  );
 
   function transformDisplayRows(input: WorkbenchRow[]): WorkbenchRow[] {
     // Pagination can split a variable-product group across a page boundary, so the server re-includes the
@@ -1351,7 +1479,8 @@ export function WorkbenchGrid(
     // a fold-home. Drop those duplicate parent rows — keep ONE parent per product (preferring the matched
     // primary) — so the group renders once with all its variations flowing under the single parent.
     const hasMatchedParent = new Set<number>();
-    for (const p of input) if (p.wcVariationId === null && p.matched !== false) hasMatchedParent.add(p.wcProductId);
+    for (const p of input)
+      if (p.wcVariationId === null && p.matched !== false) hasMatchedParent.add(p.wcProductId);
     const seenParent = new Set<number>();
     const rows: WorkbenchRow[] = [];
     for (const p of input) {
@@ -1397,7 +1526,9 @@ export function WorkbenchGrid(
     const parentMatchesNeedle = new Set(
       needle === ''
         ? []
-        : rows.filter((p) => p.wcVariationId === null && matchesNeedle(p)).map((p) => p.wcProductId),
+        : rows
+            .filter((p) => p.wcVariationId === null && matchesNeedle(p))
+            .map((p) => p.wcProductId),
     );
 
     const aggregateParent = (product: WorkbenchRow): WorkbenchRow => {
@@ -1410,8 +1541,13 @@ export function WorkbenchGrid(
       // `extra` bag under the "orders" column id (generic `link` datatype). A parent has no single sku
       // or subject of its own, so its Orders link filters the dispatch queue by ALL its variations'
       // subject ids (`orders_subject_ids`, dash-joined) — the LinkView builds that query client-side.
-      const orderChildren = children.filter((c) => typeof c.extra?.orders === 'number' && c.extra.orders > 0);
-      const totalOrderCount = orderChildren.reduce((sum, c) => sum + (c.extra?.orders as number), 0);
+      const orderChildren = children.filter(
+        (c) => typeof c.extra?.orders === 'number' && c.extra.orders > 0,
+      );
+      const totalOrderCount = orderChildren.reduce(
+        (sum, c) => sum + (c.extra?.orders as number),
+        0,
+      );
       const orderSubjectIds = orderChildren.map((c) => c.subjectId).join('-');
       return {
         ...product,
@@ -1475,10 +1611,45 @@ export function WorkbenchGrid(
   // Fold/unfold a set of variable parents (expand-biased: if any is collapsed, expand all; else
   // collapse all), then re-target the cell selection to exactly the rows just folded/unfolded — each
   // parent, plus its variations when expanding — once the changed display set has re-rendered.
+  /**
+   * Fold or unfold the given parents, carrying the cell selection across the change.
+   *
+   * The selection rules are deliberate, and they are not "reselect what we touched":
+   *
+   * - **Unfolding** extends the parent's own selection DOWN its newly revealed variations, column
+   *   for column. Selecting a parent's cost cell and opening the group is a request to work on that
+   *   column for the family, so the variations arrive already selected in it — and in nothing else.
+   *   A parent with no selection reveals its variations unselected.
+   * - **Collapsing** changes nothing except what it hides. The rows that disappear take their own
+   *   selection with them; every other row keeps exactly what it had.
+   *
+   * Both fall out of re-applying the previous selection by identity: {@link selectCells} drops the
+   * cells it can no longer place, which is precisely the collapse rule, so only the unfold needs to
+   * add anything.
+   */
   function applyFold(parentProductIds: number[]): void {
     if (parentProductIds.length === 0) return;
     const collapsed = collapsedProductIds();
     const expand = parentProductIds.some((id) => collapsed.has(id));
+
+    // Snapshot BEFORE the row set changes — afterwards every index below the fold has moved.
+    const previous: SelectedCellRef[] = getSelectedCells().map(({ row, columnId }) => ({
+      subjectId: row.subjectId,
+      columnId,
+    }));
+    const activeBefore = getActiveCell();
+    // Which columns each folding PARENT had selected, keyed by product id.
+    const columnsByParent = new Map<number, Set<string>>();
+    for (const { row, columnId } of getSelectedCells()) {
+      if (row.wcVariationId !== null) continue;
+      let columns = columnsByParent.get(row.wcProductId);
+      if (columns === undefined) {
+        columns = new Set<string>();
+        columnsByParent.set(row.wcProductId, columns);
+      }
+      columns.add(columnId);
+    }
+
     setCollapsedProductIds((current) => {
       const next = new Set(current);
       for (const id of parentProductIds) {
@@ -1487,18 +1658,25 @@ export function WorkbenchGrid(
       }
       return next;
     });
-    const kids = childrenByProductId();
-    const parentRowByPid = new Map<number, WorkbenchRow>();
-    for (const r of loadedRows()) if (r.wcVariationId === null) parentRowByPid.set(r.wcProductId, r);
-    const targets: number[] = [];
-    for (const pid of parentProductIds) {
-      const parent = parentRowByPid.get(pid);
-      if (parent) targets.push(parent.subjectId);
-      if (expand) for (const c of kids.get(pid) ?? []) targets.push(c.subjectId);
+
+    const next = [...previous];
+    if (expand) {
+      const kids = childrenByProductId();
+      for (const pid of parentProductIds) {
+        // Only a parent that was actually collapsed reveals anything; `expand` is decided for the
+        // batch, so the others are already open and have nothing new to select.
+        if (!collapsed.has(pid)) continue;
+        const columns = columnsByParent.get(pid);
+        if (columns === undefined || columns.size === 0) continue;
+        for (const child of kids.get(pid) ?? []) {
+          for (const columnId of columns) next.push({ subjectId: child.subjectId, columnId });
+        }
+      }
     }
-    // After the collapse change re-renders the row set (Solid runs the grid's rows memo synchronously),
-    // set the selection to those rows' new indices.
-    queueMicrotask(() => selectSubjectRows(targets));
+
+    // After the collapse change re-renders the row set (Solid runs the grid's rows memo
+    // synchronously), re-project the selection onto the new indices.
+    queueMicrotask(() => selectCells(next, activeBefore));
   }
 
   function toggleFoldSelection(): void {
@@ -1506,7 +1684,10 @@ export function WorkbenchGrid(
     for (const { row } of getSelectedCells()) {
       if (row.wcVariationId !== null) {
         ids.add(row.wcProductId); // variation → its (foldable) parent
-      } else if (row.productType === 'variable' && (childrenByProductId().get(row.wcProductId)?.length ?? 0) > 0) {
+      } else if (
+        row.productType === 'variable' &&
+        (childrenByProductId().get(row.wcProductId)?.length ?? 0) > 0
+      ) {
         ids.add(row.wcProductId); // variable parent
       }
     }
@@ -1527,7 +1708,10 @@ export function WorkbenchGrid(
 
   // Build the nonce'd export URL from the grid's CURRENT view (same filter/search/sort encoding as
   // the fetch) + format + visible columns + the optional selection.
-  const buildExportUrl = (format: 'csv' | 'xlsx' | 'json' | 'jsonl', subjectIds: number[]): string => {
+  const buildExportUrl = (
+    format: 'csv' | 'xlsx' | 'json' | 'jsonl',
+    subjectIds: number[],
+  ): string => {
     const url = new URL(`${ctx.apiRoot.replace(/\/$/, '')}/invflux/v1/workbench/export`);
     url.searchParams.set('format', format);
     const cols = exportColumnIds();
@@ -1539,11 +1723,13 @@ export function WorkbenchGrid(
     url.searchParams.set('sort_dir', state.sortDir);
     // Mirror the grid's brought-in display state so the export row set matches what's on screen.
     if (state.bringChildren) url.searchParams.set('bring_children', '1');
+    if (!state.bringParents) url.searchParams.set('bring_parents', '0');
     if (state.hideBroughtParents) url.searchParams.set('hide_parents', '1');
     if (state.hideBroughtChildren) url.searchParams.set('hide_children', '1');
     writeFilterValuesToParams(url.searchParams, state.filterValues, stableFilters());
     for (const [id, mods] of Object.entries(state.filterModifiers)) {
-      for (const [key, value] of Object.entries(mods)) url.searchParams.append(`fmod[${id}][${key}]`, value);
+      for (const [key, value] of Object.entries(mods))
+        url.searchParams.append(`fmod[${id}][${key}]`, value);
     }
     url.searchParams.set('_wpnonce', ctx.nonce);
     return url.toString();
@@ -1606,9 +1792,12 @@ export function WorkbenchGrid(
       if (bctx.selectedSubjectIds.length === 0) return __('Select one or more products first');
       return unitSubjectIdsFrom(bctx.selectedSubjectIds).length > 0
         ? undefined
-        : __('Only sellable units can be added to a supplier catalog (not variable parents, groups or externals)');
+        : __(
+            'Only sellable units can be added to a supplier catalog (not variable parents, groups or externals)',
+          );
     },
-    run: (bctx) => setSupplierAssignModal({ subjectIds: unitSubjectIdsFrom(bctx.selectedSubjectIds) }),
+    run: (bctx) =>
+      setSupplierAssignModal({ subjectIds: unitSubjectIdsFrom(bctx.selectedSubjectIds) }),
   });
   // "Create replenishment PO" — only when a **single** supplier is filtered (so supplier X is
   // unambiguous). Scope = selected rows, else all visible rows. Reuses the server replenishment
@@ -1632,9 +1821,19 @@ export function WorkbenchGrid(
       const explicit = bctx.selectedSubjectIds.length > 0;
       const subjectIds = explicit
         ? selectedUnitSubjectIds()
-        : [...new Set(loadedRows().filter((p) => p.matched !== false && isPurchasableUnit(p)).map((p) => p.subjectId))];
+        : [
+            ...new Set(
+              loadedRows()
+                .filter((p) => p.matched !== false && isPurchasableUnit(p))
+                .map((p) => p.subjectId),
+            ),
+          ];
       if (subjectIds.length === 0) {
-        toast.error(__("No purchasable units in the selection — variable parents, groups and externals can't be ordered."));
+        toast.error(
+          __(
+            "No purchasable units in the selection — variable parents, groups and externals can't be ordered.",
+          ),
+        );
         return;
       }
       setGeneratePoModal({ supplierId, subjectIds, explicit });
@@ -1707,7 +1906,11 @@ export function WorkbenchGrid(
       }
       if (action.id === 'export') {
         const scope = (): number[] => scopeIds;
-        const proLeaf = (id: string, label: string, format: 'json' | 'jsonl'): DropdownMenuItem => ({
+        const proLeaf = (
+          id: string,
+          label: string,
+          format: 'json' | 'jsonl',
+        ): DropdownMenuItem => ({
           id,
           label,
           disabled: !structuredAllowed,
@@ -1717,9 +1920,7 @@ export function WorkbenchGrid(
         items.push({
           id: 'export',
           label:
-            scopeIds.length > 0
-              ? __('Export to…')
-              : sprintf(__('Export all %d…'), loadedCount()),
+            scopeIds.length > 0 ? __('Export to…') : sprintf(__('Export all %d…'), loadedCount()),
           children: [
             {
               id: 'export-xlsx',
@@ -1747,7 +1948,9 @@ export function WorkbenchGrid(
     }
     return items;
   };
-  const bulkMenuItems = createMemo<DropdownMenuItem[]>(() => buildBulkMenuItems(selectedSubjectIds()));
+  const bulkMenuItems = createMemo<DropdownMenuItem[]>(() =>
+    buildBulkMenuItems(selectedSubjectIds()),
+  );
 
   // Convert the toolbar bulk-menu tree (DropdownMenuItem) to the context-menu shape (DataGridMenuItem),
   // recursively (tooltip → title). Lets the right-click "Bulk actions ▸" reuse the SAME nested tree
@@ -1762,24 +1965,36 @@ export function WorkbenchGrid(
   });
 
   // ── Filter bar descriptors (registry-driven, via the shared bridge) ──
+  // A filter the operator asked for from a column header ("Filter…"), consumed by the FilterBar and
+  // cleared once it has opened — so closing the editor and asking again from the same header works.
+  const [filterOpenRequest, setFilterOpenRequest] = createSignal<string | null>(null);
+
   const filterChips = createMemo<FilterDescriptor[]>(() =>
     gridFiltersToDescriptors(
       stableFilters(),
       () => query().filterValues,
-      (id, values) => setQuery((qq) => ({ ...qq, filterValues: { ...qq.filterValues, [id]: values } })),
+      (id, values) =>
+        setQuery((qq) => ({ ...qq, filterValues: { ...qq.filterValues, [id]: values } })),
       {
         summarize: summarizeSelected,
         optionsFor: (meta) => {
           if (!meta.id.startsWith('taxonomy_')) return meta.options;
           const tax = stableTaxonomySpace()?.[meta.id.slice('taxonomy_'.length)];
           if (!tax) return [];
-          return Object.values(tax.values).map((v) => ({ value: v.code, label: v.name, depth: v.depth }));
+          return orderTaxonomyValues(tax).map((v) => ({
+            value: v.code,
+            label: v.name,
+            depth: v.depth,
+          }));
         },
         modifiers: () => query().filterModifiers,
         setModifier: (id, key, value) =>
           setQuery((qq) => ({
             ...qq,
-            filterModifiers: { ...qq.filterModifiers, [id]: { ...qq.filterModifiers[id], [key]: value } },
+            filterModifiers: {
+              ...qq.filterModifiers,
+              [id]: { ...qq.filterModifiers[id], [key]: value },
+            },
           })),
         // A chip can carry match logic (any/all/none), a measurement scope (which slots a stock
         // level counts), or neither — never both today, but rendering both keeps the seam open.
@@ -1844,10 +2059,18 @@ export function WorkbenchGrid(
     setQuery((q) => ({ ...q, search: searchInput() }));
   }
 
+  // Fill from wherever the surface starts down to the viewport bottom, so the grid's own bottom (and
+  // its horizontal scrollbar) never falls off-screen; the measuring is `createViewportFill`'s. The
+  // breathing room under the grid is this element's own `pb-4`, not a subtraction: border-box puts
+  // that padding inside the height, so the gutter lives in the class list beside `pt-2` / `px-4`.
+  let rootRef: HTMLDivElement | undefined;
+  const surfaceHeight = createViewportFill(() => rootRef);
+
   return (
     <div
-      class="invflux-workbench flex flex-col bg-surface-raised text-text"
-      style={{'height':'calc(100vh - 46px)'}}
+      ref={rootRef}
+      class="invflux-workbench flex flex-col text-text bg-ground pt-2 px-4 pb-4 gap-4"
+      style={{ height: surfaceHeight() }}
     >
       {/* No title bar: the surface name lives on the active tab / WP menu, so a header that only
           repeated it was pure vertical cost. Its former controls now sit in their natural homes —
@@ -1904,141 +2127,94 @@ export function WorkbenchGrid(
           registers `WorkbenchSettingsPanel` via surfaceSettingsRegistry (see the registration above),
           so there's no in-view modal to render here. */}
 
-      {/* ── Search + related-rows bar ── */}
-      <form
-        ref={toolbarRef}
-        class="flex flex-wrap items-start gap-3 border-b border-border bg-surface px-5 py-3 shrink-0"
-        onSubmit={submitSearch}
-      >
-        <input
-          ref={searchRef}
-          data-fb-cycle
-          class="h-9 w-80 self-end rounded border border-border bg-surface px-3 text-sm shadow-sm"
-          type="search"
-          value={searchInput()}
-          aria-label={__('Filter on product name or SKU')}
-          placeholder={__('Filter on product name or SKU')}
-          onInput={(e) => setSearchInput(e.currentTarget.value)}
-          onKeyDown={(e) => {
-            // Esc returns focus to the grid (a second way back, alongside Shift+numpad-/).
-            if (e.key === 'Escape') {
-              e.preventDefault();
-              focusGrid();
-            }
-          }}
-        />
-        {/* Page size lives in the ⚙ Settings menu. Related rows: "Hide brought-in parents/children"
-            are CLIENT-side display filters over context rows (brought-with `matched===false` /
-            value-less for the sort); parents always load as the fold home. "Bring in variations" is
-            the one SERVER opt-in. A unit-only sort (price) auto-engages hide-parents. */}
-        <label
-          class="flex items-center gap-2 self-end pb-1.5 text-sm"
-          title={__('Also load the variations of a matched parent (downward brought-with pass)')}
-        >
+      {/* ── Search + related-rows bar ──
+          Two groups, not one wrapping row. The left group wraps internally, so the filter chips ride
+          the search row while there is room and drop to their own line when there is not; the right
+          group is `shrink-0` and stays put, which is the only way the readout keeps its corner
+          instead of being carried down by the first chip that overflows. */}
+      <form ref={toolbarRef} class="flex shrink-0 items-start gap-3" onSubmit={submitSearch}>
+        <div class="flex min-w-0 flex-1 flex-wrap items-end gap-3">
           <input
-            type="checkbox"
-            data-fb-related="bring-children"
+            ref={searchRef}
             data-fb-cycle
-            class="h-4 w-4 rounded border-border"
-            checked={query().bringChildren}
-            onChange={(e) =>
-              setQuery((q) => ({
-                ...q,
-                bringChildren: e.currentTarget.checked,
-                // Reset the dependent hide bit when turning the pass off, so it can't linger.
-                hideBroughtChildren: e.currentTarget.checked ? q.hideBroughtChildren : false,
-              }))
-            }
+            class="h-9 w-80 self-end rounded border border-border bg-surface px-3 text-sm shadow-sm"
+            type="search"
+            value={searchInput()}
+            aria-label={__('Filter on product name or SKU')}
+            placeholder={__('Filter on product name or SKU')}
+            onInput={(e) => setSearchInput(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              // Esc returns focus to the grid (a second way back, alongside Shift+numpad-/).
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                focusGrid();
+              }
+            }}
           />
-          {__('Bring in variations')}
-        </label>
-        {/* The two "Hide brought-in" display toggles stack vertically in one group. */}
-        <div class="flex flex-col gap-1 self-end pb-1.5">
-          <label
-            class="flex items-center gap-2 text-sm"
-            title={__('Hide variable parents shown only as context (brought-with / value-less for the sort)')}
-          >
-            <input
-              type="checkbox"
-              data-fb-related="parents"
-              data-fb-cycle
-              class="h-4 w-4 rounded border-border"
-              checked={query().hideBroughtParents}
-              onChange={(e) => setQuery((q) => ({ ...q, hideBroughtParents: e.currentTarget.checked }))}
+          {/* Related rows, as one control. The four flags decide what CONTEXT joins the result set —
+              the upward pass (parents, opt-OUT: they are the fold home) and the downward one
+              (variations, opt-in), each with a client-side "hide the ones that only came along".
+              Page size lives in the ⚙ Settings menu. A unit-only sort (price) still auto-engages
+              hide-parents independently of this control. */}
+          <div class="self-end">
+            <BringInControl
+              state={() => ({
+                bringParents: query().bringParents,
+                bringChildren: query().bringChildren,
+                hideBroughtParents: query().hideBroughtParents,
+                hideBroughtChildren: query().hideBroughtChildren,
+              })}
+              onChange={(patch) => setQuery((q) => ({ ...q, ...patch }))}
             />
-            {__('Hide brought-in parents')}
-          </label>
-          <Show when={query().bringChildren}>
-            <label
-              class="flex items-center gap-2 text-sm"
-              title={__('Hide the brought-in (context) variations, keeping the matched ones')}
-            >
-              <input
-                type="checkbox"
-                data-fb-related="children"
-                data-fb-cycle
-                class="h-4 w-4 rounded border-border"
-                checked={query().hideBroughtChildren}
-                onChange={(e) => setQuery((q) => ({ ...q, hideBroughtChildren: e.currentTarget.checked }))}
-              />
-              {__('Hide brought-in children')}
-            </label>
+          </div>
+          {/* Active filters. Wrapped so the bar sizes to its CONTENT here: its own root is `flex-1`
+              with a zero basis, which on a shared row claims no width of its own and stacks every
+              chip vertically into whatever is left over. Inside this wrapper it participates in the
+              row's wrapping normally, and drops to a full-width line once the chips outgrow it. */}
+          <div class="flex min-w-0">
+            <FilterBar
+              filters={filterChips}
+              cycleScope={() => toolbarRef}
+              onEditorClosed={() => focusGrid()}
+              onExit={() => focusGrid()}
+              requestOpenFilterId={filterOpenRequest}
+              onOpenRequestHandled={() => setFilterOpenRequest(null)}
+            />
+          </div>
+          {/* One-step "undo the hand-off": restore the filter a cross-surface deep-link overwrote. */}
+          <Show when={priorFilter()}>
+            <div class="inline-flex items-center gap-1 self-center rounded-full border border-amber-300 bg-amber-50 py-1 pl-2.5 pr-1 text-sm text-amber-800">
+              {/* Inherits the amber chip's colour rather than committing to a variant, so it stays
+                a raw button — it only ever owed the cursor rule. */}
+              <button
+                type="button"
+                class="inline-flex cursor-pointer items-center gap-1 hover:underline"
+                onClick={restorePriorFilter}
+                title={__('Restore the filter that was active before this product was opened here')}
+              >
+                <span aria-hidden="true">↶</span>
+                {__('Restore previous filter')}
+              </button>
+              <IconButton
+                size="xs"
+                label={__('Dismiss')}
+                class="ml-0.5 h-4 w-4 rounded-full text-amber-500 hover:bg-amber-200 hover:text-amber-800"
+                onClick={() => setPriorFilter(null)}
+              >
+                ×
+              </IconButton>
+            </div>
           </Show>
         </div>
-        {/* Filter bar (shared @invflux/ui component): "Add filter" + a chip per active filter. */}
-        <FilterBar
-          filters={filterChips}
-          cycleScope={() => toolbarRef}
-          onEditorClosed={() => focusGrid()}
-          onExit={() => focusGrid()}
-        />
-        {/* One-step "undo the hand-off": restore the filter a cross-surface deep-link overwrote. */}
-        <Show when={priorFilter()}>
-          <div class="inline-flex items-center gap-1 self-center rounded-full border border-amber-300 bg-amber-50 py-1 pl-2.5 pr-1 text-sm text-amber-800">
-            {/* Inherits the amber chip's colour rather than committing to a variant, so it stays
-                a raw button — it only ever owed the cursor rule. */}
-            <button
-              type="button"
-              class="inline-flex cursor-pointer items-center gap-1 hover:underline"
-              onClick={restorePriorFilter}
-              title={__('Restore the filter that was active before this product was opened here')}
-            >
-              <span aria-hidden="true">↶</span>
-              {__('Restore previous filter')}
-            </button>
-            <IconButton
-              size="xs"
-              label={__('Dismiss')}
-              class="ml-0.5 h-4 w-4 rounded-full text-amber-500 hover:bg-amber-200 hover:text-amber-800"
-              onClick={() => setPriorFilter(null)}
-            >
-              ×
-            </IconButton>
-          </div>
-        </Show>
-        {/* Refresh refetches the currently filtered view — its natural home is beside the filters.
-            `ml-auto` pushes it to the right edge of the (wrapping) filter row. Icon-only; while a
-            (re-)query is in flight it takes a grey background and the icon spins. */}
-        <Button
-          variant="secondary"
-          class="ml-auto h-9 self-end"
-          classList={{ 'bg-muted': isRefreshing() }}
-          disabled={isRefreshing()}
-          aria-label={__('Refresh')}
-          title={__('Refresh')}
-          onClick={() => refreshGrid()}
-        >
-          <RefreshIcon class={`h-4 w-4${isRefreshing() ? ' animate-spin' : ''}`} />
-        </Button>
-      </form>
 
-      {/* ── Table area ── */}
-      <div class="flex flex-col min-h-0 flex-1 px-5 py-4">
-        {/* Bulk action toolbar */}
-        <div class="mb-3 flex items-center gap-3 rounded border border-border bg-amber-50 px-4 py-2 text-sm shrink-0">
+        {/* Result-set readout + Refresh — pinned to the top-right, out of the wrapping group above,
+            so a wrapping filter row never carries them down with it. The readout describes what the
+            QUERY returned, not what the grid contains, which is why it sits on this bar at all. */}
+        <div class="flex shrink-0 items-end gap-3">
           <div class="flex flex-col leading-tight">
             <span
               class="font-medium tabular-nums"
+              data-testid="workbench-row-count"
               title={sprintf(
                 __('Selected: %d, Loaded: %d, Total: %d'),
                 selectedSubjectIds().length,
@@ -2048,204 +2224,294 @@ export function WorkbenchGrid(
             >
               {selectedSubjectIds().length}/{loadedCount()}/{totalCount()}
             </span>
-            <Show when={loadedCount() < totalCount()}>
-              <Button
-                variant="link"
-                size="sm"
-                class="text-left"
-                disabled={loadingAllPages()}
-                onClick={() => void loadAll()}
-              >
-                {loadingAllPages() ? __('Loading…') : __('Load all pages')}
-              </Button>
+            {/* While a multi-chunk save is sending, the readout shows its progress in place of the
+                Load-all link — text over a bar, matching the dispatch queue's packing progress. The
+                bar is aria-hidden: the save-status strip under the grid already announces progress
+                (role=status), so a screen reader must not hear it twice. */}
+            <Show
+              when={savingBar()}
+              fallback={
+                <Show when={loadedCount() < totalCount()}>
+                  <Button
+                    variant="link"
+                    size="sm"
+                    class="text-left"
+                    disabled={loadingAllPages()}
+                    onClick={() => void loadAll()}
+                  >
+                    {loadingAllPages() ? __('Loading…') : __('Load all pages')}
+                  </Button>
+                </Show>
+              }
+            >
+              {(bar) => (
+                <div class="flex flex-col gap-1" aria-hidden="true">
+                  <span class="tabular-nums text-text-muted">
+                    {sprintf(
+                      /* translators: 1: rows saved so far, 2: total rows in the save */
+                      _x('Saving… %1$d/%2$d', 'workbench readout: multi-chunk save progress'),
+                      bar().done,
+                      bar().total,
+                    )}
+                  </span>
+                  <span class="block h-1 w-full overflow-hidden rounded-full bg-border">
+                    <span
+                      class="block h-full rounded-full bg-primary transition-[width] duration-200"
+                      style={{
+                        width: `${bar().total > 0 ? Math.round((bar().done / bar().total) * 100) : 0}%`,
+                      }}
+                    />
+                  </span>
+                </div>
+              )}
             </Show>
           </div>
-          {/* Bulk-action menu (shared @invflux/ui DropdownMenu). Enabled whenever any action applies
-              (some — e.g. Export — act on the whole filtered view with no selection). */}
-          <DropdownMenu
-            ariaLabel={__('Bulk actions')}
-            disabled={availableBulkActions().length === 0}
-            items={bulkMenuItems()}
-            triggerClass="inline-flex h-8 items-center gap-1 rounded border border-border bg-white px-3 text-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500"
-            trigger={
-              <>
-                {sprintf(
-                  __('Bulk actions (%d products)…'),
-                  selectedSubjectIds().length > 0 ? selectedSubjectIds().length : loadedCount(),
-                )}
-                <span aria-hidden="true" class="text-text-muted">
-                  ▾
-                </span>
-              </>
-            }
-          />
-          {/* Worksheets is a selection/curation operation → grouped with the bulk-action menu. */}
+          {/* Refresh refetches the currently filtered view — its natural home is beside the filters.
+              Icon-only; while a (re-)query is in flight it takes a grey background and the icon
+              spins. */}
           <Button
             variant="secondary"
-            class="h-8"
-            onClick={() => setWorksheetsModal({ subjectIds: [], mode: 'manage' })}
+            class="h-9"
+            classList={{ 'bg-muted': isRefreshing() }}
+            disabled={isRefreshing()}
+            aria-label={__('Refresh')}
+            title={__('Refresh')}
+            onClick={() => refreshGrid()}
           >
-            {__('Worksheets')}
+            <RefreshIcon class={`h-4 w-4${isRefreshing() ? ' animate-spin' : ''}`} />
           </Button>
-          {/* Right cluster — plug-in toolbar slot, then the grid's own table controls (layout toggle,
+        </div>
+      </form>
+
+      {/* ── Action bar ──
+          Operate on, and configure, what the filter row selected: selection actions on the left,
+          view controls and Save on the right.
+
+          A SIBLING of the grid, not its container. The two shared a wrapper that contributed
+          nothing but its padding — its flex classes were already duplicated by the grid's own
+          wrapper below — so the nesting asserted a grouping that does not exist: a bar spanning
+          selection, view config and pending edits is not "part of the table". */}
+      <div class="flex shrink-0 items-center gap-3 text-sm">
+        {/* Bulk-action menu (shared @invflux/ui DropdownMenu). Enabled whenever any action applies
+              (some — e.g. Export — act on the whole filtered view with no selection). */}
+        <DropdownMenu
+          ariaLabel={__('Bulk actions')}
+          disabled={availableBulkActions().length === 0}
+          items={bulkMenuItems()}
+          triggerClass="inline-flex h-8 items-center gap-1 rounded border border-border bg-surface px-3 text-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500"
+          trigger={
+            <>
+              {sprintf(
+                __('Bulk actions (%d products)…'),
+                selectedSubjectIds().length > 0 ? selectedSubjectIds().length : loadedCount(),
+              )}
+              <span aria-hidden="true" class="text-text-muted">
+                ▾
+              </span>
+            </>
+          }
+        />
+        {/* Worksheets is a selection/curation operation → grouped with the bulk-action menu. */}
+        <Button
+          variant="secondary"
+          class="h-8"
+          onClick={() => setWorksheetsModal({ subjectIds: [], mode: 'manage' })}
+        >
+          {__('Worksheets')}
+        </Button>
+        {/* Right cluster — plug-in toolbar slot, then the grid's own table controls (layout toggle,
               Columns, Save). Record-view toggle + Save were already moved off the grid's (hidden)
               toolbar onto this bar; Columns joins them here (its natural neighbour is Save). */}
-          <div class="flex-1" />
-          {/* Plug-in toolbar slot (arch-ui-principles §3.4): the shell renders registered
+        <div class="flex-1" />
+        {/* Plug-in toolbar slot (arch-ui-principles §3.4): the shell renders registered
               contributions, ordered by `order` and gated by their `enabled` predicate. */}
-          <For each={slotRegistry.get<WorkbenchToolbarSlotProps>('workbench.toolbar')}>
-            {(slot) => (
-              <Show when={slot.enabled?.() ?? true}>
-                <Dynamic component={slot.component} selectedSubjectIds={selectedSubjectIds()} />
-              </Show>
-            )}
-          </For>
-          <Show when={layoutInfo().canToggle}>
-            <Button
-              variant="secondary"
-              class="h-8 px-2!"
-              aria-label={layoutInfo().layout === 'record' ? __('Switch to table view') : __('Switch to record view')}
-              title={layoutInfo().layout === 'record' ? __('Switch to table view') : __('Switch to record view')}
-              onClick={() => toggleLayout()}
-            >
-              {layoutInfo().layout === 'record'
-                ? <TableViewIcon class="h-5 w-5" />
-                : <RecordViewIcon class="h-5 w-5" />}
-            </Button>
-          </Show>
+        <For each={slotRegistry.get<WorkbenchToolbarSlotProps>('workbench.toolbar')}>
+          {(slot) => (
+            <Show when={slot.enabled?.() ?? true}>
+              <Dynamic component={slot.component} selectedSubjectIds={selectedSubjectIds()} />
+            </Show>
+          )}
+        </For>
+        <Show when={layoutInfo().canToggle}>
           <Button
             variant="secondary"
             class="h-8 px-2!"
-            aria-label={`${__('Columns')} (Ctrl+M)`}
-            title={`${__('Columns')} (Ctrl+M)`}
-            onClick={() => openColumnManager()}
+            aria-label={
+              layoutInfo().layout === 'record'
+                ? __('Switch to table view')
+                : __('Switch to record view')
+            }
+            title={
+              layoutInfo().layout === 'record'
+                ? __('Switch to table view')
+                : __('Switch to record view')
+            }
+            onClick={() => toggleLayout()}
           >
-            <ColumnsSettingsIcon class="h-5 w-5" />
+            {layoutInfo().layout === 'record' ? (
+              <TableViewIcon class="h-5 w-5" />
+            ) : (
+              <RecordViewIcon class="h-5 w-5" />
+            )}
           </Button>
-          <Button
-            class="h-8"
-            disabled={!gridDirty()}
-            onClick={() => openSaveReview()}
-          >
-            {__('Save')}
-          </Button>
-        </div>
+        </Show>
+        <Button class="h-8" disabled={!gridDirty()} onClick={() => openSaveReview()}>
+          {__('Save')}
+        </Button>
+        <Button
+          variant="secondary"
+          class="h-8 px-2!"
+          aria-label={`${__('Columns')} (Ctrl+M)`}
+          title={`${__('Columns')} (Ctrl+M)`}
+          onClick={() => openColumnManager()}
+        >
+          <ColumnsSettingsIcon class="h-5 w-5" />
+        </Button>
+      </div>
 
-        {/* ── The reusable WorkbenchGrid: owns fetch / dirty model / save + correction review /
+      {/* ── The reusable WorkbenchGrid: owns fetch / dirty model / save + correction review /
             cascade / live stock updates / column-state persistence / cell+row selection / drilldown /
             bespoke columns / bulk-edit. The shell feeds query + sort + display-transform in and reads
             metadata / selection / conflicts + imperative handles back out. ── */}
-        <div class="flex min-h-0 flex-1 flex-col">
-          <WorkbenchGridBase
-            ctx={ctx}
-            storageKeyPrefix="central-workbench"
-            loadSize={query().loadSize}
-            showRowSelection={true}
-            showToolbar={false}
-            defaultLayout="grid"
-            onDirtyChange={(d) => {
-              setGridDirty(d);
-              // Surface dirty state to an embedder (the unified app's nav guard + tab signal).
-              props.onDirtyChange?.(d);
-            }}
-            onLayoutChange={setLayoutInfo}
-            queryParams={buildQueryParams}
-            sort={() => ({ sortBy: query().sortBy, sortDir: query().sortDir })}
-            onSortChange={(s) => setQuery((q) => ({ ...q, sortBy: s.sortBy, sortDir: s.sortDir }))}
-            transformRows={transformRows}
-            fold={{
-              // A variable parent with loaded variations gets a ▸/▾ caret; the shell owns the state.
-              state: (row) => {
-                if (row.wcVariationId !== null) return 'none';
-                if ((childrenByProductId().get(row.wcProductId)?.length ?? 0) === 0) return 'none';
-                return collapsedProductIds().has(row.wcProductId) ? 'collapsed' : 'expanded';
-              },
-              toggle: (row) => applyFold([row.wcProductId]),
-            }}
-            componentChoiceId={componentChoiceId}
-            rowAttrs={(row) =>
-              row.matched === false
-                ? {
-                    class: 'opacity-50',
-                    title: __('Shown for context (not a match for the current filters)'),
-                    // The class is a styling choice and the title is translated; this is the
-                    // stable handle on "this row is context, not a result".
-                    data: { 'context-row': '' },
-                  }
-                : {}
-            }
-            copyAsJsonAllowed={() => ctx.entitlements?.exportStructured ?? false}
-            copyAsJsonUpgradeHint={__('Upgrade to InvFlux Pro')}
-            contextMenuExtras={({ row }) => {
-              // Bulk actions on the rows under the cell selection (fall back to the right-clicked row).
-              const cells = getSelectedCells();
-              const subjectIds = cells.length > 0 ? [...new Set(cells.map((c) => c.row.subjectId))] : [row.subjectId];
-              const children = buildBulkMenuItems(subjectIds).map(toMenuItem);
-              if (children.length === 0) return [];
-              return [
-                {
-                  id: 'bulk-actions',
-                  label: sprintf(
-                    _n('Bulk action on %d row…', 'Bulk action on %d rows…', subjectIds.length),
-                    subjectIds.length,
-                  ),
-                  children,
-                },
-              ];
-            }}
-            onMeta={(m) => {
-              setStableFilters(m.filters);
-              setStableColumns(m.columns);
-              setStableTaxonomySpace(m.taxonomySpace);
-              setTotalCount(m.total);
-              setLoadedCount(m.loaded);
-            }}
-            onSelectionChange={(ids) => setSelectedSubjectIds(ids)}
-            onFetchingChange={(fetching) => setIsRefreshing(fetching)}
-            onApplied={() => clearConflictToast()}
-            onConflicts={(conflicts) => handleConflicts(conflicts)}
-            apiRef={(h: WorkbenchHandles) => {
-              focusGrid = h.focus;
-              openColumnManager = h.openColumnManager;
-              scrollGridToTop = h.scrollToTop;
-              refreshGrid = h.refreshLiveUpdates;
-              getSelectedCells = h.getSelectedCells;
-              loadAllPagesHandle = h.loadAllPages;
-              selectSubjectRows = h.selectSubjectRows;
-              toggleLayout = h.toggleLayout;
-              openSaveReview = h.openSaveReview;
-            }}
-            extraInGridKeyHandlers={[
-              // `*` — expand/collapse the variable products in the selection (Windows-TreeView convention).
-              (event) => {
-                if (event.key === '*') {
-                  event.preventDefault();
-                  toggleFoldSelection();
-                  return true;
+      <div class="flex min-h-0 flex-1 flex-col">
+        <WorkbenchGridBase
+          ctx={ctx}
+          storageKeyPrefix="central-workbench"
+          loadSize={query().loadSize}
+          showRowSelection={true}
+          showToolbar={false}
+          // The result-set count lives in this view's readout beside Refresh (selected/loaded/total),
+          // so the grid's own loaded/total footer would just repeat it and cost a row of height.
+          showFooterCount={false}
+          defaultLayout="grid"
+          onDirtyChange={(d) => {
+            setGridDirty(d);
+            // Surface dirty state to an embedder (the unified app's nav guard + tab signal).
+            props.onDirtyChange?.(d);
+          }}
+          onLayoutChange={setLayoutInfo}
+          queryParams={buildQueryParams}
+          sort={() => ({ sortBy: query().sortBy, sortDir: query().sortDir })}
+          onSortChange={(s) => setQuery((q) => ({ ...q, sortBy: s.sortBy, sortDir: s.sortDir }))}
+          transformRows={transformRows}
+          fold={{
+            // A variable parent with loaded variations gets a ▸/▾ caret; the shell owns the state.
+            state: (row) => {
+              if (row.wcVariationId !== null) return 'none';
+              if ((childrenByProductId().get(row.wcProductId)?.length ?? 0) === 0) return 'none';
+              return collapsedProductIds().has(row.wcProductId) ? 'collapsed' : 'expanded';
+            },
+            toggle: (row) => applyFold([row.wcProductId]),
+          }}
+          componentChoiceId={componentChoiceId}
+          rowAttrs={(row) =>
+            row.matched === false
+              ? {
+                  class: 'opacity-50',
+                  title: __('Shown for context (not a match for the current filters)'),
+                  // The class is a styling choice and the title is translated; this is the
+                  // stable handle on "this row is context, not a result".
+                  data: { 'context-row': '' },
                 }
-                return false;
+              : {}
+          }
+          copyAsJsonAllowed={() => ctx.entitlements?.exportStructured ?? false}
+          copyAsJsonUpgradeHint={__('Upgrade to InvFlux Pro')}
+          headerMenuExtras={({ meta }) => {
+            // "Filter…" on a column whose server metadata names a filter this install actually
+            // registers. The pairing is a hint, not a promise — a global attribute always has a
+            // column but only has a filter once the merchant enables its taxonomy — so an
+            // unmatched id yields no item rather than one that opens nothing.
+            const id = meta?.filterId;
+            if (id === undefined || id === null) return [];
+            const filter = stableFilters().find((f) => f.id === id);
+            if (!filter) return [];
+            return [
+              {
+                id: 'filter-column',
+                // Named after the filter, not the column: several columns share one filter, and
+                // "Filter by Stock level" on the Committed column says which of them opens.
+                label: sprintf(
+                  /* translators: %s: the filter's name, e.g. "Price" or "Stock level" */
+                  __('Filter by %s…'),
+                  filter.label,
+                ),
+                run: () => setFilterOpenRequest(id),
               },
-            ]}
-            extraKeyHandlers={[
-              (event) => {
-                // "/" (no Shift) focuses the search box (GitHub-style), unless already typing.
-                if (event.key === '/' && !event.shiftKey && !isTypingInField()) {
-                  event.preventDefault();
-                  searchRef?.focus();
-                  searchRef?.select();
-                  return true;
-                }
-                // Shift+"/" returns focus to the grid (the numpad pairing).
-                if (event.shiftKey && event.key === '/') {
-                  event.preventDefault();
-                  focusGrid();
-                  return true;
-                }
-                return false;
+            ];
+          }}
+          contextMenuExtras={({ row }) => {
+            // Bulk actions on the rows under the cell selection (fall back to the right-clicked row).
+            const cells = getSelectedCells();
+            const subjectIds =
+              cells.length > 0 ? [...new Set(cells.map((c) => c.row.subjectId))] : [row.subjectId];
+            const children = buildBulkMenuItems(subjectIds).map(toMenuItem);
+            if (children.length === 0) return [];
+            return [
+              {
+                id: 'bulk-actions',
+                label: sprintf(
+                  _n('Bulk action on %d row…', 'Bulk action on %d rows…', subjectIds.length),
+                  subjectIds.length,
+                ),
+                children,
               },
-            ]}
-          />
-        </div>
+            ];
+          }}
+          onMeta={(m) => {
+            setStableFilters(m.filters);
+            setStableColumns(m.columns);
+            setStableTaxonomySpace(m.taxonomySpace);
+            setTotalCount(m.total);
+            setLoadedCount(m.loaded);
+          }}
+          onSelectionChange={(ids) => setSelectedSubjectIds(ids)}
+          onFetchingChange={(fetching) => setIsRefreshing(fetching)}
+          onSaveProgressChange={(p) => setSaveProgress(p)}
+          onApplied={() => clearConflictToast()}
+          onConflicts={(conflicts) => handleConflicts(conflicts)}
+          apiRef={(h: WorkbenchHandles) => {
+            focusGrid = h.focus;
+            openColumnManager = h.openColumnManager;
+            scrollGridToTop = h.scrollToTop;
+            refreshGrid = h.refreshLiveUpdates;
+            getSelectedCells = h.getSelectedCells;
+            loadAllPagesHandle = h.loadAllPages;
+            selectCells = h.selectCells;
+            getActiveCell = h.getActiveCell;
+            toggleLayout = h.toggleLayout;
+            openSaveReview = h.openSaveReview;
+          }}
+          extraInGridKeyHandlers={[
+            // `*` — expand/collapse the variable products in the selection (Windows-TreeView convention).
+            (event) => {
+              if (event.key === '*') {
+                event.preventDefault();
+                toggleFoldSelection();
+                return true;
+              }
+              return false;
+            },
+          ]}
+          extraKeyHandlers={[
+            (event) => {
+              // "/" (no Shift) focuses the search box (GitHub-style), unless already typing.
+              if (event.key === '/' && !event.shiftKey && !isTypingInField()) {
+                event.preventDefault();
+                searchRef?.focus();
+                searchRef?.select();
+                return true;
+              }
+              // Shift+"/" returns focus to the grid (the numpad pairing).
+              if (event.shiftKey && event.key === '/') {
+                event.preventDefault();
+                focusGrid();
+                return true;
+              }
+              return false;
+            },
+          ]}
+        />
       </div>
       {/* Transient-notification host for the SPA shell (arch-ui-principles §3). One per shell;
           inside the workbench root so it shares the shadow root's Tailwind + scoping. */}

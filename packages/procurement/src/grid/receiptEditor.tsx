@@ -110,5 +110,7 @@ export function registerReceiptEditor(): void {
     return;
   }
   registered = true;
-  editRegistry.register('number:receipt', 'invflux.receipt-input', ReceiptEditor, { default: true });
+  editRegistry.register('number:receipt', 'invflux.receipt-input', ReceiptEditor, {
+    default: true,
+  });
 }

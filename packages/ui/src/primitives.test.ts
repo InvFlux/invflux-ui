@@ -17,7 +17,14 @@ import {
 } from './primitives';
 
 const BUTTON_VARIANTS: ButtonVariant[] = [
-  'primary', 'secondary', 'danger', 'warning', 'success', 'ghost', 'quiet', 'link',
+  'primary',
+  'secondary',
+  'danger',
+  'warning',
+  'success',
+  'ghost',
+  'quiet',
+  'link',
 ];
 /** The two that sit inline in text rather than being a box. */
 const INLINE_VARIANTS: ButtonVariant[] = ['link', 'quiet'];
@@ -44,6 +51,37 @@ describe('cx', () => {
 describe('buttonClass', () => {
   it('defaults to primary/md', () => {
     expect(buttonClass()).toBe(buttonClass('primary', 'md'));
+  });
+
+  // Two `hover:bg-*` on one element are equal specificity, so the winner is decided by stylesheet
+  // order — meaning a caller's semantic hover may silently lose, and lose only in one theme or one
+  // build. Nothing about the rendered markup shows it, which is why this is asserted rather than
+  // eyeballed: the failure looks like "the colour I asked for didn't apply, sometimes".
+  it('drops its own hover fill when the caller names one, and keeps it otherwise', () => {
+    for (const variant of BUTTON_VARIANTS) {
+      const own = buttonClass(variant, 'sm');
+      const overridden = buttonClass(variant, 'sm', 'hover:bg-lime-50');
+      expect(overridden, variant).toContain('hover:bg-lime-50');
+      expect(
+        (overridden.match(/(?:^|\s)(?:[\w[\]().-]+:)*hover:bg-\S+/g) ?? []).length,
+        `${variant} emits exactly one hover fill`,
+      ).toBe(1);
+      // The rest of the variant survives — this suppresses one utility, not the tone.
+      if (own.includes('border')) expect(overridden, variant).toContain('border');
+    }
+    expect(buttonClass('secondary', 'sm')).toContain('hover:bg-surface-raised');
+  });
+
+  // The same defect already shipped here: the base hover and `danger`'s hover were both emitted.
+  it('icon buttons emit one hover fill, danger included', () => {
+    for (const cls of [
+      iconButtonClass(),
+      iconButtonClass('sm', true),
+      iconButtonClass('sm', false, 'hover:bg-lime-50'),
+    ]) {
+      expect((cls.match(/(?:^|\s)(?:[\w[\]().-]+:)*hover:bg-\S+/g) ?? []).length).toBe(1);
+    }
+    expect(iconButtonClass('sm', true)).toContain('hover:text-red-600');
   });
 
   // The bug that motivated the whole suite: hand-rolled buttons kept shipping without a pointer
@@ -122,7 +160,10 @@ describe('buttonClass', () => {
     for (const radius of ['rounded-none', 'rounded-l', 'rounded-r', 'rounded-full', 'rounded-md']) {
       const cls = buttonClass('primary', 'md', radius);
       expect(cls, radius).toContain(radius);
-      expect(cls.split(' ').filter((c) => c === 'rounded'), radius).toHaveLength(0);
+      expect(
+        cls.split(' ').filter((c) => c === 'rounded'),
+        radius,
+      ).toHaveLength(0);
     }
     // …and still supplies one when the caller doesn't.
     expect(buttonClass('primary', 'md').split(' ')).toContain('rounded');
@@ -158,9 +199,37 @@ describe('iconButtonClass radius', () => {
     for (const radius of ['rounded-full', 'rounded-md']) {
       const cls = iconButtonClass('sm', false, radius);
       expect(cls, radius).toContain(radius);
-      expect(cls.split(' ').filter((c) => c === 'rounded'), radius).toHaveLength(0);
+      expect(
+        cls.split(' ').filter((c) => c === 'rounded'),
+        radius,
+      ).toHaveLength(0);
     }
     expect(iconButtonClass('sm').split(' ')).toContain('rounded');
+  });
+});
+
+describe('iconButtonClass ink', () => {
+  // The radius trap again, one property over. Pill's dismiss `×` passes `text-current` so it takes
+  // the chip's own foreground — a chip's background is a runtime colour and a fixed grey vanishes
+  // on half of them. Measured on a live page before this: `#a0a5ae` on a `#ec185b` tag, 1.08:1.
+  it('withholds its own ink when the caller names one', () => {
+    for (const ink of ['text-current', 'text-rose-500', 'text-[#abcdef]', 'hover:text-current']) {
+      const cls = iconButtonClass('xs', false, ink);
+      expect(cls.split(' '), ink).not.toContain('text-text-muted');
+      expect(cls.split(' '), ink).not.toContain('hover:text-text');
+      expect(cls, ink).toContain(ink);
+    }
+  });
+
+  // The discriminator is "is this `text-*` a colour", and the utilities that are NOT are the closed
+  // set. A caller passing a size or an alignment must still get the default ink, or every icon
+  // button that sets its own font size silently loses its colour.
+  it('keeps its ink when the caller names only a size or a layout', () => {
+    for (const other of ['text-xs', 'text-2xs', 'text-[11px]', 'text-center', 'text-nowrap', '']) {
+      const cls = iconButtonClass('xs', false, other);
+      expect(cls.split(' '), other || '(none)').toContain('text-text-muted');
+      expect(cls.split(' '), other || '(none)').toContain('hover:text-text');
+    }
   });
 });
 
@@ -174,8 +243,17 @@ describe('menuItemClass', () => {
   // Hover and keyboard highlight must land on the same look, or arrow-key navigation and the
   // mouse disagree about which row is "current".
   it('gives the active row the same surface as hover', () => {
-    expect(menuItemClass(true)).toContain('bg-surface-raised');
-    expect(menuItemClass(true)).toContain('hover:bg-surface-raised');
+    expect(menuItemClass(true)).toContain('bg-surface-hover');
+    expect(menuItemClass(true)).toContain('hover:bg-surface-hover');
+  });
+
+  // A menu row is a REGION, so it takes the hover tone; a Button or IconButton sitting inside one
+  // is a CONTROL and must keep `surface-raised`, or hovering the control repaints it to exactly the
+  // shade the row underneath already took and the control vanishes into it.
+  it('takes the region hover tone, not the control one', () => {
+    expect(menuItemClass()).not.toContain('hover:bg-surface-raised');
+    expect(buttonClass('ghost')).toContain('hover:bg-surface-raised');
+    expect(iconButtonClass()).toContain('hover:bg-surface-raised');
   });
 
   it('stays on palette tokens rather than the raw greys each surface had drifted to', () => {
@@ -236,8 +314,9 @@ describe('field classes', () => {
   it('emits exactly one background utility per state', () => {
     for (const build of [inputClass, selectClass, textareaClass]) {
       for (const invalid of [true, false]) {
-        const backgrounds = (build('sm', invalid).match(/(?:^|\s)bg-\S+/g) ?? [])
-          .filter((c) => !c.includes(':')); // variant fills (disabled:…) are a different state
+        const backgrounds = (build('sm', invalid).match(/(?:^|\s)bg-\S+/g) ?? []).filter(
+          (c) => !c.includes(':'),
+        ); // variant fills (disabled:…) are a different state
         expect(backgrounds).toHaveLength(1);
       }
     }
@@ -300,7 +379,9 @@ describe('pillClass', () => {
   });
 
   it('appends caller classes last', () => {
-    expect(pillClass('info', 'soft', 'sm', 'rounded', 'tabular-nums').endsWith('tabular-nums')).toBe(true);
+    expect(
+      pillClass('info', 'soft', 'sm', 'rounded', 'tabular-nums').endsWith('tabular-nums'),
+    ).toBe(true);
   });
 });
 

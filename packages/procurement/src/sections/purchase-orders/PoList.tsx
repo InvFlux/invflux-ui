@@ -1,6 +1,8 @@
-import { __, _n, _x, sprintf } from '@invflux/i18n';
+import { __, _n, _x, formatDate, parseDateOnly, sprintf } from '@invflux/i18n';
 import {
+  ErrorBanner,
   Button,
+  createViewportFill,
   FilterBar,
   FilterModeToggle,
   SegmentedControl,
@@ -8,36 +10,97 @@ import {
   type ComboboxOption,
   type FilterDescriptor,
 } from '@invflux/ui';
-import { useLocation, useNavigate, useSearchParams } from '@solidjs/router';
+import { A, useLocation, useNavigate, useSearchParams } from '@solidjs/router';
 import { createQuery } from '@tanstack/solid-query';
-import { createColumnHelper, createSolidTable, flexRender, getCoreRowModel } from '@tanstack/solid-table';
+import {
+  createColumnHelper,
+  createSolidTable,
+  flexRender,
+  getCoreRowModel,
+} from '@tanstack/solid-table';
 import { createMemo, createSignal, For, type JSX, Show } from 'solid-js';
 import { StatusPill } from '../../components/StatusPill';
 import { useProcurement } from '../../context';
 import { createApi } from '../../lib/api';
-import { daysUntilDate, parseDateOnly } from '../../lib/dates';
+import { daysUntilDate } from '../../lib/dates';
 import type { ProductSearchResponse } from '../suppliers/types';
 import type { PurchaseOrder, PurchaseOrdersResponse } from './types';
 
 const columnHelper = createColumnHelper<PurchaseOrder>();
 
-/** Status segments → the stages each one covers. Archived (terminal soft-delete) is hidden from all. */
-type StatusGroup = 'draft' | 'open' | 'closed';
-const GROUP_STAGES: Record<StatusGroup, string[]> = {
-  draft: ['in_prep'],
-  open: ['submitted', 'in_transit', 'in_reception'],
+/**
+ * The list's segments.
+ *
+ * **Two questions, not one.** `draft` / `open` / `closed` answer *how is this order going* — the
+ * stage. `archived` answers *is it in the working lists* — a separate column, because filing an
+ * order away says nothing about how it turned out. An archived order still knows it was received,
+ * and shows its real stage pill inside the Archived tab.
+ *
+ * **Every order is in exactly one segment**, which is a requirement rather than tidiness: the
+ * segment filters the fetched rows, so an order matching none is fetched, dropped, and reachable
+ * from nowhere. Archived takes precedence over the three stage buckets, so filing an order away
+ * moves it rather than duplicating it.
+ */
+type StatusGroup = 'draft' | 'open' | 'closed' | 'archived';
+
+/** The two *bounded* ends of the stage axis. Everything between them is open — see {@link inGroup}. */
+const GROUP_STAGES: Record<'draft' | 'closed', string[]> = {
+  draft: ['in_prep', 'in_review', 'approved'],
   closed: ['received', 'cancelled'],
 };
-const isStatusGroup = (v: string | undefined): v is StatusGroup => 'draft' === v || 'open' === v || 'closed' === v;
 
-/** Stages where goods are still expected — drives the ETA countdown + late highlight. */
-const AWAITING = ['in_prep', 'submitted', 'in_transit', 'in_reception'];
+/**
+ * Whether an order belongs in a segment.
+ *
+ * **Open is derived, not listed, and that is what makes the stage buckets exhaustive.** Enumerating
+ * all three left `partially_received` in none of them, which did not read as a filter gap: an
+ * unlisted stage is fetched, dropped, and reachable from nowhere at all. Deriving the middle removes
+ * the failure rather than correcting one instance of it — a stage added later surfaces under Open,
+ * which is the safe direction and almost always the right one, since new stages describe orders in
+ * flight.
+ *
+ * It is also the truer definition. Open is not a list of stages that happen to be inbound; it is
+ * *not yet sent* and *finished* having been decided, and everything else being in between.
+ */
+const inGroup = (po: PurchaseOrder, group: StatusGroup): boolean => {
+  if (po.archived) return 'archived' === group;
+  if ('archived' === group) return false;
+  if ('open' === group) {
+    return !GROUP_STAGES.draft.includes(po.stage) && !GROUP_STAGES.closed.includes(po.stage);
+  }
+
+  return GROUP_STAGES[group].includes(po.stage);
+};
+
+const isStatusGroup = (v: string | undefined): v is StatusGroup =>
+  'draft' === v || 'open' === v || 'closed' === v || 'archived' === v;
+
+/**
+ * Stages where goods are still expected — drives the ETA countdown + late highlight.
+ *
+ * Wider than `open` at the front (a draft can carry an ETA worth counting down) and the same at the
+ * back: an order that is partly received is still owed its remainder, so its date keeps running.
+ */
+const AWAITING = [
+  'in_prep',
+  'in_review',
+  'approved',
+  'submitted',
+  'acknowledged',
+  'in_transit',
+  'in_reception',
+  'partially_received',
+];
 
 /** ETA cell: locale-aware, zero-padded fixed-width date + days-to-arrival; red + countdown while overdue. */
 function EtaCell(props: { iso: string | null; stage: string }): JSX.Element {
   const date = parseDateOnly(props.iso);
   if (null === date) return <span class="text-text-muted">—</span>;
-  const dateStr = date.toLocaleDateString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit' });
+  const dateStr = formatDate(date, '', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
   const awaiting = AWAITING.includes(props.stage);
   const days = daysUntilDate(props.iso) ?? 0;
   const late = awaiting && days < 0;
@@ -81,7 +144,8 @@ const columns = [
     // "needs a look" flag; the per-line detail lives on the PO. Discrepancy-free POs show a dash.
     cell: (info) => {
       const d = info.getValue();
-      if (null === d || (0 === d.over && 0 === d.short)) return <span class="text-slate-300">—</span>;
+      if (null === d || (0 === d.over && 0 === d.short))
+        return <span class="text-slate-300">—</span>;
       return (
         <span class="inline-flex gap-1">
           <Show when={d.over > 0}>
@@ -150,7 +214,8 @@ export function PoList(props: { supplierId?: number }): JSX.Element {
   });
   const setFilterValue = (id: string, next: string[]): void => {
     if ('supplier' === id) setParams({ supplier: next.length > 0 ? next.join(',') : undefined });
-    else if ('eta' === id) setParams({ eta_from: next[0] || undefined, eta_to: next[1] || undefined });
+    else if ('eta' === id)
+      setParams({ eta_from: next[0] || undefined, eta_to: next[1] || undefined });
     else if ('sku' === id) setParams({ sku: next.length > 0 ? next.join(',') : undefined });
   };
   // Per-filter match-mode modifiers (supplier any/none, SKU any/all/none) ⇄ `?<id>_mode=`.
@@ -208,7 +273,10 @@ export function PoList(props: { supplierId?: number }): JSX.Element {
       for (const [id, mods] of Object.entries(filterModifiers())) {
         for (const [k, v] of Object.entries(mods)) q[`fmod[${id}][${k}]`] = v;
       }
-      return api.get<PurchaseOrdersResponse>('/procurement/purchase-orders', 0 === Object.keys(q).length ? undefined : q);
+      return api.get<PurchaseOrdersResponse>(
+        '/procurement/purchase-orders',
+        0 === Object.keys(q).length ? undefined : q,
+      );
     },
   }));
 
@@ -219,9 +287,12 @@ export function PoList(props: { supplierId?: number }): JSX.Element {
       const [from, to] = [values[0] ?? '', values[1] ?? ''];
       return from && to ? `${from} – ${to}` : from ? `from ${from}` : `until ${to}`;
     }
-    if ('sku' === meta.id) return 1 === values.length ? labelFor(values[0]) : sprintf(__('%d SKUs'), values.length);
+    if ('sku' === meta.id)
+      return 1 === values.length ? labelFor(values[0]) : sprintf(__('%d SKUs'), values.length);
     const labelOf = (v: string): string => options.find((o) => o.value === v)?.label ?? v;
-    return values.length <= 2 ? values.map(labelOf).join(', ') : `${labelOf(values[0])} +${values.length - 1}`;
+    return values.length <= 2
+      ? values.map(labelOf).join(', ')
+      : `${labelOf(values[0])} +${values.length - 1}`;
   };
 
   // Server-declared filters → shared FilterBar descriptors. The SKU filter is async, so wire its
@@ -232,11 +303,18 @@ export function PoList(props: { supplierId?: number }): JSX.Element {
       modifiers: filterModifiers,
       setModifier: setFilterModifier,
       // eslint-disable-next-line solid/no-destructure -- this is a render-prop callback parameter, not component props; the plugin cannot tell them apart.
-      extraFor: ({ meta, mode, setMode }) => <FilterModeToggle modes={meta.modes ?? []} value={mode} onChange={setMode} />,
+      extraFor: ({ meta, mode, setMode }) => (
+        <FilterModeToggle modes={meta.modes ?? []} value={mode} onChange={setMode} />
+      ),
     });
     return base.map((d) =>
       'sku' === d.id
-        ? { ...d, loadOptions: loadSkuOptions, minQueryLength: 2, selectedOptions: () => d.value().map((v) => ({ value: v, label: labelFor(v) })) }
+        ? {
+            ...d,
+            loadOptions: loadSkuOptions,
+            minQueryLength: 2,
+            selectedOptions: () => d.value().map((v) => ({ value: v, label: labelFor(v) })),
+          }
         : d,
     );
   });
@@ -244,8 +322,7 @@ export function PoList(props: { supplierId?: number }): JSX.Element {
   const rows = (): PurchaseOrder[] => {
     const all = query.data?.purchaseOrders ?? [];
     if (undefined !== props.supplierId) return all; // supplier tab: unfiltered
-    const stages = GROUP_STAGES[segment()];
-    return all.filter((po) => stages.includes(po.stage));
+    return all.filter((po) => inGroup(po, segment()));
   };
   const isEmpty = (): boolean => query.isSuccess && 0 === rows().length;
 
@@ -257,8 +334,20 @@ export function PoList(props: { supplierId?: number }): JSX.Element {
     getCoreRowModel: getCoreRowModel(),
   });
 
+  // Fill from where the list starts down to the viewport bottom — on its own page and inside a
+  // supplier's Purchase Orders tab alike: a long list scrolls inside its panel, so its header and
+  // bottom edge stay on screen and the page itself never scrolls. The gutter under it is this
+  // element's own `pb-4`, inside that height.
+  let rootEl: HTMLElement | undefined;
+  const listHeight = createViewportFill(() => rootEl);
+
   return (
-    <section>
+    <section
+      ref={rootEl}
+      data-viewport-fill
+      class="flex flex-col pb-4"
+      style={{ height: listHeight() }}
+    >
       <Show when={undefined === props.supplierId}>
         <div class="flex gap-4 mb-4 items-center">
           <span>
@@ -268,6 +357,11 @@ export function PoList(props: { supplierId?: number }): JSX.Element {
                 { value: 'draft', label: __('Draft') },
                 { value: 'open', label: _x('Open', 'purchase-order status filter') },
                 { value: 'closed', label: __('Closed') },
+                {
+                  value: 'archived',
+                  label: __('Archived'),
+                  title: __('Orders filed out of the working lists — they keep their status'),
+                },
               ]}
               value={segment()}
               onChange={(v) => setParams({ status: v })}
@@ -287,7 +381,7 @@ export function PoList(props: { supplierId?: number }): JSX.Element {
         <p class="text-slate-500">{__('Loading purchase orders…')}</p>
       </Show>
       <Show when={query.isError}>
-        <p class="text-red-700">{__('Failed to load purchase orders.')}</p>
+        <ErrorBanner>{__('Failed to load purchase orders.')}</ErrorBanner>
       </Show>
       <Show when={isEmpty()}>
         <p class="text-slate-500">{__('No purchase orders yet.')}</p>
@@ -301,41 +395,70 @@ export function PoList(props: { supplierId?: number }): JSX.Element {
           landmark — it mounts only once the query has settled, so it cannot be satisfied by the
           loading placeholder standing in its place.
         */}
-        <table class="w-full border-collapse text-sm" data-testid="purchase-order-list">
-          <thead>
-            <For each={table.getHeaderGroups()}>
-              {(hg) => (
-                <tr>
-                  <For each={hg.headers}>
-                    {(header) => (
-                      <th class="whitespace-nowrap border-b border-slate-200 px-3 py-2 text-left font-semibold text-slate-600">
-                        {flexRender(header.column.columnDef.header, header.getContext())}
-                      </th>
-                    )}
-                  </For>
-                </tr>
-              )}
-            </For>
-          </thead>
-          <tbody>
-            <For each={table.getRowModel().rows}>
-              {(row) => (
-                <tr
-                  class="cursor-pointer hover:bg-slate-50"
-                  onClick={() => navigate(`/purchase-orders/${row.original.id}${location.search}`)}
-                >
-                  <For each={row.getVisibleCells()}>
-                    {(cell) => (
-                      <td class="border-b border-slate-100 px-3 py-2 align-top">
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                      </td>
-                    )}
-                  </For>
-                </tr>
-              )}
-            </For>
-          </tbody>
-        </table>
+        {/* `min-h-0`: lets the panel shrink below its rows and scroll them, instead of pushing the
+            section past the height it was given. A short list still hugs its rows. */}
+        <div class="min-h-0 overflow-auto rounded border border-border bg-surface">
+          <table class="w-full border-collapse text-sm" data-testid="purchase-order-list">
+            <thead class="sticky top-0 z-10 bg-surface-raised">
+              <For each={table.getHeaderGroups()}>
+                {(hg) => (
+                  <tr>
+                    <For each={hg.headers}>
+                      {(header) => (
+                        <th class="whitespace-nowrap border-b border-slate-200 px-3 py-2 text-left font-semibold text-slate-600">
+                          {flexRender(header.column.columnDef.header, header.getContext())}
+                        </th>
+                      )}
+                    </For>
+                  </tr>
+                )}
+              </For>
+            </thead>
+            <tbody>
+              <For each={table.getRowModel().rows}>
+                {(row) => {
+                  const href = (): string =>
+                    `/purchase-orders/${row.original.id}${location.search}`;
+
+                  return (
+                    <tr
+                      class="cursor-pointer hover:bg-slate-50"
+                      onClick={(event) => {
+                        // The first cell is a real link now, and the row click is only an
+                        // enhancement over it. Without this guard both fire: a plain click
+                        // navigates twice, and a ctrl/middle-click opens the row in a new tab AND
+                        // navigates this one — the row losing its place as the cost of the shortcut.
+                        if ((event.target as HTMLElement).closest('a,button,input,select,label')) {
+                          return;
+                        }
+                        navigate(href());
+                      }}
+                    >
+                      <For each={row.getVisibleCells()}>
+                        {(cell, index) => (
+                          <td class="border-b border-slate-100 px-3 py-2 align-top">
+                            <Show
+                              when={index() === 0}
+                              fallback={flexRender(cell.column.columnDef.cell, cell.getContext())}
+                            >
+                              {/* The row's keyboard and assistive-tech entry point. A `<tr>` takes
+                                no focus and announces no destination, so a click handler on it is
+                                reachable by pointer only; the PO number is the cell that names
+                                where the row goes, so it carries the link. */}
+                              <A href={href()} class="block">
+                                {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                              </A>
+                            </Show>
+                          </td>
+                        )}
+                      </For>
+                    </tr>
+                  );
+                }}
+              </For>
+            </tbody>
+          </table>
+        </div>
       </Show>
     </section>
   );

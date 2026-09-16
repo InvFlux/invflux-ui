@@ -6,7 +6,9 @@ import { createSignal, type JSX } from 'solid-js';
  */
 export interface DragReorder {
   /** Spread onto each draggable item element (which must carry the same `id` you pass here). */
-  itemProps: (id: string) => Pick<
+  itemProps: (
+    id: string,
+  ) => Pick<
     JSX.HTMLAttributes<HTMLElement>,
     'draggable' | 'onDragStart' | 'onDragOver' | 'onDrop' | 'onDragEnd'
   >;

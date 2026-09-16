@@ -7,8 +7,11 @@ export interface ProcurementApi {
   get<T>(path: string, params?: Record<string, string | number | string[]>): Promise<T>;
   post<T>(path: string, body: unknown): Promise<T>;
   patch<T>(path: string, body: unknown): Promise<T>;
-  /** PUT for fire-and-forget writes that answer 204 (no body) — e.g. autosaving WIP. */
-  put(path: string, body: unknown): Promise<void>;
+  /**
+   * PUT. Most writes here answer 204 with no body, which is what the default `undefined` describes —
+   * a caller whose route answers 200 names the shape it expects instead.
+   */
+  put<T = undefined>(path: string, body: unknown): Promise<T>;
   del<T>(path: string): Promise<T>;
   /** Fetch a binary endpoint (nonce-auth) and trigger a browser download as `filename`. */
   download(path: string, filename: string): Promise<void>;
@@ -39,16 +42,16 @@ export function createApi(context: Pick<ProcurementContext, 'apiRoot' | 'nonce'>
   };
 
   return {
-    get: <T,>(route: string, params?: Record<string, string | number | string[]>): Promise<T> =>
+    get: <T>(route: string, params?: Record<string, string | number | string[]>): Promise<T> =>
       api.get<T>(ns(route), { params: withArraySuffix(params) }),
-    post: <T,>(route: string, body: unknown): Promise<T> => api.post<T>(ns(route), body),
-    patch: <T,>(route: string, body: unknown): Promise<T> => api.patch<T>(ns(route), body),
-    // 204, no body — the shared client resolves an empty body as `undefined` rather than throwing
-    // a SyntaxError, which is what made this a bespoke method in the first place.
-    put: async (route: string, body: unknown): Promise<void> => {
-      await api.put<undefined>(ns(route), body);
-    },
-    del: <T,>(route: string): Promise<T> => api.del<T>(ns(route)),
+    post: <T>(route: string, body: unknown): Promise<T> => api.post<T>(ns(route), body),
+    patch: <T>(route: string, body: unknown): Promise<T> => api.patch<T>(ns(route), body),
+    // Bespoke because most PUTs here answer 204: the shared client resolves an empty body as
+    // `undefined` rather than throwing a SyntaxError. `T` defaults to that empty case, so a caller
+    // that wants the response — one whose route answers 200 with a body — names the shape and the
+    // rest are unchanged.
+    put: <T = undefined>(route: string, body: unknown): Promise<T> => api.put<T>(ns(route), body),
+    del: <T>(route: string): Promise<T> => api.del<T>(ns(route)),
     download: (route: string, filename: string): Promise<void> => api.download(ns(route), filename),
   };
 }

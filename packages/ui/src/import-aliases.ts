@@ -53,9 +53,40 @@ export function serializeAliases(list: readonly string[]): string {
 }
 
 export const COMMON_ALIASES: Record<string, readonly string[]> = {
-  sku: ['reference', 'ref', 'article', 'code', 'item', 'référence', 'code article', 'artikel', 'referencia'],
-  supplier_sku: ['supplier ref', 'supplier sku', 'vendor sku', 'vendor code', 'réf fournisseur', 'code fournisseur', 'lieferant'],
+  sku: [
+    'reference',
+    'ref',
+    'article',
+    'code',
+    'item',
+    'référence',
+    'code article',
+    'artikel',
+    'referencia',
+  ],
+  supplier_sku: [
+    'supplier ref',
+    'supplier sku',
+    'vendor sku',
+    'vendor code',
+    'réf fournisseur',
+    'code fournisseur',
+    'lieferant',
+  ],
   gtin: ['barcode', 'ean', 'ean13', 'upc', 'gtin', 'code barre', 'code-barres', 'código de barras'],
   qty: ['qty', 'quantity', 'quantities', 'qté', 'quantité', 'menge', 'anzahl', 'cantidad'],
-  cost: ['price', 'unit price', 'cost', 'unit cost', 'cost each', 'prix', 'prix unitaire', 'coût', 'pu', 'tarif', 'preis', 'precio'],
+  cost: [
+    'price',
+    'unit price',
+    'cost',
+    'unit cost',
+    'cost each',
+    'prix',
+    'prix unitaire',
+    'coût',
+    'pu',
+    'tarif',
+    'preis',
+    'precio',
+  ],
 };

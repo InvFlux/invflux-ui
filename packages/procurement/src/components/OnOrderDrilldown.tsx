@@ -1,5 +1,5 @@
-import { __, _n, sprintf } from '@invflux/i18n';
-import { useHostNav } from '@invflux/ui';
+import { __, _n, formatNumber, sprintf } from '@invflux/i18n';
+import { UPGRADE_ROUTE, useHostNav } from '@invflux/ui';
 import type { DrilldownProps } from '@invflux/ui';
 import { type JSX, Show } from 'solid-js';
 
@@ -12,9 +12,6 @@ export interface OnOrderResponse {
   locked: boolean;
   summary: { totalQty: number; poCount: number };
 }
-
-/** Upgrade page slug (mirrors @invflux/ui FeatureGate's default target); the host resolves the URL. */
-const UPGRADE_PAGE = 'invflux-upgrade-pro';
 
 /**
  * Base drill-down body behind a draft line's "On order" figure (double-click the green **+N**): the
@@ -30,7 +27,10 @@ export function OnOrderDrilldown(props: DrilldownProps): JSX.Element {
   const data = (): OnOrderResponse | null => (props.detail as OnOrderResponse | null) ?? null;
 
   return (
-    <Show when={data()} fallback={<p class="py-2 text-center text-sm text-text-muted">{__('Nothing on order.')}</p>}>
+    <Show
+      when={data()}
+      fallback={<p class="py-2 text-center text-sm text-text-muted">{__('Nothing on order.')}</p>}
+    >
       <div class="py-1 text-center">
         <p class="text-sm text-slate-700">
           {sprintf(
@@ -39,7 +39,7 @@ export function OnOrderDrilldown(props: DrilldownProps): JSX.Element {
               '%1$s on order across %2$d open purchase orders.',
               data()?.summary.poCount ?? 0,
             ),
-            (data()?.summary.totalQty ?? 0).toLocaleString(),
+            formatNumber(data()?.summary.totalQty ?? 0),
             data()?.summary.poCount ?? 0,
           )}
         </p>
@@ -48,8 +48,7 @@ export function OnOrderDrilldown(props: DrilldownProps): JSX.Element {
         </p>
         <a
           class="mt-3 inline-block rounded bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-hover"
-          href={hostNav.pageHref(UPGRADE_PAGE) ?? undefined}
-          rel="noopener"
+          href={hostNav.routeHref(UPGRADE_ROUTE)}
         >
           {__('Upgrade to Pro')}
         </a>

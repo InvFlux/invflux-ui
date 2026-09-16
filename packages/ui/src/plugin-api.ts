@@ -55,9 +55,17 @@ export interface RegistryApi {
     opts?: RegisterOpts,
   ): void;
   /** Register a contribution into a host slot (§3.4), e.g. `<entity>.detail.tab`. */
-  registerSlot<P = Record<string, unknown>>(slotKey: string, contribution: SlotContribution<P>): void;
+  registerSlot<P = Record<string, unknown>>(
+    slotKey: string,
+    contribution: SlotContribution<P>,
+  ): void;
   /** Register a filter control for a filter `type` (§1.2), e.g. a `date-range` control. */
-  registerFilterControl(type: string, id: string, component: FilterControl, opts?: RegisterOpts): void;
+  registerFilterControl(
+    type: string,
+    id: string,
+    component: FilterControl,
+    opts?: RegisterOpts,
+  ): void;
   /** Register a selection-bar bulk action (§2), e.g. Procurement's "Create PO". */
   registerBulkAction(action: BulkAction): void;
   /**
@@ -66,7 +74,10 @@ export interface RegistryApi {
    * plain action needs none of the runtime bridge; only an action whose `run` renders host
    * components reaches for the bridge below.
    */
-  registerEntityAction<Ctx extends EntityActionContext>(scope: string, action: EntityAction<Ctx>): void;
+  registerEntityAction<Ctx extends EntityActionContext>(
+    scope: string,
+    action: EntityAction<Ctx>,
+  ): void;
 }
 
 /** A full SPA surface: the shared registry API plus the host-provided runtime bridge. */
@@ -80,8 +91,10 @@ declare global {
 
 function registryApi(): RegistryApi {
   return {
-    registerView: (dataType, id, component, opts) => viewRegistry.register(dataType, id, component, opts),
-    registerEdit: (dataType, id, component, opts) => editRegistry.register(dataType, id, component, opts),
+    registerView: (dataType, id, component, opts) =>
+      viewRegistry.register(dataType, id, component, opts),
+    registerEdit: (dataType, id, component, opts) =>
+      editRegistry.register(dataType, id, component, opts),
     registerDrilldown: (dataType, id, component, opts) =>
       drilldownRegistry.register(dataType, id, component, opts),
     registerCodec: (dataType, codec, opts) =>

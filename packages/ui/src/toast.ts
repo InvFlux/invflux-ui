@@ -120,12 +120,14 @@ export const toast = Object.assign(
   (message: string, opts?: ToastOptions): number => show(message, opts),
   {
     show,
-    info: (message: string, opts?: ToastOptions): number => show(message, { ...opts, variant: 'info' }),
+    info: (message: string, opts?: ToastOptions): number =>
+      show(message, { ...opts, variant: 'info' }),
     success: (message: string, opts?: ToastOptions): number =>
       show(message, { ...opts, variant: 'success' }),
     warning: (message: string, opts?: ToastOptions): number =>
       show(message, { ...opts, variant: 'warning' }),
-    error: (message: string, opts?: ToastOptions): number => show(message, { ...opts, variant: 'error' }),
+    error: (message: string, opts?: ToastOptions): number =>
+      show(message, { ...opts, variant: 'error' }),
     dismiss,
     clear,
   },

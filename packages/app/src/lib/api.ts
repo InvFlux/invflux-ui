@@ -11,6 +11,8 @@ import type { AppContext } from '../types';
 export interface AppApi {
   get<T>(route: string, params?: Record<string, string | number>): Promise<T>;
   post<T>(route: string, body: unknown): Promise<T>;
+  put<T>(route: string, body: unknown): Promise<T>;
+  del<T>(route: string, body?: unknown): Promise<T>;
 }
 
 export function createApi(context: Pick<AppContext, 'apiRoot' | 'nonce'>): AppApi {
@@ -18,5 +20,7 @@ export function createApi(context: Pick<AppContext, 'apiRoot' | 'nonce'>): AppAp
   return {
     get: (route, params) => api.get(ns(route), { params }),
     post: (route, body) => api.post(ns(route), body),
+    put: (route, body) => api.put(ns(route), body),
+    del: (route, body) => api.del(ns(route), body),
   };
 }

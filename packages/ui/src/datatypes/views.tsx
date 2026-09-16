@@ -1,6 +1,6 @@
-import { StockConcernBadge } from '../StockConcernBadge';
+import { StockConcernBadge, type InboundCover } from '../StockConcernBadge';
 import { For, Show, type JSX } from 'solid-js';
-import { __ } from '@invflux/i18n';
+import { __, formatNumber } from '@invflux/i18n';
 import { useHostNav } from '../hostNav';
 import type { ViewProps } from './registry';
 import { viewRegistry } from './registry';
@@ -14,8 +14,6 @@ import { formatDateValue, parseDateValue } from './dateValue';
  * name/expand, orders, ledger, the editable inputs) are special-cased in WorkbenchGrid;
  * these views cover the plain-data datatypes plus the dynamic taxonomy / add-on columns.
  */
-
-const numberFormat = new Intl.NumberFormat();
 
 const DASH = '—';
 
@@ -33,7 +31,7 @@ function TextView(props: ViewProps) {
 function NumberView(props: ViewProps) {
   return (
     <span class="tabular-nums">
-      {typeof props.value === 'number' ? numberFormat.format(props.value) : DASH}
+      {typeof props.value === 'number' ? formatNumber(props.value) : DASH}
     </span>
   );
 }
@@ -85,7 +83,9 @@ function ImageUrlView(props: ViewProps) {
 
 function TermPickerView(props: ViewProps) {
   const taxonomyName = (): string =>
-    typeof props.column.editorConfig.taxonomy === 'string' ? props.column.editorConfig.taxonomy : '';
+    typeof props.column.editorConfig.taxonomy === 'string'
+      ? props.column.editorConfig.taxonomy
+      : '';
   const ids = (): number[] => (Array.isArray(props.value) ? (props.value as number[]) : []);
   const name = (termId: number): string => {
     const space = props.ctx.taxonomySpace?.[taxonomyName()];
@@ -102,7 +102,8 @@ function TermPickerView(props: ViewProps) {
 }
 
 /** Subject stock-concerns bitmask → the shared StockConcernBadge (renders "—" when 0). The
- *  unfulfillable magnitude rides on the row (`stockDeficitQty`) so the deficit reads "Deficit: N". */
+ *  unfulfillable magnitude (`stockDeficitQty`) and the governance marker (`unmanaged`) both ride on
+ *  the row, so the deficit reads "Deficit: N" and an untracked line still shows "⚠ Unmanaged". */
 /**
  * Enum cell: maps the stored value (a slug like `taxable` / `heavy-items` / `reduced-rate`) to the
  * human label declared in the column's `editorConfig.options`, falling back to the raw value when no
@@ -163,21 +164,53 @@ function productTypeLabel(kind: string): string {
 
 function ProductTypeIcon(props: { kind: string }): JSX.Element {
   const svg = (children: JSX.Element): JSX.Element => (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-4 w-4 shrink-0" aria-hidden="true">
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      class="h-4 w-4 shrink-0"
+      aria-hidden="true"
+    >
       {children}
     </svg>
   );
   switch (props.kind) {
     case 'variable': // stacked layers — an aggregate of variations
-      return svg(<><path d="M12 2 2 7l10 5 10-5z" /><path d="M2 17l10 5 10-5M2 12l10 5 10-5" /></>);
+      return svg(
+        <>
+          <path d="M12 2 2 7l10 5 10-5z" />
+          <path d="M2 17l10 5 10-5M2 12l10 5 10-5" />
+        </>,
+      );
     case 'variation': // a sub-item branching off its parent
-      return svg(<><path d="M6 4v8a4 4 0 0 0 4 4h8" /><path d="M14 12l4 4-4 4" /></>);
+      return svg(
+        <>
+          <path d="M6 4v8a4 4 0 0 0 4 4h8" />
+          <path d="M14 12l4 4-4 4" />
+        </>,
+      );
     case 'grouped': // a folder of independent members
-      return svg(<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />);
+      return svg(
+        <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,
+      );
     case 'external': // links out to another store
-      return svg(<><path d="M15 3h6v6" /><path d="M21 3l-9 9" /><path d="M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5" /></>);
+      return svg(
+        <>
+          <path d="M15 3h6v6" />
+          <path d="M21 3l-9 9" />
+          <path d="M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5" />
+        </>,
+      );
     case 'bundle': // a package of fulfilled-together items
-      return svg(<><path d="M21 8l-9-5-9 5v8l9 5 9-5z" /><path d="M3 8l9 5 9-5M12 13v9" /></>);
+      return svg(
+        <>
+          <path d="M21 8l-9-5-9 5v8l9 5 9-5z" />
+          <path d="M3 8l9 5 9-5M12 13v9" />
+        </>,
+      );
     default: // simple — a single product
       return svg(<rect x="4" y="4" width="16" height="16" rx="2" />);
   }
@@ -186,9 +219,17 @@ function ProductTypeIcon(props: { kind: string }): JSX.Element {
 function ProductTypeView(props: ViewProps) {
   const row = (): ProductTypeRow => (props.row as ProductTypeRow | null) ?? {};
   const kind = (): string => productTypeKind(props.value, row());
-  const count = (): number => (typeof row().childCount === 'number' ? (row().childCount as number) : 0);
+  const count = (): number =>
+    typeof row().childCount === 'number' ? (row().childCount as number) : 0;
+  // Variable and variation take the workbench's family hue; every other type stays muted. The
+  // colour is doing real work here — it is the fastest way to see, mid-scroll, which rows belong to
+  // a parent/variation family and which are standalone, without reading the label.
+  const isFamily = (): boolean => 'variable' === kind() || 'variation' === kind();
   return (
-    <span class="inline-flex items-center gap-1 text-text-muted" title={productTypeLabel(kind())}>
+    <span
+      class={`inline-flex items-center gap-1 ${isFamily() ? 'text-violet-500' : 'text-text-muted'}`}
+      title={productTypeLabel(kind())}
+    >
       <ProductTypeIcon kind={kind()} />
       <Show when={count() > 0}>
         <span class="tabular-nums">({count()})</span>
@@ -209,7 +250,9 @@ function SupplierPillsView(props: ViewProps) {
   const hostNav = useHostNav();
   const suppliers = (): SupplierPill[] =>
     Array.isArray(props.value)
-      ? (props.value as SupplierPill[]).filter((s) => s !== null && typeof s === 'object' && typeof s.supplierId === 'number')
+      ? (props.value as SupplierPill[]).filter(
+          (s) => s !== null && typeof s === 'object' && typeof s.supplierId === 'number',
+        )
       : [];
   // In the grid's no-wrap display mode, keep the pills on a single line (the cell clips) instead of
   // wrapping to new rows; flex defaults to nowrap, so we only add flex-wrap when wrapping is on.
@@ -240,7 +283,41 @@ function StockConcernsView(props: ViewProps) {
     const n = row?.stockDeficitQty;
     return typeof n === 'number' ? n : undefined;
   };
-  return <StockConcernBadge bits={bits()} deficitQty={deficitQty()} />;
+  /**
+   * The governance marker rides on the row too, and must be forwarded: this view *replaces* the
+   * badge its hosts would otherwise render themselves, so anything it fails to pass on simply
+   * stops existing there. That is what hid "⚠ Unmanaged" on the order page, where the registered
+   * view wins over the host's own fallback.
+   *
+   * Absent on rows that do not carry the field (the workbench states governance in its own
+   * column), where `undefined` correctly renders nothing.
+   */
+  const unmanaged = (): boolean | undefined => {
+    const row = props.row as { unmanaged?: unknown } | null;
+    return typeof row?.unmanaged === 'boolean' ? row.unmanaged : undefined;
+  };
+  /** The deficit's operands, where the row carries them (the order page does, the workbench not). */
+  const operand = (key: 'stockDemandQty' | 'stockCtdQty' | 'stockShortQty'): number | undefined => {
+    const n = (props.row as Record<string, unknown> | null)?.[key];
+    return typeof n === 'number' ? n : undefined;
+  };
+  /** Inbound cover rides the row like the other two; absent on rows that carry none. */
+  const inbound = (): InboundCover | undefined => {
+    const row = props.row as { inbound?: unknown } | null;
+    const v = row?.inbound;
+    return v !== null && typeof v === 'object' && 'onOrder' in v ? (v as InboundCover) : undefined;
+  };
+  return (
+    <StockConcernBadge
+      bits={bits()}
+      deficitQty={deficitQty()}
+      demandQty={operand('stockDemandQty')}
+      ctdQty={operand('stockCtdQty')}
+      shortQty={operand('stockShortQty')}
+      unmanaged={unmanaged()}
+      inbound={inbound()}
+    />
+  );
 }
 
 /**
@@ -300,7 +377,12 @@ export interface LinkHostNav {
  * rendering. Given the column config, the cell value, the row, and a host-nav port, returns what to
  * draw. See {@link LinkView}'s docblock for the `editorConfig` contract.
  */
-export function computeLinkModel(cfg: LinkConfig, value: unknown, row: unknown, hostNav: LinkHostNav): LinkModel {
+export function computeLinkModel(
+  cfg: LinkConfig,
+  value: unknown,
+  row: unknown,
+  hostNav: LinkHostNav,
+): LinkModel {
   const r = row as (Record<string, unknown> & { extra?: Record<string, unknown> }) | null;
   const interpolate = (tpl: string, encode: boolean): { text: string; hadEmpty: boolean } => {
     let hadEmpty = false;
@@ -321,12 +403,23 @@ export function computeLinkModel(cfg: LinkConfig, value: unknown, row: unknown, 
     if (typeof role === 'string' && roles.includes(role)) return 'hide';
   }
 
-  if (cfg.hideWhen === 'zero' && (value === 0 || value === null || value === undefined || value === '' || (typeof value === 'number' && Number.isNaN(value)))) return 'hide';
-  if (cfg.hideWhen === 'empty' && (value === null || value === undefined || value === '')) return 'hide';
+  if (
+    cfg.hideWhen === 'zero' &&
+    (value === 0 ||
+      value === null ||
+      value === undefined ||
+      value === '' ||
+      (typeof value === 'number' && Number.isNaN(value)))
+  )
+    return 'hide';
+  if (cfg.hideWhen === 'empty' && (value === null || value === undefined || value === ''))
+    return 'hide';
 
-  const q = typeof cfg.query === 'string' ? interpolate(cfg.query, true) : { text: '', hadEmpty: false };
+  const q =
+    typeof cfg.query === 'string' ? interpolate(cfg.query, true) : { text: '', hadEmpty: false };
   const query = typeof cfg.query === 'string' ? q.text : undefined;
-  const withQuery = (base: string): string => (query ? `${base}${base.includes('?') ? '&' : '?'}${query}` : base);
+  const withQuery = (base: string): string =>
+    query ? `${base}${base.includes('?') ? '&' : '?'}${query}` : base;
   // An empty query token makes the target indeterminate → render the value unlinked (not a dash).
   const linkable = !q.hadEmpty;
 
@@ -360,7 +453,12 @@ export function computeLinkModel(cfg: LinkConfig, value: unknown, row: unknown, 
 function LinkView(props: ViewProps) {
   const hostNav = useHostNav();
   const model = (): LinkModel =>
-    computeLinkModel((props.column?.editorConfig ?? {}) as LinkConfig, props.value, props.row, hostNav);
+    computeLinkModel(
+      (props.column?.editorConfig ?? {}) as LinkConfig,
+      props.value,
+      props.row,
+      hostNav,
+    );
 
   return (
     <Show when={model() !== 'hide'} fallback={<span class="text-text-muted">{DASH}</span>}>
@@ -391,9 +489,15 @@ viewRegistry.register('enum', 'core.enum', EnumView, { default: true });
 viewRegistry.register('bool', 'core.bool', BoolView, { default: true });
 viewRegistry.register('date', 'core.date', DateView, { default: true });
 viewRegistry.register('image:url', 'core.image', ImageUrlView, { default: true });
-viewRegistry.register('term-picker:wc-taxonomy', 'core.term-list', TermPickerView, { default: true });
-viewRegistry.register('stock-concerns', 'core.stock-concerns', StockConcernsView, { default: true });
-viewRegistry.register('supplier-pills', 'core.supplier-pills', SupplierPillsView, { default: true });
+viewRegistry.register('term-picker:wc-taxonomy', 'core.term-list', TermPickerView, {
+  default: true,
+});
+viewRegistry.register('stock-concerns', 'core.stock-concerns', StockConcernsView, {
+  default: true,
+});
+viewRegistry.register('supplier-pills', 'core.supplier-pills', SupplierPillsView, {
+  default: true,
+});
 viewRegistry.register('text:product-type', 'core.product-type', ProductTypeView, { default: true });
 // `link:count` (Orders) and any `link:*` variant resolve to this via the datatype parent chain.
 viewRegistry.register('link', 'core.link', LinkView, { default: true });

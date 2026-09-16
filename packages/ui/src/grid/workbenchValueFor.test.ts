@@ -42,7 +42,9 @@ describe('workbenchValueFor', () => {
 
   it('reads taxonomy.{name} from the taxonomy bag ([] when absent)', () => {
     expect(workbenchValueFor(row(), 'taxonomy.brand')).toEqual([]);
-    expect(workbenchValueFor(row({ taxonomy: { brand: [7, 8] } }), 'taxonomy.brand')).toEqual([7, 8]);
+    expect(workbenchValueFor(row({ taxonomy: { brand: [7, 8] } }), 'taxonomy.brand')).toEqual([
+      7, 8,
+    ]);
   });
 
   it('falls back to the extra bag for unknown column ids', () => {
@@ -55,9 +57,9 @@ describe('workbenchValueFor', () => {
     expect(
       workbenchValueFor(row({ role: 'variation', productType: 'variable' }), 'product_type'),
     ).toBe('variation');
-    expect(workbenchValueFor(row({ role: 'parent', productType: 'variable' }), 'product_type')).toBe(
-      'variable',
-    );
+    expect(
+      workbenchValueFor(row({ role: 'parent', productType: 'variable' }), 'product_type'),
+    ).toBe('variable');
     expect(workbenchValueFor(row({ role: 'simple', productType: 'grouped' }), 'product_type')).toBe(
       'grouped',
     );

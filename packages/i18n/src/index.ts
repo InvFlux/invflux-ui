@@ -73,7 +73,10 @@ export const __ = <Text extends string>(text: Text): ReturnType<typeof wpTransla
   wpTranslate(text, textDomain);
 
 /** Translate with a disambiguating context (same English word, different meanings). */
-export const _x = <Text extends string>(text: Text, context: string): ReturnType<typeof wpTranslateWithContext<Text>> =>
+export const _x = <Text extends string>(
+  text: Text,
+  context: string,
+): ReturnType<typeof wpTranslateWithContext<Text>> =>
   wpTranslateWithContext(text, context, textDomain);
 
 /** Translate with plural forms. */
@@ -81,7 +84,8 @@ export const _n = <Single extends string, Plural extends string>(
   single: Single,
   plural: Plural,
   number: number,
-): ReturnType<typeof wpTranslatePlural<Single, Plural>> => wpTranslatePlural(single, plural, number, textDomain);
+): ReturnType<typeof wpTranslatePlural<Single, Plural>> =>
+  wpTranslatePlural(single, plural, number, textDomain);
 
 /** Translate with plural forms and a disambiguating context. */
 export const _nx = <Single extends string, Plural extends string>(
@@ -111,6 +115,7 @@ let locale: string | undefined;
  */
 export function setLocale(tag: string | undefined): void {
   locale = tag !== undefined && tag !== '' ? tag : undefined;
+  plainNumberFormat = null;
 }
 
 /** The bound locale, or `undefined` for the platform default. Pass straight to `Intl`. */
@@ -143,9 +148,66 @@ export function formatDateTime(
   return d === null ? fallback : d.toLocaleString(locale, opts);
 }
 
-/** A number in the host's locale — grouping and decimal separator both follow it. */
+/** A time of day in the host's locale. Same contract as {@link formatDate}. */
+export function formatTime(
+  value: string | number | Date | null | undefined,
+  fallback = '—',
+  opts?: Intl.DateTimeFormatOptions,
+): string {
+  const d = toDate(value);
+  return d === null ? fallback : d.toLocaleTimeString(locale, opts);
+}
+
+/**
+ * The option-less formatter for the bound locale, built on first use and dropped by
+ * {@link setLocale}. Constructing an `Intl.NumberFormat` costs ~60us against ~1.3us to format
+ * through an existing one, and grid cells format a number per row on every paint.
+ */
+let plainNumberFormat: Intl.NumberFormat | null = null;
+
+/**
+ * A number in the host's locale — grouping and decimal separator both follow it. `NaN` and
+ * infinities render empty.
+ *
+ * Without `opts` it reuses one formatter, so it is safe on a hot render path; a call with `opts`
+ * constructs its own.
+ */
 export function formatNumber(value: number, opts?: Intl.NumberFormatOptions): string {
-  return Number.isFinite(value) ? new Intl.NumberFormat(locale, opts).format(value) : '';
+  if (!Number.isFinite(value)) return '';
+  if (opts === undefined) {
+    plainNumberFormat ??= new Intl.NumberFormat(locale);
+    return plainNumberFormat.format(value);
+  }
+  return new Intl.NumberFormat(locale, opts).format(value);
+}
+
+/**
+ * A calendar day — `YYYY-MM-DD`, or the date part of any ISO string — as a LOCAL date; `null` when
+ * absent or unparseable.
+ *
+ * Use it for every value that is a day rather than an instant (a purchase order's expected date, a
+ * date-only custom field). `new Date('2026-10-01')` reads such a string as UTC midnight, which is
+ * the previous day for every reader west of UTC; a day must render as the same day everywhere. A
+ * value in any other shape falls back to the runtime's own parse.
+ */
+export function parseDateOnly(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  if (m === null) {
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+}
+
+/** A calendar day ({@link parseDateOnly}) in the host's locale. Same contract as {@link formatDate}. */
+export function formatDateOnly(
+  value: string | null | undefined,
+  fallback = '—',
+  opts?: Intl.DateTimeFormatOptions,
+): string {
+  const d = parseDateOnly(value);
+  return d === null ? fallback : d.toLocaleDateString(locale, opts);
 }
 
 function toDate(value: string | number | Date | null | undefined): Date | null {
@@ -154,6 +216,10 @@ function toDate(value: string | number | Date | null | undefined): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-export { isRTL, setLocaleData, sprintf } from '@wordpress/i18n';
+// `isRTL` is deliberately NOT re-exported. It derives direction from locale DATA, and every
+// direction check this UI needs must read the direction the browser actually laid out
+// (`getComputedStyle(el).direction`) — scroll and rect maths has to agree with the rendered result,
+// not with a proxy that can disagree with it. Re-exporting it invites exactly the wrong source.
+export { setLocaleData, sprintf } from '@wordpress/i18n';
 
 export type { LocaleData } from '@wordpress/i18n';

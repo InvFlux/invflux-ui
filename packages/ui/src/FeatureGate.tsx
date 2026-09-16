@@ -44,6 +44,12 @@ export interface FeatureGateProps {
 // WordPress runtime by the time gates render. Using function form (rather than
 // const-at-module-load) avoids capturing the source-English string before
 // `wp.i18n` has had a chance to inject the catalog.
+/**
+ * Where an upgrade prompt sends the merchant: the Licenses & Add-ons screen, an app route — the one
+ * place that knows which licence is active and how to buy or activate another.
+ */
+export const UPGRADE_ROUTE = '/licenses';
+
 function tooltipDefault(): string {
   return __('Available in Pro — upgrade to use this feature.');
 }
@@ -52,11 +58,7 @@ function ctaLabel(): string {
   return __('Upgrade to Pro');
 }
 
-async function checkAllowed(
-  apiRoot: string,
-  nonce: string,
-  featureKey: string,
-): Promise<boolean> {
+async function checkAllowed(apiRoot: string, nonce: string, featureKey: string): Promise<boolean> {
   const url = new URL(`${apiRoot.replace(/\/$/, '')}/invflux/v1/license/feature-allowed`);
   url.searchParams.set('keys', featureKey);
   const res = await fetch(url, {
@@ -99,7 +101,7 @@ export const FeatureGate: Component<FeatureGateProps> = (props) => {
           <div class="invflux-feature-gate__content">{props.children}</div>
           <a
             class="invflux-feature-gate__upgrade"
-            href={hostNav.pageHref(upgradePage()) ?? undefined}
+            href={hostNav.routeHref(UPGRADE_ROUTE)}
             rel="noopener"
           >
             {ctaLabel()}
@@ -111,7 +113,3 @@ export const FeatureGate: Component<FeatureGateProps> = (props) => {
     </Show>
   );
 };
-
-function upgradePage(): string {
-  return 'invflux-upgrade-pro';
-}

@@ -1,7 +1,11 @@
 import { slotRegistry, ToastRegion } from '@invflux/ui';
 import { NavTab } from '@invflux/ui/nav';
 import { HashRouter, MemoryRouter, type MemoryHistory, Navigate, Route } from '@solidjs/router';
-import { QueryClient, type QueryClient as QueryClientType, QueryClientProvider } from '@tanstack/solid-query';
+import {
+  QueryClient,
+  type QueryClient as QueryClientType,
+  QueryClientProvider,
+} from '@tanstack/solid-query';
 import { createMemo, For, type JSX, Show } from 'solid-js';
 import { ProcurementCtx } from './context';
 import { PROCUREMENT_NAV_SLOT } from './navSlot';
@@ -14,13 +18,19 @@ const standaloneQueryClient = new QueryClient({
 });
 
 /** Slug → nav label (until sections carry richer label/icon metadata). */
-const humanize = (id: string): string => id.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+const humanize = (id: string): string =>
+  id.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 
 /**
  * Enabled top-level sections, registry-first. Reads Procurement's OWN namespaced slot, never the
  * shell's `nav.section` — see {@link PROCUREMENT_NAV_SLOT}.
  */
-const navSections = (): Array<{ id: string; label: () => string; component: () => JSX.Element }> =>
+const navSections = (): Array<{
+  id: string;
+  label: () => string;
+  component: () => JSX.Element;
+  hidden: boolean;
+}> =>
   slotRegistry
     .get<Record<string, never>>(PROCUREMENT_NAV_SLOT)
     .filter((s) => s.enabled?.() ?? true)
@@ -29,6 +39,8 @@ const navSections = (): Array<{ id: string; label: () => string; component: () =
       // A registered translated label wins; otherwise humanize the slug (English-only fallback).
       label: s.label ?? (() => humanize(s.id)),
       component: s.component as () => JSX.Element,
+      // Routed like the rest, left out of the tabs — see SlotContribution.hidden.
+      hidden: s.hidden ?? false,
     }));
 
 /**
@@ -42,14 +54,19 @@ const navSections = (): Array<{ id: string; label: () => string; component: () =
  */
 function Shell(props: { children?: JSX.Element; embedded?: boolean }): JSX.Element {
   return (
-    <div class="flex min-h-screen flex-col bg-white text-slate-900">
+    /* `bg-ground`, not `bg-surface`: the page is what panels rest *on*, the same answer the shell
+       above reached. See the surface steps in @invflux/ui's theme.css. */
+    /* No `min-h-screen`: 100vh counts from the top of the page, not from where this shell starts
+       under the admin bar and the app's tab strip, so it overhangs the viewport by exactly that
+       chrome and a list sized to fit the screen would still scroll the page. */
+    <div class="flex flex-col bg-ground text-slate-900">
       {/* `section`: this row renders directly under the shell's surface tabs when procurement is
           the active surface, so it is styled to read as subordinate to them rather than as a
           second row of the same thing. */}
       {/* `pt-2` (deeper than the shell's `pt-1`): this row has the surface tabs immediately above
           it, so its filled tab needs the clearance to read as a separate row. */}
-      <nav class="flex items-center gap-1 border-b border-slate-200 px-4 pt-2">
-        <For each={navSections()}>
+      <nav class="flex items-center gap-1 border-b border-slate-200 px-4 pt-2 bg-surface">
+        <For each={navSections().filter((s) => !s.hidden)}>
           {(s) => (
             <NavTab href={`/${s.id}`} variant="section">
               {s.label()}
@@ -57,7 +74,9 @@ function Shell(props: { children?: JSX.Element; embedded?: boolean }): JSX.Eleme
           )}
         </For>
       </nav>
-      <main class="flex-1 p-6">{props.children}</main>
+      {/* A list sized to the viewport (`data-viewport-fill`) carries its own bottom gutter inside
+          that height, so the padding here would sit below the viewport bottom and scroll the page. */}
+      <main class="flex-1 p-4 has-[[data-viewport-fill]]:pb-0">{props.children}</main>
       <Show when={!props.embedded}>
         <ToastRegion />
       </Show>
@@ -87,11 +106,14 @@ interface AppProps {
  * sub-routes; `/` redirects to the first registered section (Essentials landing).
  */
 export function App(props: AppProps): JSX.Element {
-  const firstId = createMemo(() => navSections()[0]?.id);
+  // The landing page is the first *listed* section: a hidden one is reached only by links.
+  const firstId = createMemo(() => navSections().find((s) => !s.hidden)?.id);
   const root = (p: { children?: JSX.Element }): JSX.Element => (
     <Shell embedded={undefined !== props.history}>{p.children}</Shell>
   );
-  const landing = (): JSX.Element => <Show when={firstId()}>{(id) => <Navigate href={`/${id()}`} />}</Show>;
+  const landing = (): JSX.Element => (
+    <Show when={firstId()}>{(id) => <Navigate href={`/${id()}`} />}</Show>
+  );
 
   return (
     <QueryClientProvider client={props.queryClient ?? standaloneQueryClient}>

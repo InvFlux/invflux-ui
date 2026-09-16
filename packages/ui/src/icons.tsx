@@ -288,6 +288,62 @@ export function CloseIcon(props: IconProps): JSX.Element {
   );
 }
 
+/**
+ * Hourglass — something is waiting on a person, not on the system.
+ *
+ * Distinct from {@link Spinner}, and the distinction is the point: a spinner says the software is
+ * working and will finish on its own, whereas this says nothing will change until someone acts. The
+ * two must never stand in for each other, or an operator waits for a machine that is waiting for
+ * them.
+ *
+ * Drawn rather than borrowed from the `⏳` character for the reason this whole module exists: that
+ * codepoint is emoji-presentation by default, so it renders full-colour and ignores the
+ * `currentColor` of the affordance holding it — inside a tinted pill it stays its own colour while
+ * everything around it takes the tone.
+ */
+export function HourglassIcon(props: IconProps): JSX.Element {
+  const [local, rest] = splitProps(props, ['class']);
+  return (
+    <svg {...strokeProps()} {...rest} class={local.class ?? 'h-4 w-4'}>
+      <line x1="6" y1="2" x2="18" y2="2" />
+      <line x1="6" y1="22" x2="18" y2="22" />
+      <path d="M6 2v4.5L12 12l6-5.5V2" />
+      <path d="M6 22v-4.5L12 12l6 5.5V22" />
+    </svg>
+  );
+}
+
+/**
+ * Information — an explanation is available for the thing beside it.
+ *
+ * Drawn rather than borrowed from `ⓘ`, and this one is the clearest case in the module. A glyph is
+ * *type*: the ring and the letter are one filled shape whose counter — the space inside the circle —
+ * is a hole showing whatever is behind it. On a tinted page that hole fills with the page, so the
+ * mark reads as an outline stamped on the ground rather than a badge sitting on it. The usual patch
+ * is a background on the element holding it, which paints a **rectangle** behind a **circle** and
+ * looks exactly like what it is.
+ *
+ * A stroked circle has no counter to fill, inherits {@link IconProps} `currentColor` like every
+ * neighbour, and can be given a fill of its own if a surface ever needs one — none of which the
+ * codepoint can do.
+ */
+export function InfoIcon(props: IconProps): JSX.Element {
+  const [local, rest] = splitProps(props, ['class']);
+  return (
+    <svg {...strokeProps()} {...rest} class={local.class ?? 'h-4 w-4'}>
+      {/* Centred in the box like every other icon here. It is deliberately NOT nudged upward to
+          suit one caller: an icon that carries a caller's optical correction inside its artwork
+          looks wrong in every other caller, and silently, since nothing at the call site explains
+          it. {@see Hint} owns its own seating. */}
+      <circle cx="12" cy="12" r="9" />
+      {/* Stem then dot, both stroked: `stroke-linecap: round` renders the zero-length dot as a
+          circle, so the `i` keeps the same weight and terminals as the ring around it. */}
+      <path d="M12 16v-4" />
+      <path d="M12 8h.01" />
+    </svg>
+  );
+}
+
 /** Archive box — the terminal put-it-away action (a lidded crate, distinct from {@link PackageIcon}). */
 export function ArchiveIcon(props: IconProps): JSX.Element {
   const [local, rest] = splitProps(props, ['class']);

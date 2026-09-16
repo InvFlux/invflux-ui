@@ -49,6 +49,7 @@ export function EmbeddedWorkbench(props: EmbeddedWorkbenchProps) {
     apiRoot: props.context.apiRoot,
     nonce: props.context.nonce,
     capabilities: props.capabilities,
+    applyConcurrency: props.context.applyConcurrency,
   };
 
   return (
@@ -59,10 +60,22 @@ export function EmbeddedWorkbench(props: EmbeddedWorkbenchProps) {
           storageKeyPrefix="product-tab"
           presetParams={{ post_ids: String(props.productId), bring_children: '1' }}
           showRowSelection={false}
-          defaultVisibleColumnIds={['name', 'sku', 'gtin', 'backorders', 'reorder_threshold', 'atp', 'res', 'ctd', 'total']}
+          defaultVisibleColumnIds={[
+            'name',
+            'sku',
+            'gtin',
+            'backorders',
+            'reorder_threshold',
+            'atp',
+            'res',
+            'ctd',
+            'total',
+          ]}
           defaultGridSettings={{ density: 'compact', wrap: 'no-wrap', textSize: 'small' }}
           compactVariationNames
-          liveUpdates={props.pollIntervalMs !== undefined ? { intervalMs: props.pollIntervalMs } : undefined}
+          liveUpdates={
+            props.pollIntervalMs !== undefined ? { intervalMs: props.pollIntervalMs } : undefined
+          }
           onApplied={props.onApplied}
           toolbarExtra={props.toolbarExtra}
           apiRef={props.apiRef}

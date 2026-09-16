@@ -101,15 +101,15 @@ Appears directly below the input row:
 
 ### 3.1 Opening / Closing
 
-| Trigger | Result |
-|---|---|
-| Click input row (not on a pill or its ×) | Open dropdown; focus `<input>` |
-| Focus `<input>` via Tab | Open dropdown |
-| `Escape` (dropdown open) | Close dropdown; keep selection; keep input text |
-| `Escape` (dropdown closed, input has text) | Clear input text |
-| Click outside (pointer event not in component) | Close dropdown; keep selection |
-| Tab away from component | Close dropdown |
-| Select in single-select mode | Close dropdown immediately after selection |
+| Trigger                                        | Result                                          |
+| ---------------------------------------------- | ----------------------------------------------- |
+| Click input row (not on a pill or its ×)       | Open dropdown; focus `<input>`                  |
+| Focus `<input>` via Tab                        | Open dropdown                                   |
+| `Escape` (dropdown open)                       | Close dropdown; keep selection; keep input text |
+| `Escape` (dropdown closed, input has text)     | Clear input text                                |
+| Click outside (pointer event not in component) | Close dropdown; keep selection                  |
+| Tab away from component                        | Close dropdown                                  |
+| Select in single-select mode                   | Close dropdown immediately after selection      |
 
 ### 3.2 Filtering
 
@@ -122,15 +122,15 @@ Appears directly below the input row:
 
 Focus stays in the `<input>` at all times. The dropdown is controlled by the input.
 
-| Key | Effect |
-|---|---|
-| `↓` | If dropdown closed: open it. Move `activeIndex` down by 1. When at last item, wrap to `-1`. |
-| `↑` | Move `activeIndex` up by 1. When at first item or `activeIndex` is `-1`, go to last item. |
-| `Enter` | If `activeIndex ≥ 0`: toggle selection on that option (multi) or select and close (single). Clear input text. If `activeIndex = -1`: no-op (do not close). |
-| `Escape` | See §3.1 |
-| `Backspace` (input empty) | Remove the last token. If no tokens, no-op. |
-| `Space` | Type a space character in the input (normal text entry). |
-| `Tab` | Close dropdown; move browser focus to next focusable element. |
+| Key                       | Effect                                                                                                                                                     |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `↓`                       | If dropdown closed: open it. Move `activeIndex` down by 1. When at last item, wrap to `-1`.                                                                |
+| `↑`                       | Move `activeIndex` up by 1. When at first item or `activeIndex` is `-1`, go to last item.                                                                  |
+| `Enter`                   | If `activeIndex ≥ 0`: toggle selection on that option (multi) or select and close (single). Clear input text. If `activeIndex = -1`: no-op (do not close). |
+| `Escape`                  | See §3.1                                                                                                                                                   |
+| `Backspace` (input empty) | Remove the last token. If no tokens, no-op.                                                                                                                |
+| `Space`                   | Type a space character in the input (normal text entry).                                                                                                   |
+| `Tab`                     | Close dropdown; move browser focus to next focusable element.                                                                                              |
 
 When `activeIndex` changes via keyboard, scroll the active row into view inside the dropdown: `element.scrollIntoView({ block: 'nearest' })`.
 
@@ -201,13 +201,13 @@ When `activeIndex` changes via keyboard, scroll the active row into view inside 
 
 ## 5. Single-Select Differences Summary
 
-| Aspect | Multi | Single |
-|---|---|---|
-| `multiple` prop | `true` (default) | `false` |
-| Option rows | Checkbox left, label | Label, ✓ right if selected |
-| On option pick | Toggle; stay open | Replace selection; close |
-| Token count | Unlimited | 0 or 1 |
-| `aria-multiselectable` | `true` | `false` |
+| Aspect                 | Multi                | Single                     |
+| ---------------------- | -------------------- | -------------------------- |
+| `multiple` prop        | `true` (default)     | `false`                    |
+| Option rows            | Checkbox left, label | Label, ✓ right if selected |
+| On option pick         | Toggle; stay open    | Replace selection; close   |
+| Token count            | Unlimited            | 0 or 1                     |
+| `aria-multiselectable` | `true`               | `false`                    |
 
 ---
 
@@ -223,7 +223,7 @@ In `handler`, check:
 
 ```js
 const path = event.composedPath();
-const isInside = path.some(el => el === containerElement);
+const isInside = path.some((el) => el === containerElement);
 if (!isInside) closeDropdown();
 ```
 
@@ -235,13 +235,13 @@ Register this listener on mount; remove on cleanup (`onCleanup` in SolidJS).
 
 The component uses Tailwind utility classes directly. The implementer must ensure the following design tokens exist in the host Tailwind config (they are already present in both workbench and dispatch packages):
 
-| Token | Purpose |
-|---|---|
-| `border-border` | Input row and dropdown border |
-| `bg-surface` | Input row and dropdown background |
-| `text-text` | Primary text |
-| `text-text-muted` | Placeholder, empty state, disabled options |
-| `bg-primary` / `text-white` | Active (keyboard-highlighted) option row |
+| Token                       | Purpose                                    |
+| --------------------------- | ------------------------------------------ |
+| `border-border`             | Input row and dropdown border              |
+| `bg-surface`                | Input row and dropdown background          |
+| `text-text`                 | Primary text                               |
+| `text-text-muted`           | Placeholder, empty state, disabled options |
+| `bg-primary` / `text-white` | Active (keyboard-highlighted) option row   |
 
 Token pills use a fixed `bg-blue-100 text-blue-800` style (not themed); adjust if the design system adds a `bg-tag` token.
 

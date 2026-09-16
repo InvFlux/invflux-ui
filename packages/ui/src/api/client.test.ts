@@ -41,7 +41,9 @@ describe('URL construction', () => {
   it('also handles the /wp-json/ form — only one of the old clients did', async () => {
     const fetchMock = mockFetch(json({ ok: true }));
     await createInvFluxApi(WPJSON).get(ns('/workbench/products'));
-    expect(fetchMock.mock.calls[0][0]).toBe('https://shop.test/wp-json/invflux/v1/workbench/products');
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      'https://shop.test/wp-json/invflux/v1/workbench/products',
+    );
   });
 
   it('sends the nonce on every request', async () => {
@@ -66,7 +68,9 @@ describe('path`` encodes interpolated segments', () => {
 
 describe('error handling', () => {
   it('parses the body BEFORE checking ok, so the slug survives', async () => {
-    mockFetch(json({ code: 'invflux_order_not_shippable', message: 'Order must be Started.' }, 409));
+    mockFetch(
+      json({ code: 'invflux_order_not_shippable', message: 'Order must be Started.' }, 409),
+    );
     const err = await createInvFluxApi(CTX)
       .post('/x')
       .catch((e: unknown) => e);

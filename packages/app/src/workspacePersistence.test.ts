@@ -31,7 +31,7 @@ beforeEach(() => {
 });
 
 describe('readBootSnapshot (§12.4 storage priority)', () => {
-  it('prefers sessionStorage (F5 = this tab\'s live workspace)', () => {
+  it("prefers sessionStorage (F5 = this tab's live workspace)", () => {
     writeWorkspace(SNAP); // writes BOTH stores
     const boot = readBootSnapshot();
     expect(boot?.fromSession).toBe(true);

@@ -55,6 +55,26 @@ export function ensureTab(tab: TabRef): void {
   setOpen((prev) => (has(prev, tab.path) ? prev : [...prev, tab]));
 }
 
+/**
+ * Rename an existing tab, in whichever row holds it. No-op when the path has no tab, and when the
+ * title is unchanged — so an effect may call it on every render without churning the signal.
+ *
+ * For detail tabs whose name is not derivable from their route: a promoted order is addressed by
+ * its hex id, but an operator knows it by its order number, which only the loaded order carries.
+ * The tab is created first (by navigation) and named a moment later, once that arrives.
+ */
+export function retitleTab(path: string, title: string): void {
+  const rename = (list: TabRef[]): TabRef[] => {
+    const at = list.findIndex((t) => t.path === path);
+    if (at < 0 || list[at]?.title === title) return list;
+    const next = [...list];
+    next[at] = { ...(next[at] as TabRef), title };
+    return next;
+  };
+  setPinned(rename);
+  setOpen(rename);
+}
+
 /** Pin a tab (open → pinned, or add if closed), appended to the pinned row. */
 export function pinTab(tab: TabRef): void {
   setOpen((prev) => prev.filter((t) => t.path !== tab.path));

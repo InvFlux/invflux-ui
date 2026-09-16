@@ -15,6 +15,7 @@ import { createQuery, useQueryClient } from '@tanstack/solid-query';
 import { type JSX, onCleanup, onMount, Show, useContext } from 'solid-js';
 import { useApp } from '../../context';
 import { interceptSurfaceLinks, surfaceHistory } from '../../surfaceRouter';
+import { procurementBootstrapQuery } from './bootstrap';
 
 registerPurchaseOrdersSection();
 registerSuppliersSection();
@@ -38,20 +39,7 @@ export default function ProcurementSection(): JSX.Element {
     if (container) onCleanup(interceptSurfaceLinks(container, history));
   });
 
-  const bootstrap = createQuery(() => ({
-    queryKey: ['procurement', 'bootstrap'],
-    queryFn: async (): Promise<ProcurementContext> => {
-      const url = `${app.apiRoot.replace(/\/$/, '')}/invflux/v1/procurement/bootstrap`;
-      const res = await fetch(url, {
-        headers: { Accept: 'application/json', 'X-WP-Nonce': app.nonce },
-        credentials: 'same-origin',
-      });
-      if (!res.ok) throw new Error(`Procurement bootstrap failed (${res.status})`);
-      return res.json() as Promise<ProcurementContext>;
-    },
-    // Capabilities / tier / geo are stable for the session — one fetch, cached in the shared client.
-    staleTime: Number.POSITIVE_INFINITY,
-  }));
+  const bootstrap = createQuery(() => procurementBootstrapQuery(app));
 
   return (
     <div ref={container} style={{ display: 'contents' }}>
@@ -72,13 +60,15 @@ export default function ProcurementSection(): JSX.Element {
       >
         {(data) => (
           <ProcurementApp
-            context={{
-              ...data(),
-              // Live from the shell — never a cached nonce / root / user from the bootstrap body.
-              apiRoot: app.apiRoot,
-              nonce: app.nonce,
-              currentUser: app.currentUser,
-            } satisfies ProcurementContext}
+            context={
+              {
+                ...data(),
+                // Live from the shell — never a cached nonce / root / user from the bootstrap body.
+                apiRoot: app.apiRoot,
+                nonce: app.nonce,
+                currentUser: app.currentUser,
+              } satisfies ProcurementContext
+            }
             portalRoot={portalRoot as HTMLElement}
             history={history}
             queryClient={queryClient}

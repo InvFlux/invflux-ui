@@ -8,12 +8,20 @@ const nav: LinkHostNav = {
 };
 
 describe('computeLinkModel (link datatype)', () => {
-  const ORDERS = { route: '/dispatch', query: 'subject_ids={orders_subject_ids}&workflow_state=Active', hideWhen: 'zero' as const };
+  const ORDERS = {
+    route: '/dispatch',
+    query: 'subject_ids={orders_subject_ids}&workflow_state=Active',
+    hideWhen: 'zero' as const,
+  };
   const LEDGER = { route: '/ledger/{subjectId}', label: 'View', hideForRole: 'parent' };
 
   it("builds an in-app orders link, filling {orders_subject_ids} from the row's extra bag", () => {
     const m = computeLinkModel(ORDERS, 3, { extra: { orders_subject_ids: '12' } }, nav);
-    expect(m).toEqual({ href: '#/dispatch?subject_ids=12&workflow_state=Active', label: '3', external: false });
+    expect(m).toEqual({
+      href: '#/dispatch?subject_ids=12&workflow_state=Active',
+      label: '3',
+      external: false,
+    });
   });
 
   it('hides (em-dash) when hideWhen:zero and the count is 0', () => {
@@ -34,11 +42,15 @@ describe('computeLinkModel (link datatype)', () => {
   });
 
   it('hides when a PATH token resolves empty (no subject → no ledger target)', () => {
-    expect(computeLinkModel(LEDGER, undefined, { subjectId: undefined, role: 'simple' }, nav)).toBe('hide');
+    expect(computeLinkModel(LEDGER, undefined, { subjectId: undefined, role: 'simple' }, nav)).toBe(
+      'hide',
+    );
   });
 
   it('hides for a row whose role is in hideForRole (a variable parent has no ledger)', () => {
-    expect(computeLinkModel(LEDGER, undefined, { subjectId: 32, role: 'parent' }, nav)).toBe('hide');
+    expect(computeLinkModel(LEDGER, undefined, { subjectId: 32, role: 'parent' }, nav)).toBe(
+      'hide',
+    );
   });
 
   it('supports a host admin-page provenance, appending the query with the right separator', () => {
@@ -54,16 +66,22 @@ describe('computeLinkModel (link datatype)', () => {
 
 describe('productTypeKind (Type column)', () => {
   it("uses role over the slug: a variation carries its parent's 'variable' slug but is a variation", () => {
-    expect(productTypeKind('variable', { role: 'variation', productType: 'variable' })).toBe('variation');
+    expect(productTypeKind('variable', { role: 'variation', productType: 'variable' })).toBe(
+      'variation',
+    );
   });
 
   it("maps a variable parent to 'variable'", () => {
-    expect(productTypeKind('variable', { role: 'parent', productType: 'variable' })).toBe('variable');
+    expect(productTypeKind('variable', { role: 'parent', productType: 'variable' })).toBe(
+      'variable',
+    );
   });
 
   it('falls back to the productType slug for non-hierarchical roles', () => {
     expect(productTypeKind('grouped', { role: 'simple', productType: 'grouped' })).toBe('grouped');
-    expect(productTypeKind('external', { role: 'simple', productType: 'external' })).toBe('external');
+    expect(productTypeKind('external', { role: 'simple', productType: 'external' })).toBe(
+      'external',
+    );
   });
 
   it("defaults to 'simple' when nothing resolves", () => {

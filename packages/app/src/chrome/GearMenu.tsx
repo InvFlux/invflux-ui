@@ -1,5 +1,11 @@
 import { __, sprintf } from '@invflux/i18n';
-import { Button, GearIcon, iconButtonClass, surfaceSettingsRegistry, usePortalRootOptional } from '@invflux/ui';
+import {
+  Button,
+  GearIcon,
+  iconButtonClass,
+  surfaceSettingsRegistry,
+  usePortalRootOptional,
+} from '@invflux/ui';
 import * as Popover from '@kobalte/core/popover';
 import { useNavigate } from '@solidjs/router';
 import { createSignal, For, type JSX, Show } from 'solid-js';
@@ -20,6 +26,12 @@ export function GearMenu(props: {
   /** Optional controlled open state — lets a surface open the gear (e.g. the DataGrid's Ctrl+,). */
   open?: () => boolean;
   onOpenChange?: (open: boolean) => void;
+  /**
+   * Forwarded to the popover's close-focus step. Calling `preventDefault()` stops focus returning
+   * to the gear button, which the host does when a *surface* opened the gear and focus belongs
+   * back where that surface had it.
+   */
+  onCloseAutoFocus?: (event: Event) => void;
 }): JSX.Element {
   const navigate = useNavigate();
   const mount = usePortalRootOptional();
@@ -44,7 +56,13 @@ export function GearMenu(props: {
   };
 
   return (
-    <Popover.Root open={open()} onOpenChange={setOpen} placement="bottom-end" gutter={6} modal={false}>
+    <Popover.Root
+      open={open()}
+      onOpenChange={setOpen}
+      placement="bottom-end"
+      gutter={6}
+      modal={false}
+    >
       <Popover.Trigger
         aria-label={__('Settings')}
         // Kobalte owns this element, so it takes the class builder rather than <IconButton> — the
@@ -54,7 +72,10 @@ export function GearMenu(props: {
         <GearIcon class="h-5 w-5" />
       </Popover.Trigger>
       <Popover.Portal mount={mount ?? undefined}>
-        <Popover.Content class="z-50 w-80 max-w-[92vw] rounded-lg border border-border bg-surface text-text shadow-xl focus:outline-none">
+        <Popover.Content
+          class="z-50 w-80 max-w-[92vw] rounded-lg border border-border bg-surface text-text shadow-xl focus:outline-none"
+          onCloseAutoFocus={props.onCloseAutoFocus}
+        >
           {/* Header — surface name + a right-aligned link to the system-wide Settings surface. */}
           <div class="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5">
             <span class="text-sm font-semibold text-text">{activeLabel()}</span>
@@ -77,7 +98,9 @@ export function GearMenu(props: {
               }
             >
               <For each={panels()}>
-                {(panel) => <Dynamic component={panel.component} onRequestClose={() => setOpen(false)} />}
+                {(panel) => (
+                  <Dynamic component={panel.component} onRequestClose={() => setOpen(false)} />
+                )}
               </For>
             </Show>
           </div>

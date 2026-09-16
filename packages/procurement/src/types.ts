@@ -26,6 +26,17 @@ export interface ProcurementContext {
     managePurchaseOrders: boolean;
     /** May close a reception short without reviewing every line (governance cap; default off). */
     closeShortLax: boolean;
+    /**
+     * May finish an order on less than was ordered (governance cap, asked exactly). Mirrors the
+     * server's check so the order page shows the action disabled rather than offering a 403.
+     */
+    closeShort: boolean;
+    /**
+     * May say what goods cost — the capability the invoice-recording route checks at the point of
+     * effect. Authority over an order and authority over money are routinely held by different
+     * people, so this is asked separately from {@link managePurchaseOrders} rather than implied by it.
+     */
+    stateCost: boolean;
   };
   /**
    * Whether the install holds the Pro SKU — drives which affordances the UI offers.

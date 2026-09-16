@@ -1,3 +1,4 @@
+import { __ } from '@invflux/i18n';
 import { createSignal, type JSX, onMount, Show } from 'solid-js';
 import * as Combobox from '@kobalte/core/combobox';
 import { HighlightMatch } from './fuzzy';
@@ -32,7 +33,7 @@ export interface SearchSelectAsyncProps {
   /** Seed the input text on mount (e.g. the character that opened a grid cell editor) — fires
    *  `onSearch` so the first fetch runs, and the user's next keystrokes append. */
   initialQuery?: string;
-  /** Portal target for the listbox (the SPA's light-DOM portalRoot — see SearchSelect). */
+  /** Portal target for the listbox (the SPA's shared portalRoot — see SearchSelect). */
   mount?: HTMLElement;
 }
 
@@ -102,7 +103,11 @@ export function SearchSelectAsync(props: SearchSelectAsyncProps): JSX.Element {
         <KobalteComboboxFirstFocus firstKey={() => props.options[0]?.value} />
       </Show>
       <Combobox.Control aria-label={props.ariaLabel} class={`${CONTROL} ${props.class ?? ''}`}>
-        <Combobox.Input ref={inputRef} aria-label={props.ariaLabel} class="h-7 min-w-0 flex-1 border-0 bg-transparent p-0 text-sm outline-none placeholder:text-text-muted focus:ring-0" />
+        <Combobox.Input
+          ref={inputRef}
+          aria-label={props.ariaLabel}
+          class="h-7 min-w-0 flex-1 border-0 bg-transparent p-0 text-sm outline-none placeholder:text-text-muted focus:ring-0"
+        />
         <Combobox.Trigger aria-label={props.ariaLabel} class="shrink-0 text-text-muted">
           <Combobox.Icon>▾</Combobox.Icon>
         </Combobox.Trigger>
@@ -112,13 +117,13 @@ export function SearchSelectAsync(props: SearchSelectAsyncProps): JSX.Element {
           <Show when={props.loading}>
             <div class="flex items-center gap-2 px-3 py-2 text-text-muted">
               <span class="inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
-              <span>Searching…</span>
+              <span>{__('Searching…')}</span>
             </div>
           </Show>
           {/* max-height + scroll on the Listbox so Kobalte scrolls the active option into view. */}
           <Combobox.Listbox class="max-h-[210px] overflow-y-auto focus:outline-none" />
           <Show when={!props.loading && 0 === props.options.length}>
-            <div class="px-3 py-2 text-text-muted">{props.emptyMessage ?? 'No matches'}</div>
+            <div class="px-3 py-2 text-text-muted">{props.emptyMessage ?? __('No matches')}</div>
           </Show>
         </Combobox.Content>
       </Combobox.Portal>

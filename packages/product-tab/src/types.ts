@@ -3,6 +3,13 @@ export interface ProductTabContext {
   nonce: string;
   /** Public URL to the InvFlux mark SVG (square) — shown on the InvFlux governance segment. */
   markUrl?: string;
+  /**
+   * WordPress's locale for this admin user, as a BCP 47 tag (`fr-FR`). Every date and number the tab
+   * formats goes through it; absent (a dev harness), the browser's locale decides.
+   */
+  locale?: string;
+  /** How many apply requests a large save may have in flight at once; absent ⇒ the grid's default. */
+  applyConcurrency?: number;
 }
 
 export interface InventorySettings {

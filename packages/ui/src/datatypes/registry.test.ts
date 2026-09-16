@@ -8,7 +8,10 @@ describe('datatypeChain', () => {
 
   it('appends the variant-stripped base for `base:variant` slugs', () => {
     expect(datatypeChain('decimal:money')).toEqual(['decimal:money', 'decimal']);
-    expect(datatypeChain('term-picker:wc-taxonomy')).toEqual(['term-picker:wc-taxonomy', 'term-picker']);
+    expect(datatypeChain('term-picker:wc-taxonomy')).toEqual([
+      'term-picker:wc-taxonomy',
+      'term-picker',
+    ]);
   });
 });
 
@@ -71,7 +74,9 @@ describe('createComponentRegistry', () => {
     ]);
     // Label defaults to the id; parent-chain registrations are not listed for a child datatype.
     reg.register('number', 'core.number', 'N');
-    expect(reg.list('number')).toEqual([{ id: 'core.number', label: 'core.number', isDefault: true }]);
+    expect(reg.list('number')).toEqual([
+      { id: 'core.number', label: 'core.number', isDefault: true },
+    ]);
     expect(reg.list('number:stock')).toEqual([]);
     expect(reg.list('unregistered')).toEqual([]);
   });

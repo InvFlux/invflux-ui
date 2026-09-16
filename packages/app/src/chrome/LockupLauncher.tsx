@@ -58,7 +58,8 @@ export function LockupLauncher(): JSX.Element {
     { path: '/licenses', label: __('Licenses & Add-ons'), href: '/licenses' },
   ];
 
-  const stateOf = (path: string): PinState => (isPinned(path) ? 'pinned' : isOpen(path) ? 'open' : 'none');
+  const stateOf = (path: string): PinState =>
+    isPinned(path) ? 'pinned' : isOpen(path) ? 'open' : 'none';
 
   const togglePin = (row: Row): void => {
     if (isPinned(row.path)) unpinTab(row.path);
@@ -71,11 +72,14 @@ export function LockupLauncher(): JSX.Element {
         class="flex cursor-pointer items-center rounded px-2 py-1.5 hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         aria-label={__('Open a surface')}
       >
-        {/* eslint-disable-next-line solid/no-innerhtml -- build-time `?raw` SVG import, not user or server data. */}
-        <span class="inline-flex items-center [&_svg]:h-5 [&_svg]:w-auto" innerHTML={lockupHorizontal} />
+        <span
+          class="inline-flex items-center [&_svg]:h-5 [&_svg]:w-auto"
+          // eslint-disable-next-line solid/no-innerhtml -- build-time `?raw` SVG import, not user or server data.
+          innerHTML={lockupHorizontal}
+        />
       </Popover.Trigger>
       <Popover.Portal mount={mount}>
-        <Popover.Content class="z-popover min-w-[15rem] rounded border border-slate-200 bg-white py-1 text-sm shadow-xl focus:outline-none">
+        <Popover.Content class="z-popover min-w-[15rem] rounded border border-slate-200 bg-surface py-1 text-sm shadow-xl focus:outline-none">
           <For each={rows()}>
             {(row) => {
               const state = (): PinState => stateOf(row.path);

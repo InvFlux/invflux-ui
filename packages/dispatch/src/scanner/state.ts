@@ -21,9 +21,7 @@ export interface ScannerState {
 }
 
 export type ScannerEvent =
-  | { type: 'CHAR'; char: string; at: number }
-  | { type: 'DISARM_MULTI' }
-  | { type: 'CLEAR' };
+  { type: 'CHAR'; char: string; at: number } | { type: 'DISARM_MULTI' } | { type: 'CLEAR' };
 
 export function initialScannerState(): ScannerState {
   return { buffer: '', lastCharAt: 0, inputSource: 'keyboard', multiQtyArmed: false };
@@ -38,7 +36,12 @@ export function scannerReducer(state: ScannerState, event: ScannerEvent): Scanne
         // Dot is the arm signal; it is not part of any product filter query.
         return { ...state, lastCharAt: event.at, inputSource: source, multiQtyArmed: true };
       }
-      return { ...state, buffer: state.buffer + event.char, lastCharAt: event.at, inputSource: source };
+      return {
+        ...state,
+        buffer: state.buffer + event.char,
+        lastCharAt: event.at,
+        inputSource: source,
+      };
     }
     case 'DISARM_MULTI':
       return { ...state, multiQtyArmed: false };

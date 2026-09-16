@@ -144,7 +144,8 @@ export function createComponentRegistry<C>(): ComponentRegistry<C> {
 }
 
 /** The app-wide view registry. Built-ins register into it at module load (see views.tsx). */
-export const viewRegistry: ComponentRegistry<ViewComponent> = createComponentRegistry<ViewComponent>();
+export const viewRegistry: ComponentRegistry<ViewComponent> =
+  createComponentRegistry<ViewComponent>();
 
 /**
  * Datatype codec: the round-trippable text representation for clipboard copy/paste (§11.5).
@@ -167,7 +168,8 @@ export interface Codec {
 export const codecRegistry: ComponentRegistry<Codec> = createComponentRegistry<Codec>();
 
 /** The app-wide edit-component registry. Built-ins register at module load (see editors.tsx). */
-export const editRegistry: ComponentRegistry<EditComponent> = createComponentRegistry<EditComponent>();
+export const editRegistry: ComponentRegistry<EditComponent> =
+  createComponentRegistry<EditComponent>();
 
 /**
  * Optional per-datatype diff renderer for the save-review modal (§11.10.3). When a column's

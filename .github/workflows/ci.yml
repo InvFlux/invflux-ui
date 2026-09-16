@@ -26,18 +26,16 @@ jobs:
       - uses: actions/checkout@v4
         with: { path: invflux-ui }
 
-      # @invflux/build resolves its Vite outDir to ../../../invflux-for-woocommerce, so the
-      # adapter mirror has to be present or the bundles land outside the workspace and the
-      # job proves nothing. Token only needed while the mirrors are still private.
-      - uses: actions/checkout@v4
-        with:
-          repository: InvFlux/invflux-for-woocommerce
-          path: invflux-for-woocommerce
-          token: ${{ secrets.SIBLING_REPOS_TOKEN || github.token }}
+      # @invflux/build writes its bundles to ../../../invflux-for-woocommerce/build — the plugin
+      # that ships them. That plugin has no public repository to check out, and the build only
+      # needs somewhere to write, so the directory is created empty. It sits beside this checkout,
+      # inside the workspace, which is where the verification step below looks.
+      - name: Create the bundle output directory
+        run: mkdir -p "$GITHUB_WORKSPACE/invflux-for-woocommerce"
 
       - uses: actions/setup-node@v4
         with:
-          node-version-file: invflux-for-woocommerce/.nvmrc
+          node-version-file: invflux-ui/.nvmrc
 
       - name: Install workspace
         working-directory: invflux-ui

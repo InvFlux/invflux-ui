@@ -18,7 +18,16 @@ import type { GridWrap } from './DataGrid';
 import type { StagedCell } from './DataGrid';
 
 /** Column ids that render right-aligned (numeric). Mirrors DataGrid's RIGHT_ALIGNED. */
-const RIGHT_ALIGNED = new Set(['price', 'sale_price', 'weight', 'reorder_threshold', 'atp', 'res', 'ctd', 'total']);
+const RIGHT_ALIGNED = new Set([
+  'price',
+  'sale_price',
+  'weight',
+  'reorder_threshold',
+  'atp',
+  'res',
+  'ctd',
+  'total',
+]);
 
 /** Host-supplied behaviour a generic cell closes over — the same seams DataGrid exposes as props. */
 export interface GenericColumnDeps<TRow> {
@@ -31,13 +40,18 @@ export interface GenericColumnDeps<TRow> {
   wrap?: () => GridWrap;
 }
 
-/** Whether a column renders right-aligned (explicit set, or a number/decimal datatype). */
+/** Whether a column renders right-aligned (explicit set, or a numeric datatype — a count included). */
 export function isRightAligned(meta: GridColumnMeta): boolean {
-  return RIGHT_ALIGNED.has(meta.id) || meta.dataType.startsWith('number') || meta.dataType.startsWith('decimal');
+  return (
+    RIGHT_ALIGNED.has(meta.id) ||
+    meta.dataType.startsWith('number') ||
+    meta.dataType.startsWith('decimal') ||
+    meta.dataType.endsWith(':count')
+  );
 }
 
 /** Build the generic datatype-view `ColumnDef` for `meta`. */
- 
+
 export function makeGenericColumn<TRow>(
   ch: ColumnHelper<TRow>,
   meta: GridColumnMeta,
@@ -54,12 +68,14 @@ export function makeGenericColumn<TRow>(
     enableSorting: meta.sortable,
     meta: rightAligned ? { align: 'right' } : undefined,
     cell: (info): JSX.Element => {
-      const view = viewRegistry.resolve(meta.dataType, choice('view')) ?? viewRegistry.resolve('text');
+      const view =
+        viewRegistry.resolve(meta.dataType, choice('view')) ?? viewRegistry.resolve('text');
       if (!view) return <span class="text-text-muted">—</span>;
 
       const staged = (): StagedCell => deps.getStagedValue(info.row.original, meta.id);
       const dirty = (): boolean => staged().staged;
-      const inherited = (): boolean => deps.isGenericColumnInherited?.(info.row.original, meta) ?? false;
+      const inherited = (): boolean =>
+        deps.isGenericColumnInherited?.(info.row.original, meta) ?? false;
 
       return (
         <span
@@ -67,7 +83,9 @@ export function makeGenericColumn<TRow>(
           data-inherited={!dirty() && inherited() ? '' : undefined}
           classList={{
             'text-green-700': dirty(),
-            'italic opacity-60': !dirty() && inherited(),
+            // Shared `inherited` utility (italic + muted, AA-checked) rather than opacity-60, which
+            // fell under the contrast floor.
+            inherited: !dirty() && inherited(),
           }}
           title={
             dirty()

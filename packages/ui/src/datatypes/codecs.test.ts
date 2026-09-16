@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { codecRegistry, type CodecContext } from './registry';
 import './codecs';
 
-const ctx = (config: Record<string, unknown> = {}, taxonomySpace?: CodecContext['taxonomySpace']): CodecContext => ({
+const ctx = (
+  config: Record<string, unknown> = {},
+  taxonomySpace?: CodecContext['taxonomySpace'],
+): CodecContext => ({
   config,
   taxonomySpace,
 });
@@ -43,6 +46,30 @@ describe('built-in codecs', () => {
     expect(c.parse('n/a', ctx())).toBeNull();
     expect(c.format('9.99', ctx())).toBe('9.99');
     expect(c.parse(c.format('9.99', ctx()), ctx())).toBe('9.99');
+  });
+
+  /**
+   * The bounds live in `editorConfig` and the cell editor has always enforced them; paste did not,
+   * because only the integer codec read `ctx`. The live case is `wac` — the unit cost — which
+   * declares `min: 0` and so refused a negative through the keyboard while accepting one through
+   * the clipboard.
+   */
+  it('decimal / money: honour the column min and max, as the editor does', () => {
+    const d = codec('decimal');
+    const m = codec('decimal:money');
+
+    expect(d.parse('-5', ctx({ min: 0 }))).toBeNull();
+    expect(m.parse('-5', ctx({ min: 0 }))).toBeNull();
+    // ...including once the currency furniture is stripped, which is how it actually arrives.
+    expect(m.parse('-5,00 €', ctx({ min: 0 }))).toBeNull();
+    expect(m.parse('12.50', ctx({ min: 0 }))).toBe('12.50');
+    expect(d.parse('101', ctx({ max: 100 }))).toBeNull();
+    expect(d.parse('100', ctx({ max: 100 }))).toBe('100');
+    // Bounds are compared numerically while the value stays a decimal STRING — "007" is in range
+    // and is not silently turned into a float on the way through.
+    expect(d.parse('007', ctx({ min: 0, max: 10 }))).toBe('007');
+    // A column that declares neither is unbounded, negatives included (a stock delta, say).
+    expect(d.parse('-5', ctx())).toBe('-5');
   });
 
   it('decimal: normalizes locale separators + grouping whitespace', () => {

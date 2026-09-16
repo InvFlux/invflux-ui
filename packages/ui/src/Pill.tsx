@@ -1,5 +1,12 @@
 import { Show, splitProps, type JSX } from 'solid-js';
-import { iconButtonClass, pillClass, type PillShape, type PillSize, type PillTone, type PillVariant } from './primitives';
+import {
+  iconButtonClass,
+  pillClass,
+  type PillShape,
+  type PillSize,
+  type PillTone,
+  type PillVariant,
+} from './primitives';
 import { paletteStyle } from './tagPalette';
 
 export type { PillShape, PillSize, PillTone, PillVariant };
@@ -64,7 +71,10 @@ export function Pill(props: PillProps): JSX.Element {
       style={
         undefined === local.colorId
           ? local.style
-          : { ...paletteStyle(local.colorId), ...('object' === typeof local.style ? local.style : {}) }
+          : {
+              ...paletteStyle(local.colorId),
+              ...('object' === typeof local.style ? local.style : {}),
+            }
       }
       class={pillClass(
         undefined === local.colorId ? (local.tone ?? 'neutral') : 'none',
@@ -80,7 +90,11 @@ export function Pill(props: PillProps): JSX.Element {
           type="button"
           // Inherits the pill's colour rather than the icon-button muted default: the pill's
           // background may be any runtime colour, and a fixed grey × would vanish on half of them.
-          class={iconButtonClass('xs', false, '-mr-0.5 rounded-full text-current opacity-70 hover:bg-black/10 hover:text-current')}
+          class={iconButtonClass(
+            'xs',
+            false,
+            '-mr-0.5 rounded-full text-current opacity-70 hover:bg-black/10 hover:text-current',
+          )}
           aria-label={local.removeLabel}
           onClick={(e) => {
             e.stopPropagation();

@@ -38,6 +38,12 @@ export interface AppContext {
    * first of them (`/welcome-to-<slug>`), and that screen fetches whatever it needs over REST.
    */
   onboarding?: { pending: string[] };
+  /**
+   * Workbench-wide values the grid needs before its first request. `applyConcurrency` is how many
+   * save requests a bulk edit keeps in flight — the merchant's setting, already clamped server-side.
+   * Absent on an older bootstrap, where the grid's own default applies.
+   */
+  workbench?: { applyConcurrency?: number };
   /** Whether the install holds the Pro SKU — display affordances only, never gating. */
   hasPro: boolean;
 }

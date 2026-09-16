@@ -1,5 +1,9 @@
 import { __ } from '@invflux/i18n';
-import { DEFAULT_PRIMARY_WEIGHT, entityActionRegistry, type EntityActionContext } from '@invflux/ui';
+import {
+  DEFAULT_PRIMARY_WEIGHT,
+  entityActionRegistry,
+  type EntityActionContext,
+} from '@invflux/ui';
 
 /**
  * Core finalize actions for the open receiving-session form, registered once
@@ -25,6 +29,26 @@ export interface PoReceiveActionContext extends EntityActionContext {
   shortCount: number;
   /** The all-open-lines-counted review gate is satisfied (or waived by the lax cap). */
   gateOk: boolean;
+  /**
+   * Whether this user may finish an order on less than was ordered.
+   *
+   * A server-enforced authority, mirrored here so the action is not offered where the API would
+   * refuse it — a worker who counts a short delivery, presses the only button that finishes it and
+   * meets a 403 has been walked through the whole count for nothing. Absent it they still receive
+   * what arrived; only the write-off is out of reach.
+   */
+  canCloseShort: boolean;
+  /**
+   * This count received at least one unit. A count of zeroes is a real count ("checked, none
+   * arrived"), but it has no receipt to confirm and nothing to keep the order open *for* — finishing
+   * short is the one outcome it can have.
+   */
+  anyReceived: boolean;
+  /**
+   * An earlier delivery already landed on this order. Without one, finishing it short on nothing is
+   * not a short delivery but an order that never came, which is cancelling it.
+   */
+  hasEarlierReceipts: boolean;
   /** A receive/finalize mutation is in flight — every action shows disabled to prevent a double-fire. */
   busy: boolean;
   /** Finalize as fully received (every line received in full). */
@@ -59,11 +83,13 @@ export function registerPoReceiveActions(): void {
     disabledReason: (c) =>
       c.busy
         ? __('Working…')
-        : c.isShort
-          ? __('Some lines are short — choose Receive & keep open, or Close short.')
-          : !c.gateOk
-            ? __('Enter a received quantity on every open line (0 is fine) to finalize.')
-            : undefined,
+        : !c.anyReceived
+          ? __('Nothing was counted as arriving — there is no receipt to confirm.')
+          : c.isShort
+            ? __('Some lines are short — choose Receive & keep open, or Close short.')
+            : !c.gateOk
+              ? __('Enter a received quantity on every open line (0 is fine) to finalize.')
+              : undefined,
     run: (c) => c.onConfirm(),
   });
 
@@ -75,7 +101,9 @@ export function registerPoReceiveActions(): void {
     id: 'keep-open',
     label: () => __('Receive & keep open'),
     group: 'primary',
-    isAvailable: (c) => c.isShort,
+    // Only once something arrived: keeping the order open for "the rest" of a delivery that brought
+    // nothing is cancelling the count, which the form offers beside this.
+    isAvailable: (c) => c.isShort && c.anyReceived,
     promoteWhen: (c) => (c.isShort ? DEFAULT_PRIMARY_WEIGHT + 100 : false),
     disabledReason: (c) => (c.busy ? __('Working…') : undefined),
     run: (c) => c.onKeepOpen(),
@@ -84,6 +112,10 @@ export function registerPoReceiveActions(): void {
   // Close short — the terminal write-off: receive what arrived and write off the remainder as a recorded
   // short (never a silent drop), ending the PO. Destructive (below the divider); only offered while
   // short, and gated on every open line being counted.
+  //
+  // Shown-but-disabled rather than hidden when the authority is missing: the worker is looking at a
+  // short delivery and needs to know that finishing the order is a thing someone can do, and that it
+  // is not them. Hiding it would leave them hunting for a button that is not there.
   reg.register<PoReceiveActionContext>(SCOPE, {
     ...core,
     id: 'close-short',
@@ -91,7 +123,17 @@ export function registerPoReceiveActions(): void {
     group: 'destructive',
     isAvailable: (c) => c.isShort,
     disabledReason: (c) =>
-      c.busy ? __('Working…') : !c.gateOk ? __('Enter a received quantity on every open line (0 is fine).') : undefined,
+      c.busy
+        ? __('Working…')
+        : !c.canCloseShort
+          ? __('Finishing an order on less than was ordered needs permission you do not have.')
+          : !c.anyReceived && !c.hasEarlierReceipts
+            ? __(
+                'Nothing has arrived on this order yet — cancel the order rather than finishing it short.',
+              )
+            : !c.gateOk
+              ? __('Enter a received quantity on every open line (0 is fine).')
+              : undefined,
     run: (c) => c.onCloseShort(),
   });
 }

@@ -20,6 +20,26 @@ export function selectionBounds(
 }
 
 /**
+ * The value a cell copies: its staged edit when it carries one, otherwise the persisted value.
+ *
+ * The rule is **copy mirrors the screen**, and it exists because the grid has two sources of truth
+ * for one cell — the host's persisted row and its dirty model — and the renderer reads the second.
+ * A copy path reading the first hands back a value the grid is not showing anywhere, which is
+ * invisible until it is pasted somewhere else. `cutCell` makes it destructive rather than merely
+ * wrong: it copies and then clears the staging, so reading the persisted value there puts the stale
+ * text on the clipboard AND discards the edit, under a success toast.
+ *
+ * `pending` (submitted, awaiting the server's reconcile) is deliberately not consulted: such a cell
+ * still displays its staged value — faded, with a spinner — so that is still what it copies.
+ */
+export function cellCopyValue(
+  staged: { staged: boolean; value: unknown },
+  persisted: unknown,
+): unknown {
+  return staged.staged ? staged.value : persisted;
+}
+
+/**
  * Build the clipboard payload for the current selection. Walks the bounding box row-by-row,
  * column-by-column, calling `formatCell` for selected cells (unselected cells inside the box —
  * possible with multi-range — become empty, preserving TSV shape). Returns the `text/plain`

@@ -1,6 +1,7 @@
-import { onMount, Show, type JSX } from 'solid-js';
+import { __ } from '@invflux/i18n';
+import { onMount, type JSX } from 'solid-js';
 import { Button, type ButtonVariant } from './Button';
-import { Modal } from './Modal';
+import { Modal, ModalFooter, ModalHeader, ModalPanel } from './Modal';
 
 export type ConfirmModalVariant = 'default' | 'warning' | 'danger';
 
@@ -69,15 +70,9 @@ export function ConfirmModal(props: ConfirmModalProps): JSX.Element {
   };
 
   return (
-    <Modal
-      onClose={props.onCancel}
-      closeOnBackdrop={false}
-      backdropClass="flex items-center justify-center bg-black/30 p-6"
-      label={props.title}
-    >
-      <div
-        class="flex w-full max-w-md flex-col overflow-hidden rounded-lg border border-border bg-surface shadow-xl"
-        onClick={(e) => e.stopPropagation()}
+    <Modal onClose={props.onCancel} closeOnBackdrop={false} label={props.title}>
+      <ModalPanel
+        size="md"
         onKeyDown={(e) => {
           if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
             e.preventDefault();
@@ -85,23 +80,24 @@ export function ConfirmModal(props: ConfirmModalProps): JSX.Element {
           }
         }}
       >
-        <div class="border-b border-border bg-surface-raised p-4">
-          <h2 class="text-lg font-semibold text-text">{props.title}</h2>
-        </div>
+        <ModalHeader title={props.title} />
 
         <div class="p-4 text-sm text-text">{props.message}</div>
 
-        <div class="flex justify-end gap-2 border-t border-border bg-surface-raised p-4">
+        <ModalFooter>
           <Button ref={cancelRef} variant="secondary" eagerFocusRing onClick={props.onCancel}>
-            <Show when={props.cancelLabel} fallback="Cancel">
-              {props.cancelLabel}
-            </Show>
+            {props.cancelLabel ?? __('Cancel')}
           </Button>
-          <Button ref={confirmRef} variant={confirmVariant()} eagerFocusRing onClick={props.onConfirm}>
+          <Button
+            ref={confirmRef}
+            variant={confirmVariant()}
+            eagerFocusRing
+            onClick={props.onConfirm}
+          >
             {props.confirmLabel}
           </Button>
-        </div>
-      </div>
+        </ModalFooter>
+      </ModalPanel>
     </Modal>
   );
 }

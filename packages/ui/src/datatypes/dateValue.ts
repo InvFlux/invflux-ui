@@ -9,6 +9,8 @@
  * midnight is treated as date-only (the usual "day stored in a datetime column" case).
  */
 
+import { formatDate, formatTime } from '@invflux/i18n';
+
 /** Parsed date plus whether the source value carried a (non-midnight) time-of-day. */
 export interface ParsedDateValue {
   date: Date;
@@ -33,9 +35,19 @@ export function parseDateValue(value: unknown): ParsedDateValue | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/.exec(s);
   if (m !== null) {
     const [, y, mo, d, h, mi, se] = m;
-    const date = new Date(Number(y), Number(mo) - 1, Number(d), Number(h ?? 0), Number(mi ?? 0), Number(se ?? 0));
+    const date = new Date(
+      Number(y),
+      Number(mo) - 1,
+      Number(d),
+      Number(h ?? 0),
+      Number(mi ?? 0),
+      Number(se ?? 0),
+    );
     if (Number.isNaN(date.getTime())) return null;
-    return { date, hasTime: h !== undefined && !(h === '00' && mi === '00' && (se ?? '00') === '00') };
+    return {
+      date,
+      hasTime: h !== undefined && !(h === '00' && mi === '00' && (se ?? '00') === '00'),
+    };
   }
 
   // Last resort: whatever the runtime can read (e.g. RFC 2822 strings).
@@ -51,8 +63,8 @@ function isLocalMidnight(d: Date): boolean {
 /** Locale display string: date, plus a short time when the value carries one. */
 export function formatDateValue(parsed: ParsedDateValue): string {
   return parsed.hasTime
-    ? `${parsed.date.toLocaleDateString()} ${parsed.date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
-    : parsed.date.toLocaleDateString();
+    ? `${formatDate(parsed.date)} ${formatTime(parsed.date, '', { hour: '2-digit', minute: '2-digit' })}`
+    : formatDate(parsed.date);
 }
 
 /** Canonical clipboard/export string: `YYYY-MM-DD`, plus ` HH:MM` when a time is present. */

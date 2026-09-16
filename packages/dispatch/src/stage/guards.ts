@@ -40,9 +40,6 @@ export function isReadyForAutoAdvance(opts: {
   const mCount = opts.stagedLines.filter((s) => s === 'M').length;
   const wCount = opts.stagedLines.filter((s) => s === 'W').length;
   return (
-    mCount > 0 &&
-    opts.unprocessedCorrections === 0 &&
-    wCount === 0 &&
-    opts.unshippedLineCount === 0
+    mCount > 0 && opts.unprocessedCorrections === 0 && wCount === 0 && opts.unshippedLineCount === 0
   );
 }

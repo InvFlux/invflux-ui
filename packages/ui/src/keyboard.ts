@@ -23,9 +23,9 @@
 export function isTypingTarget(event: Event): boolean {
   for (const node of event.composedPath()) {
     if (
-      node instanceof HTMLInputElement
-      || node instanceof HTMLTextAreaElement
-      || node instanceof HTMLSelectElement
+      node instanceof HTMLInputElement ||
+      node instanceof HTMLTextAreaElement ||
+      node instanceof HTMLSelectElement
     ) {
       return true;
     }

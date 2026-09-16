@@ -1,4 +1,5 @@
-import { For, Show, type JSX } from 'solid-js';
+import { For, Show, createSignal, type JSX } from 'solid-js';
+import { _n, __, formatDateTime, sprintf } from '@invflux/i18n';
 import { createComponentRegistry, type ComponentRegistry } from './datatypes/registry';
 
 /**
@@ -26,6 +27,15 @@ export interface TimelineEvent {
     kind: string | null;
     /** Free-text reference: user id, plugin slug, system component name, … */
     ref: string | null;
+    /**
+     * Display name for the person behind `ref`, resolved at read time.
+     *
+     * Present only for `user` actors the host could resolve; absent for a plugin or system actor,
+     * whose `ref` already reads as a name, and for a user who no longer exists. A renderer falls
+     * back to `ref` rather than inventing a placeholder — the reference is the one identifying
+     * thing the record still holds.
+     */
+    name?: string | null;
   };
   surface: {
     /** `admin_page` | `api` | `cli` | `plugin` | `system` | `import` | `job` */
@@ -130,26 +140,124 @@ timelineRowRegistry.register(
   { default: true },
 );
 
-/** Compact relative-time formatter — "5m ago", "3d ago", …. */
+/**
+ * Whether timeline timestamps read as "11h ago" or as a wall-clock date.
+ *
+ * One preference for every timeline rather than per row or per panel: the question a reader is
+ * answering ("how long ago" vs "exactly when") belongs to the reader, not to the event they happen
+ * to be looking at, and a row that remembered its own mode would leave a column reading half one
+ * way and half the other.
+ *
+ * Persisted per browser. Reads and writes are guarded because storage throws outright in some
+ * contexts (a private window, a thumbnail capture, a browser set to block site data), and a
+ * timestamp that cannot remember a preference is a far smaller problem than a timeline that
+ * refuses to render.
+ */
+const TIME_MODE_KEY = 'invflux:timeline:time-mode';
+export type TimelineTimeMode = 'relative' | 'absolute';
+
+function readTimeMode(): TimelineTimeMode {
+  try {
+    return localStorage.getItem(TIME_MODE_KEY) === 'absolute' ? 'absolute' : 'relative';
+  } catch {
+    return 'relative';
+  }
+}
+
+const [timelineTimeMode, setTimelineTimeModeSignal] =
+  createSignal<TimelineTimeMode>(readTimeMode());
+
+/** The current timestamp mode. Reactive — every mounted timeline re-renders on a change. */
+export { timelineTimeMode };
+
+/** Flip every timeline's timestamps between relative and absolute, and remember the choice. */
+export function toggleTimelineTimeMode(): void {
+  const next: TimelineTimeMode = timelineTimeMode() === 'relative' ? 'absolute' : 'relative';
+  setTimelineTimeModeSignal(next);
+  try {
+    localStorage.setItem(TIME_MODE_KEY, next);
+  } catch {
+    /* preference is not persistable here; the session still honours it */
+  }
+}
+
+/** The timestamp as the reader currently wants it. */
+export function formatEventTime(iso: string | null): string {
+  return timelineTimeMode() === 'absolute' ? formatWallClock(iso) : formatRelative(iso);
+}
+
+/**
+ * Compact relative-time formatter — "5m ago", "3d ago", "in 2d".
+ *
+ * Both directions, at the same resolution. An event timeline only ever looks backwards, so this
+ * used to answer a single flat "in future" for anything ahead of now — which is the whole answer
+ * for a *deadline*, and deadlines read through here too: an order's estimated dispatch is the
+ * number an operator is working against, and "in future" is exactly the part they already knew.
+ */
 export function formatRelative(iso: string | null): string {
   if (!iso) return '—';
   const ts = Date.parse(iso);
   if (Number.isNaN(ts)) return '—';
   const delta = Date.now() - ts;
-  if (delta < 0) return 'in future';
-  const sec = Math.floor(delta / 1000);
-  if (sec < 60) return `${sec}s ago`;
+  const ahead = delta < 0;
+  const sec = Math.floor(Math.abs(delta) / 1000);
   const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
   const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const d = Math.floor(hr / 24);
-  return `${d}d ago`;
+  const day = Math.floor(hr / 24);
+  // The unit letters are inside the msgid, not concatenated onto a number: they abbreviate words
+  // that differ per language, and several languages place the number differently. Ahead and behind
+  // are separate msgids for the same reason — "in %dd" is not "%dd ago" with a word swapped.
+  if (sec < 60)
+    return ahead
+      ? sprintf(_n('in %ds', 'in %ds', sec), sec)
+      : sprintf(_n('%ds ago', '%ds ago', sec), sec);
+  if (min < 60)
+    return ahead
+      ? sprintf(_n('in %dm', 'in %dm', min), min)
+      : sprintf(_n('%dm ago', '%dm ago', min), min);
+  if (hr < 24)
+    return ahead
+      ? sprintf(_n('in %dh', 'in %dh', hr), hr)
+      : sprintf(_n('%dh ago', '%dh ago', hr), hr);
+
+  return ahead
+    ? sprintf(_n('in %dd', 'in %dd', day), day)
+    : sprintf(_n('%dd ago', '%dd ago', day), day);
 }
 
 /**
- * Absolute wall-clock formatter in the **browser's local timezone**. Pair it
- * with {@link formatRelative} so a row reads "1m ago · 27 May 2026, 14:32".
+ * A timestamp that flips between elapsed and wall-clock on click, and takes every other timestamp
+ * on the page with it.
+ *
+ * One control, not three copies of it: the two timeline row shells and the order header's Timeline
+ * card all want the same affordance, and the mode they toggle is a single page-wide preference
+ * ({@link toggleTimelineTimeMode}), so a divergent copy would be a control that looks like the
+ * others and reads a different instant.
+ */
+export function EventTime(props: { at: string | null; class?: string }): JSX.Element {
+  return (
+    <button
+      type="button"
+      class={`cursor-pointer whitespace-nowrap tabular-nums decoration-dotted underline-offset-2 hover:text-gray-700 hover:underline ${props.class ?? 'shrink-0 text-xs text-text-muted'}`}
+      title={
+        timelineTimeMode() === 'relative'
+          ? formatWallClock(props.at)
+          : __('Show the time as an interval')
+      }
+      aria-label={__('Switch between elapsed time and the date')}
+      onClick={() => toggleTimelineTimeMode()}
+    >
+      {formatEventTime(props.at)}
+    </button>
+  );
+}
+
+/**
+ * Absolute wall-clock formatter in the **browser's local timezone**.
+ *
+ * The alternative to {@link formatRelative}, not a companion to it: a row shows one or the other,
+ * chosen by the reader via {@link toggleTimelineTimeMode}. Use {@link formatEventTime} to render
+ * whichever they picked.
  * Relies on the backend sending UTC-unambiguous ISO 8601 (with `Z`/offset);
  * `Date` then converts to the client's zone automatically — no manual tz math.
  */
@@ -157,7 +265,7 @@ export function formatWallClock(iso: string | null): string {
   if (!iso) return '—';
   const ts = Date.parse(iso);
   if (Number.isNaN(ts)) return '—';
-  return new Date(ts).toLocaleString(undefined, {
+  return formatDateTime(ts, '—', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',

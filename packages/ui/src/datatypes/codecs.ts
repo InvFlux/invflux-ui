@@ -1,6 +1,7 @@
-import type { Codec } from './registry';
+import type { Codec, CodecContext } from './registry';
 import { codecRegistry } from './registry';
 import { isoDateValue, parseDateValue } from './dateValue';
+import { STOCK_CONCERN_LABEL } from '../stockConcernLabels';
 
 /**
  * Built-in datatype codecs (§11.8): the round-trippable text representations used for
@@ -9,7 +10,8 @@ import { isoDateValue, parseDateValue } from './dateValue';
  * on import. `decimal:money` resolves to the `decimal` codec via the registry parent chain.
  */
 
-const asString = (value: unknown): string => (value === null || value === undefined ? '' : String(value));
+const asString = (value: unknown): string =>
+  value === null || value === undefined ? '' : String(value);
 
 const numberCodec: Codec = {
   format: (value) => (typeof value === 'number' ? String(value) : ''),
@@ -50,9 +52,28 @@ function normalizeNumeric(text: string): string | null {
   return /^-?\d+(?:\.\d+)?$/.test(t) ? t : null;
 }
 
+/**
+ * Reject a normalized numeric string that falls outside the column's declared `min`/`max`.
+ *
+ * The bounds live in `editorConfig` and the cell editor has always enforced them; paste did not,
+ * because only the integer codec read `ctx`. So a column declaring `min: 0` — `wac`, the unit cost —
+ * accepted a negative through the clipboard that it refused through the keyboard. Comparison is
+ * numeric while the value stays a decimal STRING: these codecs keep the string so a pasted "12.50"
+ * survives as written rather than becoming a float.
+ */
+function withinBounds(value: string | null, ctx: CodecContext): string | null {
+  if (value === null) return null;
+  const n = Number(value);
+  const min = typeof ctx.config.min === 'number' ? ctx.config.min : undefined;
+  const max = typeof ctx.config.max === 'number' ? ctx.config.max : undefined;
+  if (min !== undefined && n < min) return null;
+  if (max !== undefined && n > max) return null;
+  return value;
+}
+
 const decimalCodec: Codec = {
   format: asString,
-  parse: (text) => normalizeNumeric(text),
+  parse: (text, ctx) => withinBounds(normalizeNumeric(text), ctx),
 };
 
 const moneyCodec: Codec = {
@@ -65,7 +86,7 @@ const moneyCodec: Codec = {
   },
   // Money often arrives with a currency symbol / code around the number ("1 096,90 €", "$12.50"):
   // strip anything that isn't a digit / separator / sign / whitespace, then normalize like a decimal.
-  parse: (text) => normalizeNumeric(text.replace(/[^\d.,\-\s]/g, '')),
+  parse: (text, ctx) => withinBounds(normalizeNumeric(text.replace(/[^\d.,\-\s]/g, '')), ctx),
 };
 
 const textCodec: Codec = {
@@ -83,7 +104,9 @@ const enumCodec: Codec = {
     const options = Array.isArray(ctx.config.options) ? (ctx.config.options as unknown[]) : null;
     if (options === null) return t; // no declared option set → accept as-is
     // Options are either bare string values or `{ value, label }` objects (editable enum columns).
-    const values = options.map((o) => (o !== null && typeof o === 'object' ? (o as { value?: unknown }).value : o));
+    const values = options.map((o) =>
+      o !== null && typeof o === 'object' ? (o as { value?: unknown }).value : o,
+    );
     return values.includes(t) ? t : null;
   },
 };
@@ -148,20 +171,16 @@ const termPickerCodec: Codec = {
   },
 };
 
-// Stock-concerns bitmask → human concern names for copy; read-only, so parse never accepts.
-const STOCK_CONCERN_BITS: ReadonlyArray<{ bit: number; label: string }> = [
-  { bit: 0x01, label: 'Stock deficit' },
-  { bit: 0x02, label: 'Inactive product' },
-  { bit: 0x04, label: 'Quality hold' },
-  { bit: 0x08, label: 'Expired batch' },
-  { bit: 0x10, label: 'Expiry risk' },
-  { bit: 0x20, label: 'Warehouse short' },
-];
+// Stock-concerns bitmask → the badge's own concern names, in bit order, for copy; read-only, so
+// parse never accepts.
 const stockConcernsCodec: Codec = {
   format: (value) => {
     const bits = typeof value === 'number' ? value : 0;
-    return STOCK_CONCERN_BITS.filter((c) => (bits & c.bit) !== 0)
-      .map((c) => c.label)
+    return Object.keys(STOCK_CONCERN_LABEL)
+      .map(Number)
+      .sort((a, b) => a - b)
+      .filter((bit) => (bits & bit) !== 0)
+      .map((bit) => STOCK_CONCERN_LABEL[bit]())
       .join(', ');
   },
   parse: () => null,
@@ -185,5 +204,9 @@ codecRegistry.register('enum', 'core.enum', enumCodec, { default: true });
 codecRegistry.register('bool', 'core.bool', boolCodec, { default: true });
 codecRegistry.register('date', 'core.date', dateCodec, { default: true });
 codecRegistry.register('image:url', 'core.image', imageUrlCodec, { default: true });
-codecRegistry.register('term-picker:wc-taxonomy', 'core.term-list', termPickerCodec, { default: true });
-codecRegistry.register('stock-concerns', 'core.stock-concerns', stockConcernsCodec, { default: true });
+codecRegistry.register('term-picker:wc-taxonomy', 'core.term-list', termPickerCodec, {
+  default: true,
+});
+codecRegistry.register('stock-concerns', 'core.stock-concerns', stockConcernsCodec, {
+  default: true,
+});

@@ -1,7 +1,8 @@
 import { __ } from '@invflux/i18n';
 import { createEffect, createSignal, For, type JSX, onCleanup, onMount, Show } from 'solid-js';
 
-const INPUT = 'w-full rounded border border-slate-300 px-1.5 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-primary';
+const INPUT =
+  'w-full rounded border border-slate-300 px-1.5 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-primary';
 
 /** One addable catalogue product (the supplier's catalogue minus products already on the PO). */
 export interface AddOption {
@@ -16,7 +17,11 @@ export interface AddOption {
  * row leaves the list), so a buyer can click down a list. Reused by the draft editor's toolbar button
  * and its append-row product cell.
  */
-export function AddPicker(props: { options: AddOption[]; onAdd: (o: AddOption) => void; onClose: () => void }): JSX.Element {
+export function AddPicker(props: {
+  options: AddOption[];
+  onAdd: (o: AddOption) => void;
+  onClose: () => void;
+}): JSX.Element {
   const [filter, setFilter] = createSignal('');
   const [active, setActive] = createSignal(0);
   let inputRef!: HTMLInputElement;
@@ -25,7 +30,9 @@ export function AddPicker(props: { options: AddOption[]; onAdd: (o: AddOption) =
 
   const filtered = (): AddOption[] => {
     const q = filter().toLowerCase().trim();
-    return '' === q ? props.options : props.options.filter((o) => o.label.toLowerCase().includes(q));
+    return '' === q
+      ? props.options
+      : props.options.filter((o) => o.label.toLowerCase().includes(q));
   };
 
   createEffect(() => {
@@ -62,16 +69,32 @@ export function AddPicker(props: { options: AddOption[]; onAdd: (o: AddOption) =
   };
 
   return (
-    <div ref={rootRef} class="absolute left-0 top-full z-50 mt-1 w-72 rounded border border-slate-200 bg-white shadow-xl">
+    <div
+      ref={rootRef}
+      class="absolute left-0 top-full z-50 mt-1 w-72 rounded border border-slate-200 bg-surface shadow-xl"
+    >
       <div class="p-1.5">
-        <input ref={inputRef} class={INPUT} value={filter()} placeholder={__('Filter products…')} onKeyDown={onKeyDown} onInput={(e) => { setFilter(e.currentTarget.value); setActive(0); }} />
+        <input
+          ref={inputRef}
+          class={INPUT}
+          value={filter()}
+          placeholder={__('Filter products…')}
+          onKeyDown={onKeyDown}
+          onInput={(e) => {
+            setFilter(e.currentTarget.value);
+            setActive(0);
+          }}
+        />
       </div>
       <ul class="max-h-64 overflow-y-auto pb-1">
         <For each={filtered()}>
           {(o, i) => (
             <li
               class="cursor-pointer truncate px-3 py-1.5 font-normal text-slate-700"
-              classList={{ 'bg-primary text-white': i() === active(), 'hover:bg-slate-100': i() !== active() }}
+              classList={{
+                'bg-primary text-white': i() === active(),
+                'hover:bg-slate-100': i() !== active(),
+              }}
               onMouseEnter={() => setActive(i())}
               onClick={() => choose(o)}
             >

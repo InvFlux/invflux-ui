@@ -1,7 +1,14 @@
 import { createSignal, createResource, createEffect, Show, For } from 'solid-js';
-import { __, _x } from '@invflux/i18n';
+import { __, _n, _x, sprintf } from '@invflux/i18n';
 import { Portal } from 'solid-js/web';
-import { Button, ConfirmModal, ToastRegion, useHostNav, buttonClass, WorkbenchLinkIcon } from '@invflux/ui';
+import {
+  Button,
+  ConfirmModal,
+  ToastRegion,
+  useHostNav,
+  buttonClass,
+  WorkbenchLinkIcon,
+} from '@invflux/ui';
 import type { WorkbenchHandles } from '@invflux/ui';
 import { fetchInventorySettings, saveInventorySettings } from './api';
 import { EmbeddedWorkbench } from './EmbeddedWorkbench';
@@ -53,7 +60,6 @@ const rowClass = 'flex items-center gap-3 py-2';
 const errorBoxClass =
   'mb-3 rounded border-l-4 border-error-border bg-error-bg px-3 py-2 text-error-text';
 
-
 export function App(props: AppProps) {
   const hostNav = useHostNav();
   const { apiRoot, nonce } = props.context;
@@ -84,9 +90,10 @@ export function App(props: AppProps) {
    *   - 'override' : invflux → external/none while the Pro lock is enforced (doubles as override gate)
    * Benign external↔none flips carry no governance change and commit directly, without a modal.
    */
-  const [pendingChange, setPendingChange] = createSignal<
-    { target: StockState; kind: 'enabling' | 'disabling' | 'override' } | null
-  >(null);
+  const [pendingChange, setPendingChange] = createSignal<{
+    target: StockState;
+    kind: 'enabling' | 'disabling' | 'override';
+  } | null>(null);
 
   // --- Hidden-WC-input sync ------------------------------------------------
   //
@@ -177,7 +184,12 @@ export function App(props: AppProps) {
    *  disabled). Only bites while InvFlux currently governs — you can't un-govern what isn't governed. */
   const lockedForUser = (): boolean => {
     const d = settings();
-    return d !== undefined && d.enforce_tracking && d.stock_management === 'invflux' && !d.can_override_lock;
+    return (
+      d !== undefined &&
+      d.enforce_tracking &&
+      d.stock_management === 'invflux' &&
+      !d.can_override_lock
+    );
   };
 
   /**
@@ -214,7 +226,7 @@ export function App(props: AppProps) {
       gridApi?.refreshLiveUpdates();
     } catch (err: unknown) {
       setSaveError(
-        err instanceof Error ? err.message : 'Unexpected error saving InvFlux settings.',
+        err instanceof Error ? err.message : __('Unexpected error saving InvFlux settings.'),
       );
     } finally {
       setSaving(false);
@@ -261,13 +273,9 @@ export function App(props: AppProps) {
 
       <Show when={settings.error}>
         <div class={errorBoxClass}>
-          Failed to load InvFlux inventory data.{' '}
-          <Button
-            variant="link"
-            size="sm"
-            onClick={() => void refetch()}
-          >
-            Retry
+          {__('Failed to load InvFlux inventory data.')}{' '}
+          <Button variant="link" size="sm" onClick={() => void refetch()}>
+            {__('Retry')}
           </Button>
         </div>
       </Show>
@@ -275,18 +283,14 @@ export function App(props: AppProps) {
       <Show when={saveError()}>
         <div class={errorBoxClass}>
           {saveError()}{' '}
-          <Button
-            variant="link"
-            size="sm"
-            onClick={() => setSaveError(null)}
-          >
-            Dismiss
+          <Button variant="link" size="sm" onClick={() => setSaveError(null)}>
+            {__('Dismiss')}
           </Button>
         </div>
       </Show>
 
       <Show when={settings.loading}>
-        <p class="italic text-text-muted">Loading InvFlux inventory data…</p>
+        <p class="italic text-text-muted">{__('Loading InvFlux inventory data…')}</p>
       </Show>
 
       <Show when={settings() !== undefined && !settings.loading} fallback={null}>
@@ -298,17 +302,18 @@ export function App(props: AppProps) {
             expose a per-variation toggle. Show a small note linking back to the parent. */}
         <Show when={settings()!.product_type === 'variation'}>
           <div class={rowClass}>
-            <span class={labelClass}>Track stock quantity in InvFlux</span>
+            <span class={labelClass}>{__('Track stock quantity in InvFlux')}</span>
             <span class="text-sm text-text-muted">
-              Configured on the parent product
+              {__('Configured on the parent product')}
               <Show when={settings()!.parent_post_id !== null}>
-                {' '}—{' '}
+                {' '}
+                —{' '}
                 <a
                   class="text-blue-700 hover:underline"
                   href={`post.php?post=${settings()!.parent_post_id}&action=edit`}
-                  title="Open parent product"
+                  title={__('Open parent product')}
                 >
-                  edit parent
+                  {_x('edit parent', 'link to the parent product, after a dash')}
                 </a>
               </Show>
             </span>
@@ -319,7 +324,7 @@ export function App(props: AppProps) {
           {/* flex-wrap so on a narrow tab the segmented control drops below its label instead of
               overflowing the row. */}
           <div class={`${rowClass} flex-wrap`}>
-            <span class={labelClass}>Stock management</span>
+            <span class={labelClass}>{__('Stock management')}</span>
 
             {/* Tri-state segmented control (InvFlux / External / None) — matches the workbench "Stock
                 managed" column. Each segment requests a transition; governance changes (to/from
@@ -336,7 +341,7 @@ export function App(props: AppProps) {
             <div
               class="inline-flex overflow-hidden rounded border border-border"
               role="group"
-              aria-label="Stock management"
+              aria-label={__('Stock management')}
             >
               <For each={stockSegments()}>
                 {(seg) => {
@@ -361,7 +366,10 @@ export function App(props: AppProps) {
                       disabled={disabled()}
                       onClick={() => requestStateChange(seg.value)}
                     >
-                      <Show when={seg.value === 'invflux' && props.context.markUrl} fallback={seg.label}>
+                      <Show
+                        when={seg.value === 'invflux' && props.context.markUrl}
+                        fallback={seg.label}
+                      >
                         <span class="flex items-center gap-2">
                           <img src={props.context.markUrl} alt="" aria-hidden="true" class="w-5" />
                           {seg.label}
@@ -379,17 +387,25 @@ export function App(props: AppProps) {
                 class="inline-flex items-center gap-1 rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-text-muted"
                 title={
                   settings()!.can_override_lock
-                    ? 'Stock tracking is enforced for this store. You can override the lock to turn it off for this product.'
-                    : 'Stock tracking is enforced for this store and can only be changed by an administrator.'
+                    ? __(
+                        'Stock tracking is enforced for this store. You can override the lock to turn it off for this product.',
+                      )
+                    : __(
+                        'Stock tracking is enforced for this store and can only be changed by an administrator.',
+                      )
                 }
               >
-                <span aria-hidden="true">🔒</span> Enforced
+                <span aria-hidden="true">🔒</span>{' '}
+                {_x(
+                  'Enforced',
+                  'badge: the store enforces stock tracking, so it cannot be turned off here',
+                )}
               </span>
             </Show>
 
             <div class="flex-1" />
             <Show when={saving()}>
-              <span class="mr-1 text-xs italic text-text-muted">Saving…</span>
+              <span class="mr-1 text-xs italic text-text-muted">{__('Saving…')}</span>
             </Show>
           </div>
         </Show>
@@ -426,7 +442,10 @@ export function App(props: AppProps) {
             settings()!.product_type === 'variable' ? (
               <a
                 class={buttonClass('secondary', 'md', 'px-2!')}
-                href={hostNav.routeHref('/workbench', `post_ids=${props.productId}&bring_children=1`)}
+                href={hostNav.routeHref(
+                  '/workbench',
+                  `post_ids=${props.productId}&bring_children=1`,
+                )}
                 title={__('Manage product in workbench')}
                 aria-label={__('Manage product in workbench')}
               >
@@ -442,16 +461,35 @@ export function App(props: AppProps) {
       <Show when={pendingChange()?.kind === 'enabling'}>
         <Portal mount={props.portalRoot}>
           <ConfirmModal
-            title="Let InvFlux manage this product?"
-            confirmLabel="InvFlux manages stock"
+            title={__('Let InvFlux manage this product?')}
+            confirmLabel={__('InvFlux manages stock')}
             message={
-              <p>
-                InvFlux will adopt WooCommerce's current stock value
-                <Show when={settings()!.wc_stock !== null}>
-                  {' '}(<span class="font-semibold">{settings()!.wc_stock}</span>)
-                </Show>
-                {' '}as the for-sale quantity and start managing this product's stock.
-              </p>
+              <Show
+                when={settings()!.wc_stock !== null}
+                fallback={
+                  <p>
+                    {__(
+                      "InvFlux will adopt WooCommerce's current stock value as the for-sale quantity and start managing this product's stock.",
+                    )}
+                  </p>
+                }
+              >
+                {(() => {
+                  const sentence = __(
+                    /* translators: %s: WooCommerce's current stock quantity, shown in bold */
+                    "InvFlux will adopt WooCommerce's current stock value (%s) as the for-sale quantity and start managing this product's stock.",
+                  );
+                  // Split on the placeholder rather than sprintf() it, so the figure keeps its bold.
+                  const [before, after] = sentence.split(/%(?:1\$)?s/);
+                  return (
+                    <p>
+                      {before}
+                      <span class="font-semibold">{settings()!.wc_stock}</span>
+                      {after}
+                    </p>
+                  );
+                })()}
+              </Show>
             }
             onConfirm={() => void persistState('invflux')}
             onCancel={cancelChange}
@@ -465,26 +503,32 @@ export function App(props: AppProps) {
       <Show when={pendingChange()?.kind === 'disabling'}>
         <Portal mount={props.portalRoot}>
           <ConfirmModal
-            title="Stop InvFlux managing this product?"
+            title={__('Stop InvFlux managing this product?')}
             variant="danger"
             confirmLabel={
               pendingChange()!.target === 'external'
-                ? 'Hand over to WooCommerce'
-                : 'Stop tracking'
+                ? __('Hand over to WooCommerce')
+                : __('Stop tracking')
             }
             message={
               <>
                 <p>
-                  InvFlux will stop managing this product's stock.{' '}
+                  {__("InvFlux will stop managing this product's stock.")}{' '}
                   {pendingChange()!.target === 'external'
-                    ? 'WooCommerce will manage the quantity instead.'
-                    : "WooCommerce won't track it either — its stock will be untracked."}
+                    ? __('WooCommerce will manage the quantity instead.')
+                    : __("WooCommerce won't track it either — its stock will be untracked.")}
                 </p>
                 <Show when={settings()!.ledger_entry_count > 0}>
                   <p class="mt-2 text-text-muted">
-                    This product has {settings()!.ledger_entry_count} recorded movement
-                    {settings()!.ledger_entry_count === 1 ? '' : 's'} in InvFlux; existing history is
-                    preserved.
+                    {sprintf(
+                      /* translators: %d: number of stock movements recorded for this product */
+                      _n(
+                        'This product has %d recorded movement in InvFlux; existing history is preserved.',
+                        'This product has %d recorded movements in InvFlux; existing history is preserved.',
+                        settings()!.ledger_entry_count,
+                      ),
+                      settings()!.ledger_entry_count,
+                    )}
                   </p>
                 </Show>
               </>
@@ -501,22 +545,32 @@ export function App(props: AppProps) {
       <Show when={pendingChange()?.kind === 'override'}>
         <Portal mount={props.portalRoot}>
           <ConfirmModal
-            title="Override the tracking lock?"
+            title={__('Override the tracking lock?')}
             variant="danger"
-            confirmLabel="Override and stop managing"
+            confirmLabel={__('Override and stop managing')}
             message={
               <>
                 <p>
-                  Stock tracking is <span class="font-semibold">enforced store-wide</span>. Turning it
-                  off for this product overrides that policy —{' '}
+                  <span class="font-semibold">{__('Stock tracking is enforced store-wide.')}</span>{' '}
                   {pendingChange()!.target === 'external'
-                    ? 'WooCommerce will manage the quantity instead.'
-                    : "this product's stock will no longer be tracked."}
+                    ? __(
+                        'Turning it off for this product overrides that policy — WooCommerce will manage the quantity instead.',
+                      )
+                    : __(
+                        "Turning it off for this product overrides that policy — this product's stock will no longer be tracked.",
+                      )}
                 </p>
                 <Show when={settings()!.ledger_entry_count > 0}>
                   <p class="mt-2 text-text-muted">
-                    This product has {settings()!.ledger_entry_count} recorded movement
-                    {settings()!.ledger_entry_count === 1 ? '' : 's'}; existing history is preserved.
+                    {sprintf(
+                      /* translators: %d: number of stock movements recorded for this product */
+                      _n(
+                        'This product has %d recorded movement; existing history is preserved.',
+                        'This product has %d recorded movements; existing history is preserved.',
+                        settings()!.ledger_entry_count,
+                      ),
+                      settings()!.ledger_entry_count,
+                    )}
                   </p>
                 </Show>
               </>

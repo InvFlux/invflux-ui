@@ -65,21 +65,36 @@ export const WC_ORDER_STATUS_COLOR: Readonly<Record<string, number>> = {
  */
 export const WC_ORDER_STATUS_FALLBACK_COLOR = 0;
 
-/** InvFlux dispatch status. Staged is the actionable one, so it takes the palette's ready-green. */
+/**
+ * InvFlux dispatch status. Staged is the actionable one, so it takes the palette's ready-green.
+ *
+ * `Cancelled` is a **grey, not a red**, by the same rule that makes the host's `failed` grey above:
+ * colour encodes what the merchant must do, and a cancelled dispatch is terminal — there is nothing
+ * left to do on that row. A red-hued pill on a scan-first queue reads as "needs attention" and
+ * spends the operator's eye on the one row that has none. It is the *darker* grey, so it stays
+ * tellable apart from `Untouched`'s light one: nothing-yet and nothing-ever are both quiet, but
+ * they are not the same thing. (Owner decision, 2026-08-25.)
+ */
 export const DISPATCH_STATUS_COLOR: Readonly<Record<string, number>> = {
   Untouched: 0, // Light grey — nothing has happened yet
   Started: 1, // Light blue — in flight
   Staged: 16, // Light green — ready to ship, the queue's actionable state
   Shipped: 2, // Light teal — done and cool, adjacent to Started without reading as it
-  Cancelled: 5, // Light coral
+  Cancelled: 6, // Grey — terminal, nothing to act on; deliberately NOT a red
 };
 
-/** Dispatch stage codes, as drawn on an order line. */
+/**
+ * Dispatch stage codes, as drawn on an order line.
+ *
+ * `E` is the only red-hued entry left in this file, and that is the point: coral now means exactly
+ * one thing across every surface — *a human has to do something about this row*. It was worth
+ * nothing while it also meant "cancelled".
+ */
 export const STAGE_COLOR: Readonly<Record<string, number>> = {
   '': 0, // Pending — Light grey
   M: 16, // In box — Light green
   W: 13, // Put aside — Light orange
-  E: 5, // Error — Light coral
+  E: 5, // Error — Light coral, the one attention signal
 };
 
 /**
@@ -89,6 +104,9 @@ export const STAGE_COLOR: Readonly<Record<string, number>> = {
  * `received` and `partially_received` are deliberately the same hue at different saturations: a
  * partial receipt is the same event, incomplete, and reading it as a *duller* green says that
  * better than an unrelated colour would.
+ *
+ * `cancelled` is grey for the reason given on the dispatch map — terminal, nothing to act on — and
+ * the same grey, since it is the same word meaning the same thing to the same reader.
  */
 export const PROCUREMENT_STATUS_COLOR: Readonly<Record<string, number>> = {
   // supplier status
@@ -99,9 +117,13 @@ export const PROCUREMENT_STATUS_COLOR: Readonly<Record<string, number>> = {
   submitted: 1, // Light blue
   in_transit: 2, // Light teal
   in_reception: 3, // Light purple
-  partially_received: 17, // Sage — received, duller
-  received: 16, // Light green
-  cancelled: 5, // Light coral
+  // The two greens carry the pending/settled split the rest of these maps use warm-vs-cool for: a
+  // part-delivered order still owes stock, so it takes the yellow-leaning green that reads as work
+  // in progress; a finished one takes the cool mint. They were a single hue before, which made two
+  // different answers look like one.
+  partially_received: 16, // Light green — yellow-leaning, still owed
+  received: 17, // Mint — cool, settled
+  cancelled: 6, // Grey — terminal, nothing to act on; deliberately NOT a red
   archived: 21, // Dusty rose — put away, muted, but distinct from `inactive`
 };
 

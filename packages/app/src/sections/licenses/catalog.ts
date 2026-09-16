@@ -189,12 +189,7 @@ export function shouldShowOwnedLicenses(
  * another confirmation link.
  */
 export type AccountOutcome =
-  | 'ok'
-  | 'not_linked'
-  | 'awaiting_confirmation'
-  | 'withdrawn'
-  | 'unreachable'
-  | 'failed';
+  'ok' | 'not_linked' | 'awaiting_confirmation' | 'withdrawn' | 'unreachable' | 'failed';
 
 export function classify(error: unknown): AccountOutcome {
   if (!error) return 'ok';
