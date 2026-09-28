@@ -31,7 +31,7 @@ describe('resolvePastedCell', () => {
   it('clears on empty text instead of asking the codec — the reported bug', () => {
     // Every numeric codec answers null to '', which the caller reads as "invalid". Copying three
     // cells whose middle one was blank and pasting them straight back therefore failed with
-    // `Cannot paste "" into Reorder threshold`, mutating nothing.
+    // `Cannot paste "" into Low stock threshold`, mutating nothing.
     expect(resolvePastedCell('', clearable(null), parseInt10)).toEqual({
       kind: 'stage',
       value: null,

@@ -84,6 +84,30 @@ describe('buttonClass', () => {
     expect(iconButtonClass('sm', true)).toContain('hover:text-red-600');
   });
 
+  // The third face of it, and this one shipped: a caller that named its own ink through `classList`
+  // still received ICON_BUTTON_INK from here, and lost to it — `text-text-muted` is emitted *after*
+  // `text-primary` in the compiled sheet, and equal specificity means source order decides. The
+  // symptom was an active state that drew muted, which reads as the state not applying at all.
+  // Naming the ink in `extra` is the escape hatch, so it has to actually suppress the default.
+  it('icon buttons emit one ink once the caller names one', () => {
+    const named = iconButtonClass('xs', false, 'hover:bg-transparent text-primary');
+    expect(named).toContain('text-primary');
+    expect(named).not.toContain('text-text-muted');
+    expect(named).not.toContain('hover:text-text');
+
+    // A variant-prefixed ink counts as naming one too — that is how a hover colour is expressed.
+    const withHover = iconButtonClass(
+      'xs',
+      false,
+      'hover:bg-transparent text-text-muted hover:text-primary',
+    );
+    expect((withHover.match(/(?:^|\s)hover:text-\S+/g) ?? []).length).toBe(1);
+    expect(withHover).toContain('hover:text-primary');
+
+    // …and the default still arrives for a caller that names none.
+    expect(iconButtonClass('xs', false, 'hover:bg-transparent')).toContain('text-text-muted');
+  });
+
   // The bug that motivated the whole suite: hand-rolled buttons kept shipping without a pointer
   // cursor. Every variant/size combination must carry it, and the disabled counterpart.
   it('carries cursor-pointer and the disabled affordances on every variant and size', () => {

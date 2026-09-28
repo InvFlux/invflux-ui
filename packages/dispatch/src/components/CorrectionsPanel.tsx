@@ -21,7 +21,7 @@ export function CorrectionsPanel(props: {
   orderHexId: string;
   order: DispatchOrderSummary;
   lines: DispatchOrderLine[];
-  onOpenCorrection: (lineId: string | null) => void;
+  onOpenCorrection: (lineId: number | null) => void;
 }) {
   const ctx = useDispatch();
   const correctionsQuery = useOrderCorrectionsQuery(() => props.orderHexId);
@@ -33,8 +33,8 @@ export function CorrectionsPanel(props: {
   const [expanded, setExpanded] = createSignal(true);
 
   const linesById = createMemo(() => {
-    const map = new Map<string, DispatchOrderLine>();
-    for (const line of props.lines) map.set(line.id, line);
+    const map = new Map<number, DispatchOrderLine>();
+    for (const line of props.lines) map.set(line.lineId, line);
     return map;
   });
 
@@ -158,9 +158,14 @@ export function CorrectionsPanel(props: {
               <For each={corrections()}>
                 {(c) => {
                   const line = linesById().get(c.lineId);
+                  // The line is named when it is still on the order; a correction outlives the
+                  // line it corrected, and then its number is all there is to show.
                   const lineLabel = line
                     ? line.name
-                    : sprintf(__('Line %s…'), c.lineId.slice(0, 8));
+                    : sprintf(
+                        _x('Line %d', 'correction whose line is no longer on the order'),
+                        c.lineId,
+                      );
                   // In the batch model, processing IS the refund confirmation
                   // (auto or attested) — there is no post-processing "refund
                   // pending" sub-state. A processed correction is simply Processed.

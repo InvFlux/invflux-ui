@@ -1,6 +1,6 @@
 {
   "name": "@invflux/app",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Unified InvFlux admin SPA \u2014 one persistent Solid app hosting every admin surface as a lazy route (arch-unified-admin-spa.md).",

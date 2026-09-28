@@ -38,6 +38,17 @@ export const qk = {
     grid: (...axes: readonly unknown[]): Key => ['workbench', 'grid', ...axes],
   },
 
+  /**
+   * The merchant's own translations of a label, keyed by the entity they belong to.
+   *
+   * Top-level rather than under the surface that happens to edit them: one table holds every
+   * labelled entity's translations, and a tag's live in the same place a column header's do.
+   */
+  labels: {
+    all: ['labels'] as const,
+    forEntity: (entityType: string, entityKey: string): Key => ['labels', entityType, entityKey],
+  },
+
   dispatch: {
     all: ['dispatch'] as const,
     /** The order queue. A sibling of `order`, never its ancestor — see rule 1. */

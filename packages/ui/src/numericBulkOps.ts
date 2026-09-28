@@ -168,11 +168,17 @@ export function decimalsForValues(isMoney: boolean, values: readonly string[]): 
   return Math.min(seen, 6);
 }
 
-/** Numeric columns the operators apply to: money and the `number*` family. */
+/**
+ * Numeric columns the operators apply to: the whole `decimal` family — bare `decimal` included, which
+ * is what the Weight column and any plain decimal a host declares use — and the `number*` family.
+ *
+ * Bare `decimal` is matched by equality rather than a prefix, so a datatype that merely *starts*
+ * "decimal" without being one (`decimalish`) is still text. Getting this wrong is quiet rather than
+ * loud: an unmatched numeric column silently renders the plain text control and simply has no
+ * "increase by %", which reads as a missing feature rather than a bug.
+ */
 export function isNumericDataType(dataType: string): boolean {
-  return (
-    dataType === 'decimal:money' || dataType.startsWith('decimal:') || dataType.startsWith('number')
-  );
+  return dataType === 'decimal' || dataType.startsWith('decimal:') || dataType.startsWith('number');
 }
 
 /** Money is emitted as a fixed-decimal string; other numerics as numbers (WC stores decimals as strings). */

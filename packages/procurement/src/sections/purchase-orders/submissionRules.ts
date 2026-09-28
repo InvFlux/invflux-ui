@@ -19,9 +19,18 @@ export function effectiveCost(line: PoLine): number | null {
   return null === c ? null : Number(c);
 }
 
+/**
+ * The quantity a line would actually be ordered at: the typed one, or the suggestion it inherits
+ * while the cell is empty. This is what submission freezes into the line, so it is also what decides
+ * whether the line survives — an inherited quantity is a value, not a missing one.
+ */
+export function effectiveQty(line: PoLine): number {
+  return line.qtyRequested ?? line.suggestedQty ?? 0;
+}
+
 /** Why this line would be pruned at submission, or null when it survives. */
 export function pruneReason(line: PoLine): PruneReason | null {
-  if (line.qtyRequested <= 0) return 'zero_qty';
+  if (effectiveQty(line) <= 0) return 'zero_qty';
   const c = effectiveCost(line);
   return null === c || c <= 0 ? 'no_price' : null;
 }

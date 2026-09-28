@@ -153,6 +153,19 @@ describe('operator predicates', () => {
     expect(isMoneyDataType('decimal:money')).toBe(true);
     expect(isMoneyDataType('number')).toBe(false);
   });
+
+  // Bare `decimal` is what the shipped Weight column declares, and what a host reaches for when its
+  // number is neither money nor a subtype. Missing it costs no error — the column just renders the
+  // text control with no operators — so only a test keeps it matched.
+  it('treats a bare decimal as numeric, but not money', () => {
+    expect(isNumericDataType('decimal')).toBe(true);
+    expect(isMoneyDataType('decimal')).toBe(false);
+  });
+
+  it('does not match a datatype that merely starts with the word', () => {
+    expect(isNumericDataType('decimalish')).toBe(false);
+    expect(isMoneyDataType('decimalish')).toBe(false);
+  });
 });
 
 describe('parseNumericValue', () => {

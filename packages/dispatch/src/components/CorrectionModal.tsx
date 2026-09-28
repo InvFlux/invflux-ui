@@ -66,8 +66,8 @@ export function CorrectionModal(props: {
   lines: DispatchOrderLine[];
   types: CorrectionType[];
   reasons: CorrectionReason[];
-  /** Pre-target one line on mount. Pass `null` to let the user pick. */
-  presetLineId: string | null;
+  /** Pre-target one line on mount, by its number within the order. `null` lets the user pick. */
+  presetLineId: number | null;
   onClose: () => void;
 }) {
   const createMutation = useCreateCorrectionMutation(() => props.orderHexId);
@@ -100,15 +100,16 @@ export function CorrectionModal(props: {
   // Initial line: the preset if it has something correctable, else the first line that does, else
   // the first line at all. The server rejects qty=0 anyway, but the UI shouldn't lead with a dead
   // selection if a better one is available.
-  function initialLineId(): string {
-    const preset = props.lines.find((l) => l.id === props.presetLineId);
-    if (preset && correctable(preset, timing()) > 0) return preset.id;
+  // Line numbers start at 1, so 0 is "no line" — reachable only on an order with no lines at all.
+  function initialLineId(): number {
+    const preset = props.lines.find((l) => l.lineId === props.presetLineId);
+    if (preset && correctable(preset, timing()) > 0) return preset.lineId;
     const first = props.lines.find((l) => correctable(l, timing()) > 0);
-    return first?.id ?? props.lines[0]?.id ?? '';
+    return first?.lineId ?? props.lines[0]?.lineId ?? 0;
   }
 
   const [lineId, setLineId] = createSignal(initialLineId());
-  const selectedLine = createMemo(() => props.lines.find((l) => l.id === lineId()));
+  const selectedLine = createMemo(() => props.lines.find((l) => l.lineId === lineId()));
 
   // A line short of stock is almost always corrected because the units are not there: the
   // merchant's side and reason "out of stock" — a cancellation, since those units were never covered.
@@ -149,7 +150,7 @@ export function CorrectionModal(props: {
     if (!partiesFor(next).includes(party())) setParty('merchant');
     const line = selectedLine();
     if (!line || correctable(line, next) === 0) {
-      setLineId(props.lines.find((l) => correctable(l, next) > 0)?.id ?? lineId());
+      setLineId(props.lines.find((l) => correctable(l, next) > 0)?.lineId ?? lineId());
     }
     resetReason();
   }
@@ -280,7 +281,7 @@ export function CorrectionModal(props: {
       // onSuccess still runs (cache patching), and is finished before
       // this await resolves.
       await createMutation.mutateAsync({
-        lineId: line.id,
+        lineId: line.lineId,
         typeCode: type.code,
         qty: qty(),
         note: note().trim() === '' ? null : note(),
@@ -311,14 +312,16 @@ export function CorrectionModal(props: {
             <div class="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
               <label class="md:col-span-10 block text-xs">
                 <span class="block text-gray-600 mb-1">{_x('Line', 'correction form field')}</span>
+                {/* A select's value is a DOM string whatever the option was given, so the line
+                    number is read back out of the change event rather than passed through. */}
                 <select
                   class="w-full text-sm border border-gray-300 rounded pl-2 pr-4 py-1 bg-surface"
                   value={lineId()}
-                  onChange={(e) => setLineId(e.currentTarget.value)}
+                  onChange={(e) => setLineId(Number(e.currentTarget.value))}
                 >
                   <For each={props.lines}>
                     {(line) => (
-                      <option value={line.id} disabled={correctable(line, timing()) === 0}>
+                      <option value={line.lineId} disabled={correctable(line, timing()) === 0}>
                         {line.name} ({line.sku || '—'}) · {correctable(line, timing())} avail
                       </option>
                     )}

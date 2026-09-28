@@ -691,19 +691,39 @@ export function ImportWizard(props: ImportWizardProps): JSX.Element {
                           <Show when={keyCandidateCols().includes(i)}>
                             <button
                               type="button"
-                              class={iconButtonClass('xs', false, 'hover:bg-transparent')}
-                              classList={{
-                                'text-primary': effectiveKeyCol() === i,
-                                'text-gray-300 hover:text-gray-500': effectiveKeyCol() !== i,
-                              }}
+                              // The ink rides in `extra`, never a `classList` override. Both are
+                              // plain `text-*` utilities of equal specificity, so an override wins
+                              // only by sitting later in the compiled sheet — and `text-text-muted`
+                              // is emitted after `text-primary`, so the override silently lost and
+                              // the active key drew muted. Naming the ink here makes
+                              // `iconButtonClass` omit its own, leaving one declaration and no race.
+                              class={iconButtonClass(
+                                'xs',
+                                false,
+                                `hover:bg-transparent ${
+                                  effectiveKeyCol() === i
+                                    ? 'text-primary'
+                                    : 'text-text-muted hover:text-primary'
+                                }`,
+                              )}
                               title={
                                 effectiveKeyCol() === i
                                   ? __('Matching on this column (click to switch away)')
-                                  : __('Use this column to match')
+                                  : isImportCol(i)
+                                    ? __(
+                                        'Match on this column instead — its values would then not be imported',
+                                      )
+                                    : __('Use this column to match')
                               }
                               aria-pressed={effectiveKeyCol() === i}
                               onClick={() => toggleKey(i)}
                             >
+                              {/* Solid on the column being matched on, hollow on a switchable
+                                  alternative. Colour alone left the two roles looking simultaneous:
+                                  a candidate that is also a value column lights this key *and* the
+                                  Import mark, and nothing said the first click would trade one for
+                                  the other. Filling the outline keeps the stroke, so both states
+                                  occupy the same box and the column does not jump between rows. */}
                               <svg
                                 viewBox="0 0 24 24"
                                 fill="none"
@@ -714,6 +734,7 @@ export function ImportWizard(props: ImportWizardProps): JSX.Element {
                                 <path
                                   stroke-linecap="round"
                                   stroke-linejoin="round"
+                                  fill={effectiveKeyCol() === i ? 'currentColor' : 'none'}
                                   d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"
                                 />
                               </svg>

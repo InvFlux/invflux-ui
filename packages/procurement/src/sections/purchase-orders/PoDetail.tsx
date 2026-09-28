@@ -1,4 +1,13 @@
-import { __, _n, _x, formatDate, formatDateOnly, formatDateTime, sprintf } from '@invflux/i18n';
+import {
+  __,
+  _n,
+  _x,
+  formatDate,
+  formatDateOnly,
+  formatDateTime,
+  formatNumber,
+  sprintf,
+} from '@invflux/i18n';
 import {
   Button,
   ColumnPicker,
@@ -6,6 +15,8 @@ import {
   DropdownMenu,
   ErrorBanner,
   ConfirmModal,
+  createViewportFill,
+  FoldingSection,
   type PickableColumn,
   SegmentedControl,
   Select,
@@ -49,7 +60,13 @@ import { SHORT_REASONS } from './shortReasons';
 import { pruneReason, submittableLines } from './submissionRules';
 import { IssueDraftModal } from './IssueDraftModal';
 import type { SupplierProductsResponse } from '../suppliers/types';
-import type { PoEventsResponse, PoLine, PoTimelineEvent, PurchaseOrderDetail } from './types';
+import type {
+  PoEventsResponse,
+  PoLine,
+  PoLinesResponse,
+  PoTimelineEvent,
+  PurchaseOrderDetail,
+} from './types';
 
 /** A draft line the server would drop at submission (no quantity, or no price even after inheriting). */
 interface PrunePreview {
@@ -83,6 +100,14 @@ const STAGE_CANCELLED = 'cancelled';
 // Register the core po.detail title-bar actions once (idempotent). Add-ons contribute more via the
 // same shared entity-action registry.
 registerPoDetailActions();
+
+/**
+ * Space left under the read-only lines table: one Activity header row plus an `mb-2`'s clearance.
+ *
+ * Must agree with `FOOTER_GUTTER` in `PoDraftGrid` — the same Activity header sits under both
+ * tables, so a value changed on one side alone clips it on the other.
+ */
+const READ_FOOTER_GUTTER = '3.25rem';
 
 /**
  * Purchase-order detail (#/purchase-orders/:id) — the lifecycle view. This first slice is the
@@ -122,9 +147,16 @@ export function PoDetail(props: { id: string }): JSX.Element {
   // query below can poll on it without referring to its own result (which types as a cycle).
   const [countingNow, setCountingNow] = createSignal(false);
 
+  // The header alone. On a large order the lines are effectively the whole payload — 974 KB against
+  // the header's 0.6 KB on a 1,760-line draft — so fetching them together meant the page showed
+  // "Loading…" and nothing else for as long as they took. Split, the page is up immediately and only
+  // the grid waits for what the grid needs.
   const query = createQuery(() => ({
     queryKey: ['procurement', 'purchase-orders', props.id],
-    queryFn: () => api.get<PurchaseOrderDetail>(`/procurement/purchase-orders/${props.id}`),
+    // `lines` goes through the params argument, never appended to the path: the REST root is the
+    // `?rest_route=` form, so a hand-written `?` makes a second one and the route arrives literal.
+    queryFn: () =>
+      api.get<PurchaseOrderDetail>(`/procurement/purchase-orders/${props.id}`, { lines: 0 }),
     // Poll while a delivery is being counted somewhere else, so this page reflects what the dock
     // is doing without the buyer reloading it. A hidden pane stops it — the surface stays mounted
     // behind another tab, and polling from there is work nobody is looking at.
@@ -152,11 +184,24 @@ export function PoDetail(props: { id: string }): JSX.Element {
 
   // Activity timeline (who did what when). Separate query so it refreshes on its own key; invalidated
   // alongside the PO on any mutation. Read-only — needs stock-view.
+  //
+  // It waits for the section to be opened, because the section is shut on arrival and the header
+  // already carries the count its label needs. Latched rather than tracking `open`: once the events
+  // are here, folding the section away is not a reason to stop keeping them current.
+  const [activityWanted, setActivityWanted] = createSignal(false);
   const eventsQuery = createQuery(() => ({
     queryKey: ['procurement', 'purchase-orders', props.id, 'events'],
     queryFn: () => api.get<PoEventsResponse>(`/procurement/purchase-orders/${props.id}/events`),
+    enabled: activityWanted(),
   }));
   const events = (): PoTimelineEvent[] => eventsQuery.data?.events ?? [];
+  /**
+   * The number on the fold's header: the server's count until the events themselves arrive, then
+   * their own length. Both count timeline rows, so the label does not jump when the section opens —
+   * and if a mutation lands while it is open, the loaded list is the fresher of the two.
+   */
+  const eventCount = (): number =>
+    eventsQuery.data ? events().length : (query.data?.purchaseOrder.eventCount ?? 0);
 
   // Mirror "a count is open" out of the query result, which is what the poll above reads. Written
   // here rather than read directly in the query options, where referring to the query's own data
@@ -326,9 +371,21 @@ export function PoDetail(props: { id: string }): JSX.Element {
   }));
 
   const po = () => query.data?.purchaseOrder;
-  const lines = (): PoLine[] => query.data?.lines ?? [];
+  // Its own key, so the header's cache entry is untouched by a line write and a line refetch does
+  // not drag the header through a loading state. The `purchase-orders` prefix still covers both, so
+  // every existing invalidation keeps working.
+  const linesQuery = createQuery(() => ({
+    queryKey: ['procurement', 'purchase-orders', props.id, 'lines'],
+    queryFn: () => api.get<PoLinesResponse>(`/procurement/purchase-orders/${props.id}/lines`),
+    refetchInterval: () => (paneActive() && countingNow() ? POLL_MS : false),
+  }));
+
+  const lines = (): PoLine[] => linesQuery.data?.lines ?? [];
   const decimals = (): number => po()?.costDecimals ?? 2;
   const fmt = (v: string | null): string => (null === v ? '—' : Number(v).toFixed(decimals()));
+  // The Activity section's own box — scrolled into view when it opens.
+  let activityEl: HTMLDivElement | undefined;
+
   const grandTotal = createMemo(() =>
     lines().reduce((sum, l) => sum + (null === l.lineTotal ? 0 : Number(l.lineTotal)), 0),
   );
@@ -338,9 +395,11 @@ export function PoDetail(props: { id: string }): JSX.Element {
   // Supplier catalogue — only needed by the submit modal (MOQ / case-pack checks + [Fix all quantities]);
   // fetched once the PO is a draft. Same queryKey as PoLinesEditor's, so TanStack de-dupes the request.
   const catalogue = createQuery(() => ({
-    queryKey: ['procurement', 'suppliers', po()?.supplierId ?? 0, 'products'],
+    queryKey: ['procurement', 'suppliers', po()?.supplierId ?? 0, 'products', 'po', props.id],
     queryFn: () =>
-      api.get<SupplierProductsResponse>(`/procurement/suppliers/${po()?.supplierId}/products`),
+      api.get<SupplierProductsResponse>(`/procurement/suppliers/${po()?.supplierId}/products`, {
+        po_id: props.id,
+      }),
     enabled: isDraft() && undefined !== po()?.supplierId,
   }));
   const moqFor = (subjectId: number): number | null =>
@@ -865,7 +924,11 @@ export function PoDetail(props: { id: string }): JSX.Element {
                   {(number) => <span>{number()}</span>}
                 </Show>
 
-                <StatusPill status={p().stage} />
+                {/* The stage in its raw form beside the rendered pill: a check reads the state
+                    rather than parsing a translated label that also appears as a column header. */}
+                <span data-testid="po-status" data-stage={p().stage}>
+                  <StatusPill status={p().stage} />
+                </span>
 
                 <span class="font-normal text-text-muted">
                   {_x('to', 'purchase order … to {supplier}')}
@@ -1418,7 +1481,15 @@ export function PoDetail(props: { id: string }): JSX.Element {
                           the optional identifier columns can outgrow any viewport, and a body that
                           scrolls horizontally takes the whole layout with it. `overflow-x-auto`
                           also clips the corners, so the rounding survives without overflow-hidden. */}
-                      <div class="overflow-x-auto rounded border border-border bg-surface">
+                      {/* Filled to the viewport like the draft grid, and for the same reason: a
+                          sent order's lines run to whatever length they run to, and a table that
+                          pushes the page down puts the Activity header — which carries the total —
+                          below the fold. `overflow-auto` now, not just `-x`: the box owns both
+                          axes once its height is fixed. */}
+                      <ViewportFilled
+                        gutter={READ_FOOTER_GUTTER}
+                        class="box-border overflow-auto rounded border border-border bg-surface"
+                      >
                         {/* `min-w-full`, not `w-full`: the latter pins the table to the box and makes
                             the columns compress instead, so the scroll container it sits in would
                             never have anything to scroll. */}
@@ -1603,26 +1674,12 @@ export function PoDetail(props: { id: string }): JSX.Element {
                               </tr>
                             </Show>
                           </tbody>
-                          {/* The grand total is the sum of the Line total column, so it goes with
-                              that column: with it hidden there is no column for the figure to sit
-                              under, and a total floating past the last header is worse than none. */}
-                          <Show when={lines().length > 0 && shows('line_total')}>
-                            <tfoot>
-                              <tr>
-                                <td
-                                  colspan={readColCount() - 1}
-                                  class="px-3 py-2 text-right text-sm font-semibold"
-                                >
-                                  {__('Total')}
-                                </td>
-                                <td class="px-3 py-2 text-right text-sm font-semibold tabular-nums">
-                                  {grandTotal().toFixed(decimals())} {p().currency}
-                                </td>
-                              </tr>
-                            </tfoot>
-                          </Show>
+                          {/* No totals row: the order total is on the Activity header, which is on
+                              screen whether or not this table is scrolled to its end. A figure at
+                              the foot of a scrolling box is only visible once you reach the
+                              bottom, which is the wrong place for the number people come for. */}
                         </table>
-                      </div>
+                      </ViewportFilled>
                     </>
                   }
                 >
@@ -1648,16 +1705,72 @@ export function PoDetail(props: { id: string }): JSX.Element {
                 </Show>
               }
             >
-              <PoLinesEditor
-                poId={props.id}
-                supplierId={p().supplierId}
-                supplierLabel={p().supplierDisplay ?? p().supplierName ?? ''}
-                costDecimals={p().costDecimals}
-                lines={lines()}
-              />
+              {/* Only this waits for the rows. Rendering the editor against an empty array while
+                  they are still arriving would read as "this order has no lines", which is a
+                  different and alarming statement. */}
+              <Show
+                when={!linesQuery.isPending}
+                fallback={<p class="mt-4 text-sm text-text-muted">{__('Loading lines…')}</p>}
+              >
+                <PoLinesEditor
+                  poId={props.id}
+                  supplierId={p().supplierId}
+                  supplierLabel={p().supplierDisplay ?? p().supplierName ?? ''}
+                  costDecimals={p().costDecimals}
+                  lines={lines()}
+                />
+              </Show>
             </Show>
 
-            <PoTimeline events={events()} loading={eventsQuery.isPending} />
+            {/* Collapsed by default, and it carries the order total at the right-hand end of its
+                header. Two things follow from that: the grid above keeps the height a totals row
+                would have taken, and the header earns its line by saying something even while
+                shut — how much the order comes to, and how many events are behind it.
+
+                Opening it gives up the viewport fit, which is correct: someone reading history
+                wants the page to grow, not a second scroll region inside a fixed one. */}
+            <div ref={(el) => (activityEl = el)}>
+              <FoldingSection
+                title={__('Activity')}
+                // Opening it scrolls it into view. The grid above is sized to end just under the
+                // fold, so an expanded section unfolds almost entirely off-screen — the click would
+                // otherwise look like it did nothing. Deferred a frame so the content is laid out
+                // and the browser scrolls to its real height rather than the collapsed one.
+                onOpenChange={(open) => {
+                  if (!open) return;
+                  setActivityWanted(true);
+                  requestAnimationFrame(() =>
+                    activityEl?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+                  );
+                }}
+                aside={sprintf(
+                  /* translators: %d is a number of recorded events. */ _n(
+                    '%d event',
+                    '%d events',
+                    eventCount(),
+                  ),
+                  eventCount(),
+                )}
+                actions={
+                  <Show when={lines().length > 0}>
+                    {/* Grouped, because this is the one figure on the page read as a magnitude
+                      rather than compared down a column — and 2643.92 against 26439.20 is a
+                      glance away from a factor of ten. The cost decimals stay fixed so the
+                      minor unit never collapses. */}
+                    <span class="text-sm font-semibold tabular-nums">
+                      {__('Total')}:{' '}
+                      {formatNumber(grandTotal(), {
+                        minimumFractionDigits: decimals(),
+                        maximumFractionDigits: decimals(),
+                      })}{' '}
+                      {p().currency}
+                    </span>
+                  </Show>
+                }
+              >
+                <PoTimeline events={events()} loading={eventsQuery.isPending} />
+              </FoldingSection>
+            </div>
           </>
         )}
       </Show>
@@ -1825,6 +1938,38 @@ function EventDescription(props: {
 }
 
 /**
+ * A box that fills from where it sits down to the viewport bottom, less `gutter`.
+ *
+ * **Its own component on purpose.** `createViewportFill` measures in `onMount`, so the hook has to
+ * live in the component that owns the element: called from a parent that mounts earlier — this page
+ * renders its lines table behind a `<Show>` that flips only once the lines arrive — it measures
+ * while the ref is still undefined, keeps its fallback height, and nothing afterwards corrects it.
+ * The symptom is a box that fills the whole window instead of the space below it, which reads as
+ * the fill being broken rather than mistimed.
+ *
+ * The gutter is subtracted rather than padded because what has to fit below is a *sibling* (the
+ * Activity header). Padding would sit inside this box and still leave it touching the fold.
+ */
+function ViewportFilled(props: {
+  gutter: string;
+  class?: string;
+  children: JSX.Element;
+}): JSX.Element {
+  let el: HTMLDivElement | undefined;
+  const height = createViewportFill(() => el);
+
+  return (
+    <div
+      ref={(node) => (el = node)}
+      class={props.class}
+      style={{ height: `calc(${height()} - ${props.gutter})` }}
+    >
+      {props.children}
+    </div>
+  );
+}
+
+/**
  * The PO activity timeline — who did what, when (server-rendered descriptions + resolved actor names).
  * A read-only vertical list; the Essentials basic surface. Pro will add documents, export, and cross-PO audit.
  */
@@ -1835,8 +1980,7 @@ function PoTimeline(props: { events: PoTimelineEvent[]; loading: boolean }): JSX
     return Number.isNaN(d.getTime()) ? '' : formatDateTime(d);
   };
   return (
-    <section class="mt-6">
-      <h3 class="mb-2 text-sm font-semibold text-slate-600">{__('Activity')}</h3>
+    <section class="mt-4">
       <Show
         when={!props.loading}
         fallback={<p class="text-sm text-text-muted">{__('Loading activity…')}</p>}

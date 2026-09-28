@@ -11,15 +11,45 @@ const isWordStart = (text: string, i: number): boolean =>
   0 === i || /[\s\-_./·,()[\]]/.test(text[i - 1] ?? '');
 
 /**
+ * Lowercase one character and strip its accent, **without ever changing its length**.
+ *
+ * Length is the whole point: `indices` are promised to address the original label, and
+ * `HighlightMatch` marks characters by those indices, so a fold that resizes the string silently
+ * highlights the wrong letters. That rules out this package's own {@link foldKey}, which also
+ * deletes spaces and punctuation — « Expédition partielle » loses its space and every index past
+ * it slides left by one. Folding per character sidesteps the question entirely: each one is
+ * replaced by exactly one, or kept as it was, whatever its decomposition turns out to be.
+ */
+function foldChar(c: string): string {
+  const d = c.normalize('NFD');
+  // A decomposition only helps when the base is ASCII: é→e, ü→u, ñ→n, ç→c. Anything else (a
+  // surrogate half, a script that does not decompose to ASCII) keeps the original character.
+  const base = d.length > 1 && d.charCodeAt(0) < 0x80 ? (d[0] ?? c) : c;
+  const lower = base.toLowerCase();
+  return lower.length === base.length ? lower : base;
+}
+
+/** Fold a whole string character by character, so the result indexes like the original. */
+const fold = (s: string): string => {
+  let out = '';
+  for (let i = 0; i < s.length; i++) out += foldChar(s[i] ?? '');
+  return out;
+};
+
+/**
  * Score a needle against a label (subsequence match, case-insensitive). Returns null when the needle's
  * characters don't all appear in order. Higher is better; ranking favours contiguous runs, matches at
  * word starts, and earlier positions — so the best match sorts first. An empty needle scores 0 (all
  * labels match equally, original order preserved). Indices are into the ORIGINAL label (for highlight).
+ *
+ * **Accent-insensitive**, because a merchant reading a French label types what is on their keyboard:
+ * `exped` has to find « Expédition partielle », and without folding it does not — the subsequence
+ * dies on the `é` and the tag disappears at the fifth keystroke, having matched at the fourth.
  */
 export function fuzzyScore(needle: string, label: string): FuzzyScore | null {
-  const q = needle.toLowerCase().trim();
+  const q = fold(needle).trim();
   if ('' === q) return { score: 0, indices: [] };
-  const t = label.toLowerCase();
+  const t = fold(label);
   const indices: number[] = [];
   let score = 0;
   let from = 0;

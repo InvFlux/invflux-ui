@@ -68,7 +68,7 @@ export function App(props: AppProps) {
     fetchInventorySettings(apiRoot, props.productId, nonce),
   );
 
-  // sku / gtin / reorder_threshold / backorders are grid-owned (edited in the embedded WorkbenchGrid
+  // sku / gtin / low_stock_amount / backorders are grid-owned (edited in the embedded WorkbenchGrid
   // below), so the form exposes no inputs for them. They're read off `settings()` for the
   // hidden-WC-input sync + the save payload; the grid's onApplied refetch keeps `settings()` current.
   //
@@ -129,7 +129,7 @@ export function App(props: AppProps) {
     }
   });
 
-  // sku / gtin / reorder_threshold are grid-owned; sync their hidden WC inputs from the persisted
+  // sku / gtin / low_stock_amount are grid-owned; sync their hidden WC inputs from the persisted
   // `settings()` (refreshed by the grid's onApplied refetch) rather than from a form signal, so an
   // edit made in the grid propagates to the hidden inputs and WC autosave posts the current value.
   createEffect(() => {
@@ -151,7 +151,7 @@ export function App(props: AppProps) {
   createEffect(() => {
     const d = settings();
     const el = document.getElementById('_low_stock_amount') as HTMLInputElement | null;
-    const value = d && d.reorder_threshold !== null ? String(d.reorder_threshold) : '';
+    const value = d && d.low_stock_amount !== null ? String(d.low_stock_amount) : '';
     if (d && el && el.value !== value) {
       el.value = value;
     }
@@ -194,7 +194,7 @@ export function App(props: AppProps) {
 
   /**
    * Commit a governance state change. The endpoint is a full overwrite, so the grid-owned fields
-   * (sku/gtin/reorder_threshold/backorders) are echoed back from the persisted `settings()` —
+   * (sku/gtin/low_stock_amount/backorders) are echoed back from the persisted `settings()` —
    * untouched — while this saves the governance state.
    *
    * After a successful save: re-read settings, nudge WooCommerce to re-evaluate its own native
@@ -210,7 +210,7 @@ export function App(props: AppProps) {
     try {
       const payload: SavePayload = {
         stock_management: next,
-        reorder_threshold: d.reorder_threshold,
+        low_stock_amount: d.low_stock_amount,
         backorders: d.backorders,
         sku: d.sku,
         gtin: d.gtin,

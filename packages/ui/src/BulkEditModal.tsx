@@ -10,8 +10,24 @@
  *
  * Applying stages each edit into the host's dirty model via `onApply`; the normal Save → review →
  * apply flow then runs. Extracted from `@invflux/workbench` so the Central Workbench and the embedded
- * product grid share it. The `row` carried on each target/result is opaque here — the grid passes its
- * typed {@link WorkbenchRow} through so the host can stage against it.
+ * product grid share it. The `row` carried on each target/result is opaque here, and so is the `key`
+ * identifying it: both are the host's own, passed straight back out on the result so the host can
+ * stage against them. A grid over something other than products — a document's lines, keyed by line —
+ * supplies its own row type; {@link WorkbenchRow} is only the default.
+ *
+ * **Two things the host owes this modal, because it cannot work them out itself.**
+ *
+ * A target's `value` must be the figure the cell is *displaying*, not the one it stores. A cell that
+ * inherits — a draft PO line showing a suggested quantity it has not overridden — stores null and
+ * shows the inherited number, and an operator has to start from what the operator sees: against the
+ * stored null "add 100%" has no base and skips the row silently, changing nothing and reporting
+ * nothing. The host resolves the fallback chain (`override ?? inherited ?? catalogue`) before handing
+ * targets over. This modal cannot: it does not know what a row inherits from.
+ *
+ * A single-value control that is *touched but left empty* applies as an empty value, which for an
+ * inheriting cell means "inherit again" and for any other means cleared — the same thing Delete does
+ * on a selection, deliberately. It is reachable in one click on a whole column, so it is worth
+ * knowing rather than discovering.
  */
 
 import { createEffect, createMemo, For, onCleanup, Show } from 'solid-js';
@@ -37,28 +53,39 @@ import type { GridColumnMeta, TaxonomySpace } from './types';
 import { orderTaxonomyValues } from './taxonomyOrder';
 import type { WorkbenchRow } from './workbenchGridTypes';
 
+/**
+ * One selected cell: the row it belongs to, that row's identity in the host's own terms, and the
+ * cell's current value. `key` is whatever the host keys its dirty model by — a subject id in the
+ * workbench, a line id in a document grid — and travels back out on the result untouched.
+ */
+export interface BulkEditTarget<TRow> {
+  key: number;
+  row: TRow;
+  value: unknown;
+}
+
 /** One column targeted by a bulk edit: its metadata + the selected rows with their current values. */
-export interface BulkEditColumn {
+export interface BulkEditColumn<TRow = WorkbenchRow> {
   meta: GridColumnMeta;
   /** `value` is the *current* value — a staged edit if any, else persisted. It's the baseline for the
    *  controls' state + uniformity AND what edits are tracked/pruned against (so reopening continues
    *  from the staged value; a revert restores persisted by dropping the dirty entry). */
-  targets: Array<{ subjectId: number; row: WorkbenchRow; value: unknown }>;
+  targets: Array<BulkEditTarget<TRow>>;
 }
 
 /** An edit the bulk modal produced; the caller stages it into the dirty model. */
-export interface BulkEditResult {
-  subjectId: number;
+export interface BulkEditResult<TRow = WorkbenchRow> {
+  key: number;
   columnId: string;
   original: unknown;
   newValue: unknown;
-  row: WorkbenchRow;
+  row: TRow;
 }
 
-export interface BulkEditModalProps {
-  columns: BulkEditColumn[];
+export interface BulkEditModalProps<TRow = WorkbenchRow> {
+  columns: Array<BulkEditColumn<TRow>>;
   taxonomySpace: TaxonomySpace | undefined;
-  onApply: (edits: BulkEditResult[]) => void;
+  onApply: (edits: Array<BulkEditResult<TRow>>) => void;
   onClose: () => void;
   /** Portal the modal to this root (shadow-DOM / transformed-ancestor surfaces). */
   mount?: HTMLElement;
@@ -71,10 +98,10 @@ const sameIdSet = (a: number[], b: number[]): boolean =>
   a.length === b.length &&
   [...a].sort((x, y) => x - y).join(',') === [...b].sort((x, y) => x - y).join(',');
 
-export function BulkEditModal(props: BulkEditModalProps) {
+export function BulkEditModal<TRow = WorkbenchRow>(props: BulkEditModalProps<TRow>) {
   interface Descriptor {
     meta: GridColumnMeta;
-    targets: BulkEditColumn['targets'];
+    targets: Array<BulkEditTarget<TRow>>;
     multi: boolean;
     uniform: boolean;
     uniformValue: string;
@@ -318,7 +345,7 @@ export function BulkEditModal(props: BulkEditModalProps) {
   };
 
   const apply = (): void => {
-    const edits: BulkEditResult[] = [];
+    const edits: Array<BulkEditResult<TRow>> = [];
     for (const d of descriptors) {
       const s = state[d.meta.id];
       if (d.multi) {
@@ -329,7 +356,7 @@ export function BulkEditModal(props: BulkEditModalProps) {
             const current = Array.isArray(t.value) ? (t.value as number[]) : [];
             if (!sameIdSet(current, set)) {
               edits.push({
-                subjectId: t.subjectId,
+                key: t.key,
                 columnId: d.meta.id,
                 original: current,
                 newValue: set,
@@ -347,7 +374,7 @@ export function BulkEditModal(props: BulkEditModalProps) {
           const next = [...new Set([...current, ...add])].filter((id) => !remove.has(id));
           if (!sameIdSet(current, next)) {
             edits.push({
-              subjectId: t.subjectId,
+              key: t.key,
               columnId: d.meta.id,
               original: current,
               newValue: next,
@@ -370,7 +397,7 @@ export function BulkEditModal(props: BulkEditModalProps) {
           const out = computeNumericOp(s.op, parseNumericValue(t.value), operand, bounds);
           if (out.value === null) continue;
           edits.push({
-            subjectId: t.subjectId,
+            key: t.key,
             columnId: d.meta.id,
             original: t.value,
             newValue: d.money ? out.value.toFixed(d.decimals) : out.value,
@@ -400,7 +427,7 @@ export function BulkEditModal(props: BulkEditModalProps) {
         // Track against the current (staged) value so reopening continues from it; the host prunes
         // no-ops (newValue === original) downstream.
         edits.push({
-          subjectId: t.subjectId,
+          key: t.key,
           columnId: d.meta.id,
           original: t.value,
           newValue,
@@ -426,7 +453,7 @@ export function BulkEditModal(props: BulkEditModalProps) {
   });
 
   const rowCount = createMemo(
-    () => new Set(props.columns.flatMap((c) => c.targets.map((t) => t.subjectId))).size,
+    () => new Set(props.columns.flatMap((c) => c.targets.map((t) => t.key))).size,
   );
 
   return (

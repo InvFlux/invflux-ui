@@ -41,7 +41,12 @@ describe('compareSlots', () => {
     ]);
   });
 
-  it('reads the engine keys, which put the state first', () => {
+  // The engine now serializes a slot place-first (`oh.atp`), but these keys stay state-first on
+  // purpose: `slotParts` decides which half is which by looking the value up rather than by
+  // position, and that is what lets a stored key predating the flip, or an add-on dimension, still
+  // sort correctly. Losing this case would leave the heuristic asserted only in the shape it no
+  // longer meets.
+  it('still reads a state-first key, which is the half the sort cannot assume', () => {
     const slots = ['ctd.oh', 'atp.sup', 'res.oh', 'atp.oh', 'oh', 'xyz.oh'];
     // A key with no state sorts after its location's known states; an add-on state after that.
     expect([...slots].sort(compareSlots)).toEqual([

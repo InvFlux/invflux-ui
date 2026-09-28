@@ -1,6 +1,6 @@
 {
   "name": "@invflux/build",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Shared Vite config factory for InvFlux admin SPAs — output shape, externals, dev server and HMR, in one place (see arch-build-pipeline.md §3).",

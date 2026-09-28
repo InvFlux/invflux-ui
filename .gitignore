@@ -7,5 +7,9 @@ build/
 !packages/build/
 coverage/
 test-results/
+# The adapter runs wp-env with `WP_ENV_HOME=.wp-env-home`, which is relative — so a wp-env command
+# issued from anywhere in this repo drops a home here instead. Nothing in it is ours; it is a
+# per-project state cache wp-env rebuilds on demand.
+.wp-env-home/
 
 *.local

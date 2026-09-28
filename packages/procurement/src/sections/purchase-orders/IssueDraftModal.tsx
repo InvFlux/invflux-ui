@@ -2,7 +2,13 @@ import { __, _n, sprintf } from '@invflux/i18n';
 import { Modal, ModalFooter, ModalHeader, ModalPanel } from '@invflux/ui';
 import { createMemo, For, type JSX, Show } from 'solid-js';
 import { belowMoq, nextValidQty, offCasePack } from '../../grid/qtyRules';
-import { effectiveCost, type PruneReason, pruneReason, submittableLines } from './submissionRules';
+import {
+  effectiveCost,
+  effectiveQty,
+  type PruneReason,
+  pruneReason,
+  submittableLines,
+} from './submissionRules';
 import type { PoLine } from './types';
 
 /** A line the server would drop when the order is issued (no quantity, or no price even after inheriting). */
@@ -50,23 +56,25 @@ export function IssueDraftModal(props: IssueDraftModalProps): JSX.Element {
   // Kept lines = what actually goes on the order. Stats are computed over these (the honest figures).
   const kept = createMemo<PoLine[]>(() => submittableLines(props.lines));
 
-  const totalQty = createMemo(() => kept().reduce((s, l) => s + l.qtyRequested, 0));
+  // Stats read the effective quantity throughout: what the merchant is about to commit to is what
+  // submission will freeze in, whether they typed it or let it inherit.
+  const totalQty = createMemo(() => kept().reduce((s, l) => s + effectiveQty(l), 0));
   const totalValue = createMemo(() =>
-    kept().reduce((s, l) => s + l.qtyRequested * (effectiveCost(l) ?? 0), 0),
+    kept().reduce((s, l) => s + effectiveQty(l) * (effectiveCost(l) ?? 0), 0),
   );
 
   // MOQ / case-pack violations among the KEPT lines (a removed 0-qty line is not "below MOQ").
   const belowMoqLines = createMemo(() =>
-    kept().filter((l) => belowMoq(l.qtyRequested, props.moqFor(l.subjectId))),
+    kept().filter((l) => belowMoq(effectiveQty(l), props.moqFor(l.subjectId))),
   );
   const offPackLines = createMemo(() =>
-    kept().filter((l) => offCasePack(l.qtyRequested, props.casePackFor(l.subjectId))),
+    kept().filter((l) => offCasePack(effectiveQty(l), props.casePackFor(l.subjectId))),
   );
   const invalidQtyLines = createMemo(() =>
     kept().filter(
       (l) =>
-        belowMoq(l.qtyRequested, props.moqFor(l.subjectId)) ||
-        offCasePack(l.qtyRequested, props.casePackFor(l.subjectId)),
+        belowMoq(effectiveQty(l), props.moqFor(l.subjectId)) ||
+        offCasePack(effectiveQty(l), props.casePackFor(l.subjectId)),
     ),
   );
 
@@ -84,7 +92,7 @@ export function IssueDraftModal(props: IssueDraftModalProps): JSX.Element {
       invalidQtyLines().map((l) => ({
         id: l.id,
         qty: nextValidQty(
-          l.qtyRequested,
+          effectiveQty(l),
           props.moqFor(l.subjectId),
           props.casePackFor(l.subjectId),
         ),

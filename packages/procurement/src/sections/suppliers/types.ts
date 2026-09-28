@@ -80,8 +80,8 @@ export interface SupplierContactsResponse {
 
 /** Supplier-product link DTO — shape returned by `SupplierProductController::present()`. */
 export interface SupplierProduct {
-  id: number;
   supplierId: number;
+  /** The product, and — with the supplier — the row's identity: what a PATCH or DELETE addresses. */
   subjectId: number;
   /** WC post id (null if unresolved) — lets the catalogue picker skip products already linked. */
   postId: number | null;

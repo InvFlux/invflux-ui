@@ -137,7 +137,7 @@ export function SupplierDetail(props: { id: string }): JSX.Element {
       }),
     onSuccess: (data) => {
       if (null === data.purchaseOrder) {
-        toast.success(__('Nothing to reorder — no products below their reorder threshold.'));
+        toast.success(__('Nothing to reorder — no products below their low stock threshold.'));
         return;
       }
       toast.success(__('Replenishment draft created.'));
@@ -177,7 +177,7 @@ export function SupplierDetail(props: { id: string }): JSX.Element {
                   disabled={replenish.isPending}
                   onClick={() => replenish.mutate()}
                   title={__(
-                    'Create a draft PO for this supplier’s products at or below their reorder threshold',
+                    'Create a draft PO for this supplier’s products at or below their low stock threshold',
                   )}
                 >
                   {__('Create replenishment PO')}

@@ -37,6 +37,7 @@ const tag = (priority: number): TagSummary =>
     id: 1,
     slug: 'u',
     name: 'Urgent',
+    displayName: 'Urgent',
     colorId: 0,
     governanceFlags: [],
     priority,

@@ -18,20 +18,15 @@ import {
 } from '@invflux/ui';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
 import { type ColumnDef, createColumnHelper } from '@tanstack/solid-table';
-import type {
-  ColumnOrderState,
-  RowSelectionState,
-  SortingState,
-  VisibilityState,
-} from '@tanstack/solid-table';
+import type { RowSelectionState, SortingState } from '@tanstack/solid-table';
 import { createMemo, createSignal, type JSX, Show } from 'solid-js';
 import { useProcurement } from '../../context';
-import { persistedSignal } from '../../grid/persistedSignal';
 import { registerReceiptEditor } from '../../grid/receiptEditor';
 import { createApi } from '../../lib/api';
 import { supplierDocHeading } from './supplierDocKinds';
 import { atSupplierPrecision, formatDiscount, netOfDiscount } from './linePrice';
 import { SkuCell } from './SkuCell';
+import { orderedQty } from '../../lib/variance';
 import type { PoLine } from './types';
 
 // The numeric editor (blank-start, `.`-fill, clamp) shared with the receive and draft grids.
@@ -156,7 +151,7 @@ export function PoInvoiceCapture(props: {
    */
   const lineTotal = (line: PoLine): string | null => {
     const r = netRate(line);
-    return null === r ? null : String((qtyFor(line.id) ?? line.qtyRequested) * Number(r));
+    return null === r ? null : String((qtyFor(line.id) ?? orderedQty(line)) * Number(r));
   };
   /**
    * Whether a line's total leans on something no invoice has stated: a blank Qty billed, where the
@@ -649,24 +644,6 @@ export function PoInvoiceCapture(props: {
   };
 
   const [sorting, setSorting] = createSignal<SortingState>([]);
-  const [columnVisibility, setColumnVisibility] = persistedSignal<VisibilityState>(
-    'invflux:po-invoice:colvis',
-    {},
-  );
-  const [columnOrder, setColumnOrder] = persistedSignal<ColumnOrderState>(
-    // Versioned for the same reason as the draft grid's: a saved order would park a new middle
-    // column at the far end.
-    'invflux:po-invoice:colorder:v2',
-    COLUMN_ORDER,
-  );
-  const [columnSizing, setColumnSizing] = persistedSignal<Record<string, number>>(
-    'invflux:po-invoice:colsize',
-    {},
-  );
-  const [expandedColumnSections, setExpandedColumnSections] = persistedSignal<string[]>(
-    'invflux:po-invoice:colsections',
-    ['invoice-capture'],
-  );
   const [rowSelection, setRowSelection] = createSignal<RowSelectionState>({});
   const [cellSelection, setCellSelection] = createSignal<SelectionState>(EMPTY_SELECTION);
 
@@ -813,19 +790,13 @@ export function PoInvoiceCapture(props: {
           getStagedValue={getStagedValue}
           resolveClearedValue={resolveClearedValue}
           resolveEditorMeta={resolveEditorMeta}
-          settingsKey="po-invoice-capture"
           onStageEdit={onStageEdit}
           onClearCells={onClearCells}
           sorting={sorting}
           onSortingChange={(next) => setSorting(() => next)}
-          columnVisibility={columnVisibility}
-          setColumnVisibility={(updater) => setColumnVisibility(updater)}
-          columnOrder={columnOrder}
-          setColumnOrder={(updater) => setColumnOrder(updater)}
-          columnSizing={columnSizing}
-          setColumnSizing={(updater) => setColumnSizing(updater)}
-          expandedColumnSections={expandedColumnSections}
-          setExpandedColumnSections={(updater) => setExpandedColumnSections(updater)}
+          scope="po-invoice"
+          defaultColumnOrder={COLUMN_ORDER}
+          defaultExpandedSections={['invoice-capture']}
           rowSelection={rowSelection}
           setRowSelection={(updater) => setRowSelection(updater)}
           cellSelection={cellSelection}

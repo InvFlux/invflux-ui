@@ -20,7 +20,7 @@
 
 import { Show, type JSX } from 'solid-js';
 import { createColumnHelper, type ColumnDef } from '@tanstack/solid-table';
-import { __, _x, sprintf } from '@invflux/i18n';
+import { __, sprintf } from '@invflux/i18n';
 import type { WorkbenchRow } from '../workbenchGridTypes';
 import type { GridColumnMeta } from '../types';
 import type { HostNav } from '../hostNav';
@@ -390,16 +390,17 @@ export function buildWorkbenchColumns(
         ),
     }),
 
-    ch.accessor('reorderThreshold', {
-      id: 'reorder_threshold',
+    ch.accessor('lowStockAmount', {
+      id: 'low_stock_amount',
       enableSorting: true,
-      header: _x(
-        'Reorder',
-        'column header: the reorder threshold, the stock level that triggers a reorder',
-      ),
+      // Same msgid as the server's label for this column, deliberately: the grid paints these
+      // client-side headers before the response lands and the server's `meta.label` replaces them,
+      // so a different string here shows as the column renaming itself on load. This one mirrors
+      // WooCommerce's own field, whose name is what a merchant recognises.
+      header: __('Low stock threshold'),
       meta: { align: 'right' },
       cell: (info) =>
-        scalarCell(info.row.original, 'reorder_threshold', info.getValue(), 'tabular-nums', (v) =>
+        scalarCell(info.row.original, 'low_stock_amount', info.getValue(), 'tabular-nums', (v) =>
           v === null || v === undefined ? '—' : String(v),
         ),
     }),

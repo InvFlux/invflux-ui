@@ -12,23 +12,22 @@ import {
   type StagedCell,
 } from '@invflux/ui';
 import { type ColumnDef, createColumnHelper } from '@tanstack/solid-table';
-import type {
-  ColumnOrderState,
-  RowSelectionState,
-  SortingState,
-  VisibilityState,
-} from '@tanstack/solid-table';
+import type { RowSelectionState, SortingState } from '@tanstack/solid-table';
 import { type Accessor, createMemo, createSignal, type JSX, Show } from 'solid-js';
 import { fuzzyMatches } from '../../grid/fuzzyMatch';
+import { resolveCommitNav } from '../../gridCommitNav';
 import { persistedSignal } from '../../grid/persistedSignal';
 import { QuickFilter, isTypingInField } from '../../grid/QuickFilter';
 import { firstEditableColumnId } from '../../grid/editableColumn';
 import { registerReceiptEditor } from '../../grid/receiptEditor';
-import { baselineQty, type VarianceLens } from '../../lib/variance';
+import { baselineQty, orderedQty, type VarianceLens } from '../../lib/variance';
 import type { PoLine } from './types';
 
 // The receipt numeric editor (blank-start, `.`-fill, clamp) — registered once before any render.
 registerReceiptEditor();
+
+/** This grid's stable id, so a contributed commit-navigation rule can tell it from another grid's. */
+const RECEIVE_GRID_ID = 'po.receive';
 
 const COLUMN_ORDER = [
   'image',
@@ -49,29 +48,6 @@ const COLUMN_ORDER = [
  *  purchasing → ordered). When `expected` is absent the "expected" view falls back to ordered. Shared
  *  with the PO-detail read badge via the core-mirroring {@link VarianceLens}. */
 type VarianceBaseline = VarianceLens;
-
-/**
- * Fold any canonical columns missing from a persisted order (e.g. `expected` / `variance`, added after an
- * operator saved their layout) into it at their canonical position — inserted right after their nearest
- * preceding canonical neighbour, so they land where intended rather than appended. Idempotent once every
- * canonical column is present, so a saved order that already has them is returned unchanged.
- */
-function reconcileColumnOrder(saved: string[], canonical: string[]): string[] {
-  const result = [...saved];
-  canonical.forEach((col, i) => {
-    if (result.includes(col)) return;
-    let insertAt = result.length;
-    for (let j = i - 1; j >= 0; j--) {
-      const predIdx = result.indexOf(canonical[j]);
-      if (predIdx >= 0) {
-        insertAt = predIdx + 1;
-        break;
-      }
-    }
-    result.splice(insertAt, 0, col);
-  });
-  return result;
-}
 
 /** GridColumnMeta with the reception-friendly defaults filled in; `over` carries the per-column bits. */
 function colMeta(
@@ -361,7 +337,7 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
         cell: (info) => (
           <ExpectedCell
             expected={info.row.original.qtyExpected}
-            ordered={info.row.original.qtyRequested}
+            ordered={orderedQty(info.row.original)}
           />
         ),
       }) as ColumnDef<PoLine, unknown>,
@@ -423,29 +399,6 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
   const [sorting, setSorting] = createSignal<SortingState>([]);
   // Column layout (visibility / order / sizing) persists per operator; default = all columns shown.
   // Identifier columns can be hidden via the column picker (Ctrl+M); they stay filter match-keys either way.
-  const [columnVisibility, setColumnVisibility] = persistedSignal<VisibilityState>(
-    'invflux:po-receive:colvis',
-    {},
-  );
-  const [columnOrder, setColumnOrder] = persistedSignal<ColumnOrderState>(
-    'invflux:po-receive:colorder',
-    COLUMN_ORDER,
-  );
-  // Migrate a pre-existing saved order so newly-added columns (expected / variance) appear at their
-  // canonical spot rather than appended. Done synchronously at setup → no flash of the old order.
-  {
-    const reconciled = reconcileColumnOrder(columnOrder(), COLUMN_ORDER);
-    if (reconciled.length !== columnOrder().length) setColumnOrder(reconciled);
-  }
-  const [columnSizing, setColumnSizing] = persistedSignal<Record<string, number>>(
-    'invflux:po-receive:colsize',
-    {},
-  );
-  // The single column group starts expanded (folding one section of 8 is pointless); the choice persists.
-  const [expandedColumnSections, setExpandedColumnSections] = persistedSignal<string[]>(
-    'invflux:po-receive:colsections',
-    ['goods-receipt'],
-  );
   const [rowSelection, setRowSelection] = createSignal<RowSelectionState>({});
   const [cellSelection, setCellSelection] = createSignal<SelectionState>(EMPTY_SELECTION);
 
@@ -627,28 +580,30 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
     gridApi?.focusGrid();
   };
 
-  // Scanner loop: committing the Received/Damaged qty with Enter (move
-  // "down") while the filter has narrowed to a single row returns to the filter and resets it — ready
-  // for the next scan/type, no wasted keystroke. Tab (→ next column) and multi-row filters keep the
-  // grid's default move.
-  const onCommitNavigate = (row: PoLine, columnId: string, move: EditMove): boolean => {
-    if (
-      'down' === move &&
-      ('received' === columnId || 'damaged' === columnId) &&
-      '' !== filterText().trim() &&
-      1 === visibleLines().length
-    ) {
-      setFilterText('');
-      // Keep the just-edited line in apparent focus by ID — clearing the filter changed its row index,
-      // so re-anchor the active cell to where that same line now sits (not whatever row took index 0).
-      const newRow = visibleLines().findIndex((l) => l.id === row.id);
-      const col = (gridApi?.getSelectableColumnIds() ?? []).indexOf(columnId);
-      if (newRow >= 0 && col >= 0) setCellSelection(selectCell({ row: newRow, col }));
-      focusFilter?.();
-      return true;
-    }
-    return false;
-  };
+  // Where focus goes once a Received/Damaged qty is committed. This grid moves the way the editor
+  // asked — down on Enter, right on Tab — and decides nothing further on its own; a contributed
+  // capability may claim the move instead, composing it from the operations handed over below, each
+  // of which this surface already performs for itself (the filter's own input sets its text, Escape
+  // and `/` focus it, cell selection is ordinary grid navigation).
+  //
+  const onCommitNavigate = (row: PoLine, columnId: string, move: EditMove): boolean =>
+    resolveCommitNav({
+      gridId: RECEIVE_GRID_ID,
+      columnId,
+      rowId: String(row.id),
+      move,
+      filterText: filterText(),
+      visibleCount: visibleLines().length,
+      setFilterText,
+      // By id, not index: clearing a filter changes which row sits where, so a rule that clears it
+      // first would otherwise re-anchor onto whatever row took the old index.
+      selectCellByRowId: (rowId, colId) => {
+        const rowIndex = visibleLines().findIndex((l) => String(l.id) === rowId);
+        const col = (gridApi?.getSelectableColumnIds() ?? []).indexOf(colId);
+        if (rowIndex >= 0 && col >= 0) setCellSelection(selectCell({ row: rowIndex, col }));
+      },
+      focusFilter: () => focusFilter?.(),
+    });
 
   return (
     <div>
@@ -709,7 +664,6 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
           resolveClearedValue={resolveClearedValue}
           resolveEditorMeta={resolveEditorMeta}
           apiRef={(api) => (gridApi = api)}
-          settingsKey="po-receive"
           keyHandlers={globalKeyHandlers}
           keyHandlersInGrid={inGridKeyHandlers}
           onStageEdit={onStageEdit}
@@ -717,14 +671,9 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
           onClearCells={onClearCells}
           sorting={sorting}
           onSortingChange={(next) => setSorting(() => next)}
-          columnVisibility={columnVisibility}
-          setColumnVisibility={(updater) => setColumnVisibility(updater)}
-          columnOrder={columnOrder}
-          setColumnOrder={(updater) => setColumnOrder(updater)}
-          columnSizing={columnSizing}
-          setColumnSizing={(updater) => setColumnSizing(updater)}
-          expandedColumnSections={expandedColumnSections}
-          setExpandedColumnSections={(updater) => setExpandedColumnSections(updater)}
+          scope="po-receive"
+          defaultColumnOrder={COLUMN_ORDER}
+          defaultExpandedSections={['goods-receipt']}
           rowSelection={rowSelection}
           setRowSelection={(updater) => setRowSelection(updater)}
           cellSelection={cellSelection}

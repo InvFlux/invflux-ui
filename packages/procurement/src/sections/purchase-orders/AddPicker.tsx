@@ -1,4 +1,5 @@
 import { __ } from '@invflux/i18n';
+import { Spinner } from '@invflux/ui';
 import { createEffect, createSignal, For, type JSX, onCleanup, onMount, Show } from 'solid-js';
 
 const INPUT =
@@ -19,6 +20,15 @@ export interface AddOption {
  */
 export function AddPicker(props: {
   options: AddOption[];
+  /**
+   * The catalogue behind {@link options} is still arriving.
+   *
+   * It is fetched on first use rather than on page open — most purchase orders are generated and
+   * never have a product added by hand, so the whole catalogue was being loaded for nothing. The
+   * picker opens straight away regardless and says it is working, because a control that waits to
+   * appear reads as a click that did not register.
+   */
+  loading?: boolean;
   onAdd: (o: AddOption) => void;
   onClose: () => void;
 }): JSX.Element {
@@ -103,7 +113,12 @@ export function AddPicker(props: {
           )}
         </For>
         <Show when={0 === filtered().length}>
-          <li class="px-3 py-2 text-text-muted">{__('No products to add')}</li>
+          <li class="flex items-center gap-2 px-3 py-2 text-text-muted">
+            <Show when={props.loading} fallback={<span>{__('No products to add')}</span>}>
+              <Spinner label={__('Loading the supplier catalogue…')} />
+              <span>{__('Loading the supplier catalogue…')}</span>
+            </Show>
+          </li>
         </Show>
       </ul>
     </div>

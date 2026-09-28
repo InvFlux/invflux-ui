@@ -20,27 +20,27 @@ import {
 } from '@invflux/ui';
 import { useNavigate } from '@solidjs/router';
 import { type ColumnDef, createColumnHelper } from '@tanstack/solid-table';
-import type {
-  ColumnOrderState,
-  RowSelectionState,
-  SortingState,
-  VisibilityState,
-} from '@tanstack/solid-table';
+import type { RowSelectionState, SortingState } from '@tanstack/solid-table';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
 import { createEffect, createMemo, createSignal, type JSX, Show } from 'solid-js';
 import { Portal } from 'solid-js/web';
 import { useProcurement } from '../../context';
 import { firstEditableColumnId } from '../../grid/editableColumn';
 import { fuzzyMatches } from '../../grid/fuzzyMatch';
-import { persistedSignal } from '../../grid/persistedSignal';
 import { registerProductSearchEditor } from '../../grid/productSearchEditor';
 import { isTypingInField, QuickFilter } from '../../grid/QuickFilter';
 import { createApi } from '../../lib/api';
 import { usePortalRoot } from '../../portal';
 import type { ProductSearchResponse, SupplierProduct, SupplierProductsResponse } from './types';
 
-/** Sentinel id for the always-present append row (real link ids are positive). */
-const DRAFT_ID = 0;
+/**
+ * Sentinel subject id for the always-present append row (real subject ids are positive).
+ *
+ * A catalogue row *is* the pair (supplier, product), and the supplier is fixed for this screen — so
+ * the product's subject id identifies the row here: for the grid, for the staged edits, and in the
+ * REST calls that write one.
+ */
+const DRAFT_SUBJECT_ID = 0;
 /** Custom editor datatype for the append-row's product cell (the async product search). */
 const PRODUCT_EDITOR_TYPE = 'text:product-search';
 
@@ -152,7 +152,7 @@ export function SupplierProducts(props: {
     columnId: string,
   ): { staged: boolean; value: unknown } => {
     const k = PATCH_KEY[columnId];
-    const d = dirty()[row.id];
+    const d = dirty()[row.subjectId];
     if (undefined !== k && undefined !== d && k in d) return { staged: true, value: d[k] };
     return { staged: false, value: undefined };
   };
@@ -172,13 +172,13 @@ export function SupplierProducts(props: {
   createEffect(() => {
     const list = products();
     setOrderIdx((prev) => {
-      const fresh = list.filter((p) => !(p.id in prev));
+      const fresh = list.filter((p) => !(p.subjectId in prev));
       if (0 === fresh.length) return prev;
       const first = 0 === Object.keys(prev).length;
       const ordered = first ? [...fresh].sort(skuCmp) : fresh; // seed by SKU on first load; else append
       let max = first ? -1 : Math.max(...Object.values(prev));
       const next = { ...prev };
-      for (const p of ordered) next[p.id] = max += 1;
+      for (const p of ordered) next[p.subjectId] = max += 1;
       return next;
     });
   });
@@ -223,7 +223,7 @@ export function SupplierProducts(props: {
     const arr = [...filtered];
     if (undefined === s) {
       const idx = orderIdx();
-      arr.sort((a, b) => (idx[a.id] ?? 0) - (idx[b.id] ?? 0)); // insertion order — new products at the end
+      arr.sort((a, b) => (idx[a.subjectId] ?? 0) - (idx[b.subjectId] ?? 0)); // insertion order — new products at the end
     } else {
       const dir = s.desc ? -1 : 1;
       arr.sort((a, b) => dir * compareBy(a, b, s.id));
@@ -232,13 +232,12 @@ export function SupplierProducts(props: {
   });
 
   // ── Append row (Essentials new-product entry) ─────────────────────────────────────────────────────────
-  // A synthetic link (id = DRAFT_ID) always appended last; only its product cell is editable, through
+  // A synthetic link (subjectId = DRAFT_SUBJECT_ID) always appended last; only its product cell is editable, through
   // the grid's own editor (the async product-search picker). Picking a product creates the catalogue
   // link and drops focus into the new row's first editable term.
   const draftLine = (): SupplierProduct => ({
-    id: DRAFT_ID,
     supplierId: props.supplierId,
-    subjectId: 0,
+    subjectId: DRAFT_SUBJECT_ID,
     postId: null,
     name: null,
     sku: null,
@@ -256,7 +255,7 @@ export function SupplierProducts(props: {
     createdAt: null,
     updatedAt: null,
   });
-  const isDraft = (l: SupplierProduct): boolean => DRAFT_ID === l.id;
+  const isDraft = (l: SupplierProduct): boolean => DRAFT_SUBJECT_ID === l.subjectId;
   const gridRows = createMemo<SupplierProduct[]>(() => [...visibleProducts(), draftLine()]);
 
   // Server product search for the picker (all WC products; the server owns matching + ranking).
@@ -287,7 +286,7 @@ export function SupplierProducts(props: {
       );
       await queryClient.invalidateQueries({ queryKey: key() });
       queueMicrotask(() => {
-        const row = products().find((p) => p.id === product.id);
+        const row = products().find((p) => p.subjectId === product.subjectId);
         const colId =
           undefined === row
             ? undefined
@@ -297,7 +296,7 @@ export function SupplierProducts(props: {
                 canEdit,
                 gridApi?.getSelectableColumnIds() ?? [],
               );
-        if (undefined !== colId) gridApi?.focusCellById(String(product.id), colId, true);
+        if (undefined !== colId) gridApi?.focusCellById(String(product.subjectId), colId, true);
       });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err));
@@ -580,22 +579,6 @@ export function SupplierProducts(props: {
   ]);
 
   // ── DataGrid state ──────────────────────────────────────────────────────────────────────────────
-  const [columnVisibility, setColumnVisibility] = persistedSignal<VisibilityState>(
-    'invflux:supplier-products:colvis',
-    {},
-  );
-  const [columnOrder, setColumnOrder] = persistedSignal<ColumnOrderState>(
-    'invflux:supplier-products:colorder',
-    COLUMN_ORDER,
-  );
-  const [columnSizing, setColumnSizing] = persistedSignal<Record<string, number>>(
-    'invflux:supplier-products:colsize',
-    {},
-  );
-  const [expandedColumnSections, setExpandedColumnSections] = persistedSignal<string[]>(
-    'invflux:supplier-products:colsections',
-    ['supplier-products'],
-  );
   const [rowSelection, setRowSelection] = createSignal<RowSelectionState>({});
   const [cellSelection, setCellSelection] = createSignal<SelectionState>(EMPTY_SELECTION);
 
@@ -669,20 +652,20 @@ export function SupplierProducts(props: {
     if (value === persistedCoerced) {
       // Value unchanged (or reverted to original) — remove from dirty if it was previously staged.
       setDirty((prev) => {
-        const patch = prev[row.id];
+        const patch = prev[row.subjectId];
         if (undefined === patch || !(k in patch)) return prev;
         const updated: DirtyPatch = { ...patch };
         delete updated[k];
         if (0 === Object.keys(updated).length) {
           const outer = { ...prev };
-          delete outer[row.id];
+          delete outer[row.subjectId];
           return outer;
         }
-        return { ...prev, [row.id]: updated };
+        return { ...prev, [row.subjectId]: updated };
       });
       return;
     }
-    setDirty((prev) => ({ ...prev, [row.id]: { ...prev[row.id], [k]: value } }));
+    setDirty((prev) => ({ ...prev, [row.subjectId]: { ...prev[row.subjectId], [k]: value } }));
   };
   const onStageEdit = (
     row: SupplierProduct,
@@ -723,7 +706,7 @@ export function SupplierProducts(props: {
     if (null === active || active.row !== visibleProducts().length) return;
     const productCol = (gridApi?.getSelectableColumnIds() ?? []).indexOf('product');
     if (productCol >= 0 && active.col !== productCol)
-      gridApi?.focusCellById(String(DRAFT_ID), 'product', false);
+      gridApi?.focusCellById(String(DRAFT_SUBJECT_ID), 'product', false);
   });
 
   // ── Mutations ───────────────────────────────────────────────────────────────────────────────────
@@ -732,14 +715,14 @@ export function SupplierProducts(props: {
   const save = createMutation(() => ({
     mutationFn: async () => {
       const d = dirty();
-      const byId = new Map(products().map((p) => [p.id, p]));
+      const bySubject = new Map(products().map((p) => [p.subjectId, p]));
       await Promise.all(
-        Object.keys(d).map((idStr) => {
-          const id = Number(idStr);
-          const link = byId.get(id);
+        Object.keys(d).map((subjectIdStr) => {
+          const subjectId = Number(subjectIdStr);
+          const link = bySubject.get(subjectId);
           if (undefined === link) return Promise.resolve();
-          const patch = d[id];
-          return api.patch(`/procurement/suppliers/${props.supplierId}/products/${id}`, {
+          const patch = d[subjectId];
+          return api.patch(`/procurement/suppliers/${props.supplierId}/products/${subjectId}`, {
             supplier_sku: 'supplier_sku' in patch ? patch.supplier_sku : (link.supplierSku ?? null),
             unit_price: 'unit_price' in patch ? patch.unit_price : (link.unitPrice ?? null),
             moq: 'moq' in patch ? patch.moq : (link.moq ?? null),
@@ -760,14 +743,16 @@ export function SupplierProducts(props: {
   }));
 
   const delMany = createMutation(() => ({
-    mutationFn: (ids: number[]) =>
+    mutationFn: (subjectIds: number[]) =>
       Promise.all(
-        ids.map((id) => api.del(`/procurement/suppliers/${props.supplierId}/products/${id}`)),
+        subjectIds.map((subjectId) =>
+          api.del(`/procurement/suppliers/${props.supplierId}/products/${subjectId}`),
+        ),
       ),
-    onSuccess: (_res, ids: number[]) => {
+    onSuccess: (_res, subjectIds: number[]) => {
       setDirty((prev) => {
         const next = { ...prev };
-        for (const id of ids) delete next[id];
+        for (const subjectId of subjectIds) delete next[subjectId];
         return next;
       });
       void queryClient.invalidateQueries({ queryKey: key() });
@@ -777,16 +762,16 @@ export function SupplierProducts(props: {
   }));
 
   // ── Selection → Create PO draft ─────────────────────────────────────────────────────────────────
-  const selectedIds = (): number[] =>
+  const selectedSubjectIds = (): number[] =>
     Object.entries(rowSelection())
       .filter(([, v]) => v)
       .map(([k]) => Number(k))
-      .filter((id) => DRAFT_ID !== id);
+      .filter((subjectId) => DRAFT_SUBJECT_ID !== subjectId);
   const createPo = createMutation(() => ({
     mutationFn: () => {
-      const chosen = new Set(selectedIds());
+      const chosen = new Set(selectedSubjectIds());
       const lines = products()
-        .filter((p) => chosen.has(p.id))
+        .filter((p) => chosen.has(p.subjectId))
         .map((p) => ({ subject_id: p.subjectId, qty_requested: 0, unit_cost: p.unitPrice }));
       return api.post<{ purchaseOrder: { id: number } }>('/procurement/purchase-orders', {
         supplier_id: props.supplierId,
@@ -974,19 +959,19 @@ export function SupplierProducts(props: {
 
   const contextMenuExtras = (): DataGridMenuItem[] => {
     const cells = (gridApi?.getSelectedCells() ?? []).filter((c) => !isDraft(c.row));
-    const ids = [...new Set(cells.map((c) => c.row.id))];
+    const subjectIds = [...new Set(cells.map((c) => c.row.subjectId))];
     const hasDirty = cells.some(({ row, columnId }) => {
       const k = PATCH_KEY[columnId];
-      return undefined !== k && k in (dirty()[row.id] ?? {});
+      return undefined !== k && k in (dirty()[row.subjectId] ?? {});
     });
     const extras: DataGridMenuItem[] = [];
     if (hasDirty) extras.push({ id: 'revert', label: __('Revert'), run: () => revertSelection() });
-    if (ids.length > 0)
+    if (subjectIds.length > 0)
       extras.push({
         id: 'delete-rows',
-        label: sprintf(__('Delete %d selected row(s)'), ids.length),
+        label: sprintf(__('Delete %d selected row(s)'), subjectIds.length),
         run: () => {
-          delMany.mutate(ids);
+          delMany.mutate(subjectIds);
           setCellSelection(EMPTY_SELECTION);
         },
       });
@@ -1001,11 +986,12 @@ export function SupplierProducts(props: {
       const next = { ...prev };
       for (const { row, columnId } of cells) {
         const k = PATCH_KEY[columnId];
-        if (undefined === k || !(row.id in next) || !(k in (next[row.id] ?? {}))) continue;
-        const updated: DirtyPatch = { ...next[row.id] };
+        if (undefined === k || !(row.subjectId in next) || !(k in (next[row.subjectId] ?? {})))
+          continue;
+        const updated: DirtyPatch = { ...next[row.subjectId] };
         delete updated[k];
-        if (0 === Object.keys(updated).length) delete next[row.id];
-        else next[row.id] = updated;
+        if (0 === Object.keys(updated).length) delete next[row.subjectId];
+        else next[row.subjectId] = updated;
       }
       return next;
     });
@@ -1038,7 +1024,7 @@ export function SupplierProducts(props: {
       // Insert jumps into the append-row product picker (add another product).
       if ('Insert' === e.key && !isTypingInField()) {
         e.preventDefault();
-        gridApi?.focusCellById(String(DRAFT_ID), 'product', true);
+        gridApi?.focusCellById(String(DRAFT_SUBJECT_ID), 'product', true);
         return true;
       }
       // Ctrl/Cmd+Enter and Ctrl/Cmd+S both save staged term edits.
@@ -1062,7 +1048,7 @@ export function SupplierProducts(props: {
         gridApi?.getSelectableColumnIds() ?? [],
       );
       if (undefined !== colId) {
-        gridApi?.focusCellById(String(row.id), colId);
+        gridApi?.focusCellById(String(row.subjectId), colId);
         return;
       }
     }
@@ -1094,9 +1080,11 @@ export function SupplierProducts(props: {
           {(slot) => <Portal mount={slot()}>{saveButton()}</Portal>}
         </Show>
 
-        <Show when={selectedIds().length > 0}>
+        <Show when={selectedSubjectIds().length > 0}>
           <div class="mb-2 flex items-center gap-3 rounded bg-blue-50 px-3 py-2 text-sm">
-            <span class="text-slate-700">{sprintf(__('%d selected'), selectedIds().length)}</span>
+            <span class="text-slate-700">
+              {sprintf(__('%d selected'), selectedSubjectIds().length)}
+            </span>
             <Button size="sm" disabled={createPo.isPending} onClick={() => createPo.mutate()}>
               {__('Create PO draft from selection')}
             </Button>
@@ -1148,7 +1136,7 @@ export function SupplierProducts(props: {
         <div class="flex max-h-[70vh] flex-col">
           <DataGrid<SupplierProduct>
             rows={gridRows}
-            getRowId={(l) => String(l.id)}
+            getRowId={(l) => String(l.subjectId)}
             rowAttrs={(l) => (isDraft(l) ? { class: 'bg-primary/5' } : {})}
             columnMetas={columnMetas}
             getValue={getValue}
@@ -1159,7 +1147,6 @@ export function SupplierProducts(props: {
             resolveEditorMeta={resolveEditorMeta}
             apiRef={(grid) => (gridApi = grid)}
             contextMenuExtras={contextMenuExtras}
-            settingsKey="supplier-products"
             keyHandlers={globalKeyHandlers}
             keyHandlersInGrid={inGridKeyHandlers}
             onStageEdit={onStageEdit}
@@ -1167,14 +1154,9 @@ export function SupplierProducts(props: {
             onClearCells={onClearCells}
             sorting={sorting}
             onSortingChange={(next) => setSorting(() => next)}
-            columnVisibility={columnVisibility}
-            setColumnVisibility={(updater) => setColumnVisibility(updater)}
-            columnOrder={columnOrder}
-            setColumnOrder={(updater) => setColumnOrder(updater)}
-            columnSizing={columnSizing}
-            setColumnSizing={(updater) => setColumnSizing(updater)}
-            expandedColumnSections={expandedColumnSections}
-            setExpandedColumnSections={(updater) => setExpandedColumnSections(updater)}
+            scope="supplier-products"
+            defaultColumnOrder={COLUMN_ORDER}
+            defaultExpandedSections={['supplier-products']}
             rowSelection={rowSelection}
             setRowSelection={(updater) => setRowSelection(updater)}
             cellSelection={cellSelection}

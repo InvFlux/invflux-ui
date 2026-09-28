@@ -197,6 +197,7 @@ export {
   PackageIcon,
   CloseIcon,
   ArchiveIcon,
+  TranslateIcon,
   HourglassIcon,
   InfoIcon,
 } from './icons';
@@ -240,7 +241,12 @@ export { RequiredMark } from './RequiredMark';
 export { ProPill } from './ProPill';
 export type { ProPillProps } from './ProPill';
 export { BulkEditModal } from './BulkEditModal';
-export type { BulkEditModalProps, BulkEditColumn, BulkEditResult } from './BulkEditModal';
+export type {
+  BulkEditModalProps,
+  BulkEditColumn,
+  BulkEditResult,
+  BulkEditTarget,
+} from './BulkEditModal';
 export { CorrectionReviewModal, onHandCorrectionMeta } from './CorrectionReviewModal';
 export type {
   CorrectionReviewModalProps,

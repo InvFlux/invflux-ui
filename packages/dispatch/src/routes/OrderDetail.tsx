@@ -199,10 +199,10 @@ export function OrderDetail() {
    * asserts "nothing is waiting", which would show every correction as settled for as long as the
    * request is in flight — the reassuring answer, arrived at by not knowing.
    */
-  const unprocessedCorrectedByLine = createMemo<Map<string, number> | undefined>(() => {
+  const unprocessedCorrectedByLine = createMemo<Map<number, number> | undefined>(() => {
     const corrections = correctionsQuery.data?.corrections;
     if (!corrections) return undefined;
-    const byLine = new Map<string, number>();
+    const byLine = new Map<number, number>();
     for (const c of corrections) {
       if (c.processedAt !== null) continue;
       byLine.set(c.lineId, (byLine.get(c.lineId) ?? 0) + c.qty);
@@ -210,16 +210,15 @@ export function OrderDetail() {
     return byLine;
   });
   /**
-   * Modal-open state. `null` = closed; a string (possibly empty) = open,
-   * carrying the optional preset `lineId`. An empty string means
-   * "open with no preset" — distinct from `null` (closed). The shape
-   * lets a single `<Show when>` gate both rendering and prop wiring.
+   * Modal-open state. `null` = closed; a number = open, carrying the optional preset `lineId`.
+   * `0` is no line — line numbers start at 1 — and so means "open with no preset", distinct from
+   * `null` (closed). The shape lets a single `<Show when>` gate both rendering and prop wiring.
    */
-  const [correctionPresetLineId, setCorrectionPresetLineId] = createSignal<string | null>(null);
+  const [correctionPresetLineId, setCorrectionPresetLineId] = createSignal<number | null>(null);
   useHeartbeat(() => hexIdForQuery());
 
-  function openCorrection(lineId: string | null): void {
-    setCorrectionPresetLineId(lineId ?? '');
+  function openCorrection(lineId: number | null): void {
+    setCorrectionPresetLineId(lineId ?? 0);
   }
 
   function closeCorrection(): void {
@@ -354,7 +353,7 @@ export function OrderDetail() {
     if (releaseOnly && line.stagedQty === 0) return;
     const targetQty = isFullyStaged || releaseOnly ? 0 : shippable;
     stageMutation.mutate({
-      lineHexId: line.id,
+      lineId: line.lineId,
       stagedQty: targetQty,
       source: 'click',
     });
@@ -695,7 +694,7 @@ export function OrderDetail() {
                 }
                 onOpenCorrection={ctx.capabilities.createCorrections ? openCorrection : undefined}
                 pendingLineId={
-                  stageMutation.isPending ? (stageMutation.variables?.lineHexId ?? null) : null
+                  stageMutation.isPending ? (stageMutation.variables?.lineId ?? null) : null
                 }
                 unprocessedCorrectedByLine={unprocessedCorrectedByLine()}
               />
@@ -1068,17 +1067,17 @@ function LineTable(props: {
    * only when this callback is provided — keeps the table component
    * reusable in read-only contexts.
    */
-  onOpenCorrection?: (lineId: string) => void;
-  pendingLineId?: string | null;
+  onOpenCorrection?: (lineId: number) => void;
+  pendingLineId?: number | null;
   /**
-   * Corrected units per line that no operator has processed yet, keyed by line id.
+   * Corrected units per line that no operator has processed yet, keyed by line number.
    *
    * Splits the corrected disposition into two pills, because "corrected" answers what happened to
    * the units and says nothing about whether anyone still owes an action on them — and on a line
    * carrying both, one pill can only show one of the two. Omitted (a read-only embed with no
    * corrections query) collapses back to a single pill, which is honest: unknown is not zero.
    */
-  unprocessedCorrectedByLine?: Map<string, number>;
+  unprocessedCorrectedByLine?: Map<number, number>;
 }) {
   const hostNav = useHostNav();
 
@@ -1249,7 +1248,7 @@ function LineTable(props: {
               // the LAST such rebuild is the one inside `onSuccess`, while the mutation is still
               // pending; settling changes no line, so nothing rebuilt the row again and the button
               // stayed disabled until a reload. Read through a function and it tracks.
-              const isPending = (): boolean => props.pendingLineId === line.id;
+              const isPending = (): boolean => props.pendingLineId === line.lineId;
               // Nothing to ship AND nothing staged means there is no toggle to make. Either one alone
               // still leaves a move available: stage it, or give the stage back.
               // A line committed stock cannot cover is not staged: the server refuses it, and the
@@ -1538,7 +1537,7 @@ function LineTable(props: {
                             }
                             const unprocessed = Math.min(
                               line.qtyCorrected,
-                              known.get(line.id) ?? 0,
+                              known.get(line.lineId) ?? 0,
                             );
                             const processed = Math.max(0, line.qtyCorrected - unprocessed);
                             return [
@@ -1646,7 +1645,7 @@ function LineTable(props: {
                                 type="button"
                                 class={`px-1.5 py-0.5 text-sm leading-none rounded border font-bold cursor-pointer transition-opacity ${visibility} ${color} disabled:opacity-40 disabled:cursor-not-allowed`}
                                 disabled={!correctable}
-                                onClick={() => props.onOpenCorrection!(line.id)}
+                                onClick={() => props.onOpenCorrection!(line.lineId)}
                                 title={
                                   correctable
                                     ? __('Create a correction on this line (C)')

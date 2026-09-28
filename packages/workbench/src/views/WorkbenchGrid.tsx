@@ -107,12 +107,6 @@ const LOAD_SIZE_STORAGE_KEY = 'invflux_workbench_load_size';
 const COLLAPSED_STORAGE_KEY = 'invflux_workbench_collapsed';
 const DEFAULT_LOAD_SIZE = 500;
 
-/** The prefix the reusable grid namespaces its persisted column state under (storageKeyPrefix =
- *  "central-workbench"). The shell reads these keys directly when building the export column set so
- *  the export matches what's on screen — the single point where the shell couples to the grid's
- *  localStorage layout (kept out of the grid's imperative surface for now). */
-const GRID_STORAGE_PREFIX = 'invflux:workbench-grid:central-workbench:';
-
 /* Live-stock delta polling is DISABLED. The backend landed (adapter 298b195) but the "SPA
  * poll/apply" half never did: the reusable grid's default polling transport
  * targets `/workbench/stock-updates?subscription=…`, a route that was never registered (the server
@@ -378,7 +372,7 @@ function SupplierAssignModal(props: {
 /**
  * Bulk "Create replenishment PO": available only when a **single** supplier is filtered (so supplier X
  * is unambiguous). Generates a draft PO covering the chosen products — the selected rows, else all
- * visible ones — by reusing the server replenishment suggester (short = at/below reorder threshold or
+ * visible ones — by reusing the server replenishment suggester (short = at/below low stock threshold or
  * carrying the deficit concern). Only products that actually need ordering become lines, so a
  * scoped-but-none-short request creates nothing and says so. On success it hands off to the
  * Procurement app's draft for review + submit (the deficit → what-to-buy → PO loop, free-po-management §9).
@@ -474,7 +468,7 @@ function GeneratePoModal(props: {
                       'Each selected product is added at a suggested quantity (its shortfall, or the minimum order quantity). You review and edit the draft before submitting.',
                     )
                   : __(
-                      "Only products that need reordering (below their reorder threshold, or oversold beyond what's on order) are added, at suggested quantities. You review and edit the draft before submitting.",
+                      "Only products that need reordering (below their low stock threshold, or oversold beyond what's on order) are added, at suggested quantities. You review and edit the draft before submitting.",
                     )}
               </p>
             </>
@@ -617,36 +611,6 @@ function loadCollapsedProductIds(): Set<number> {
 
 function saveCollapsedProductIds(collapsed: Set<number>): void {
   sessionStorage.setItem(COLLAPSED_STORAGE_KEY, JSON.stringify([...collapsed]));
-}
-
-/** The reusable grid persists column visibility + order under its own namespaced localStorage keys;
- *  the export builder reads them at click time (never reactively) so the file matches what's shown. */
-function readGridVisibility(): Record<string, boolean> {
-  try {
-    const raw = localStorage.getItem(`${GRID_STORAGE_PREFIX}cols`);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as unknown;
-    if (typeof parsed !== 'object' || parsed === null) return {};
-    const out: Record<string, boolean> = {};
-    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-      if (typeof v === 'boolean') out[k] = v;
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-
-function readGridColumnOrder(): string[] {
-  try {
-    const raw = localStorage.getItem(`${GRID_STORAGE_PREFIX}col_order`);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((v): v is string => typeof v === 'string' && v !== '');
-  } catch {
-    return [];
-  }
 }
 
 // One (datatype, role) that has ≥2 registered components → a merchant choice (§5.6).
@@ -1127,6 +1091,7 @@ export function WorkbenchGrid(
   };
   let refreshGrid: () => void = () => {};
   let getSelectedCells: () => Array<{ row: WorkbenchRow; columnId: string }> = () => [];
+  let getVisibleColumnIds: () => string[] = () => [];
   let loadAllPagesHandle: () => Promise<void> = async () => {};
   let selectCells: (
     cells: readonly SelectedCellRef[],
@@ -1448,7 +1413,7 @@ export function WorkbenchGrid(
   // brought-with hiding). The grid owns fetch + live-merge and calls this on the merged rows; the
   // shell keeps the collapse state + the fold toggles here. Operates on WorkbenchRow (the grid's row
   // type) — every field it reads (atp/res/ctd/total, wcProductId/wcVariationId, productType,
-  // reorderThreshold, extra.orders, matched, name, sku) is present on WorkbenchRow. ──
+  // lowStockAmount, extra.orders, matched, name, sku) is present on WorkbenchRow. ──
   const isVariableParent = (p: WorkbenchRow): boolean =>
     p.productType === 'variable' && p.wcVariationId === null;
 
@@ -1556,7 +1521,7 @@ export function WorkbenchGrid(
         res,
         ctd,
         total: atp + res + ctd,
-        reorderStatus: reorderStatusFor(atp, product.reorderThreshold),
+        reorderStatus: reorderStatusFor(atp, product.lowStockAmount),
         extra: {
           ...(product.extra ?? {}),
           orders: totalOrderCount > 0 ? totalOrderCount : undefined,
@@ -1697,14 +1662,15 @@ export function WorkbenchGrid(
 
   // ── Export (visible columns, in order, matching what's on screen) ──
   const exportColumnIds = (): string[] => {
+    // Ask the grid what it is showing. This used to reconstruct the answer from the grid's own
+    // localStorage keys — the single place the shell coupled to the grid's storage layout, and one
+    // that returns a confidently wrong answer the moment the grid changes where (or whether) it
+    // stores a piece. Read at click time, so the file matches the screen.
     const metaById = new Map(stableColumns().map((m) => [m.id, m]));
-    const vis = readGridVisibility();
-    const ordered = readGridColumnOrder().filter((id) => metaById.has(id) && vis[id] !== false);
-    const seen = new Set(ordered);
-    for (const m of stableColumns()) {
-      if (!seen.has(m.id) && vis[m.id] !== false) ordered.push(m.id);
-    }
-    return ordered.filter((id) => id !== 'select' && id !== 'orders');
+
+    return getVisibleColumnIds()
+      .filter((id) => metaById.has(id))
+      .filter((id) => id !== 'select' && id !== 'orders');
   };
 
   // Build the nonce'd export URL from the grid's CURRENT view (same filter/search/sort encoding as
@@ -2477,6 +2443,7 @@ export function WorkbenchGrid(
             scrollGridToTop = h.scrollToTop;
             refreshGrid = h.refreshLiveUpdates;
             getSelectedCells = h.getSelectedCells;
+            getVisibleColumnIds = h.getVisibleColumnIds;
             loadAllPagesHandle = h.loadAllPages;
             selectCells = h.selectCells;
             getActiveCell = h.getActiveCell;

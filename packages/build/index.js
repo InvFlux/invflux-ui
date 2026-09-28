@@ -213,6 +213,13 @@ export function createInvFluxViteConfig(options) {
   const port = Number(proc.env.INVFLUX_VITE_PORT ?? String(devPort));
 
   return defineConfig(({ command }) => ({
+    // A lazy route's chunks are fetched ahead through Vite's preload helper, which prefixes each
+    // one with `base`. The default `/` asks for them at the **site** root, where a WordPress plugin
+    // never lives, so every lazy route fired one 404 per chunk. (The route still worked: a module's
+    // own imports are relative and resolve against the entry's URL. Only the head start was lost,
+    // and the console filled with red on every install.) A relative base makes the helper resolve
+    // the same way the imports do. Build only — the dev server does serve from its own root.
+    ...('build' === command ? { base: './' } : {}),
     define: {
       // Dependencies (TanStack Query et al.) read `process.env.NODE_ENV` at runtime and the bundle
       // has no Node shim. This MUST track the actual mode: hard-coding 'production' in a dev-server

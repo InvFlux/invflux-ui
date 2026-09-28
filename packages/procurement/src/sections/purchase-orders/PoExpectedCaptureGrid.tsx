@@ -18,19 +18,14 @@ import {
 } from '@invflux/ui';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
 import { type ColumnDef, createColumnHelper } from '@tanstack/solid-table';
-import type {
-  ColumnOrderState,
-  RowSelectionState,
-  SortingState,
-  VisibilityState,
-} from '@tanstack/solid-table';
+import type { RowSelectionState, SortingState } from '@tanstack/solid-table';
 import { createSignal, type JSX, Show } from 'solid-js';
 import { useProcurement } from '../../context';
-import { persistedSignal } from '../../grid/persistedSignal';
 import { registerReceiptEditor } from '../../grid/receiptEditor';
 import { createApi } from '../../lib/api';
 import { supplierDocHeading, type SupplierDocKind } from './supplierDocKinds';
 import { SkuCell } from './SkuCell';
+import { orderedQty } from '../../lib/variance';
 import type { PoLine } from './types';
 
 // The numeric editor (blank-start, `.`-fill, clamp) shared with the receive grid.
@@ -300,7 +295,7 @@ export function PoExpectedCaptureGrid(props: {
         cell: (info) => (
           <ExpectedCell
             value={expectedFor(info.row.original)}
-            ordered={info.row.original.qtyRequested}
+            ordered={orderedQty(info.row.original)}
           />
         ),
       }) as ColumnDef<PoLine, unknown>,
@@ -396,22 +391,6 @@ export function PoExpectedCaptureGrid(props: {
 
   // Required DataGrid state (per-operator layout persistence).
   const [sorting, setSorting] = createSignal<SortingState>([]);
-  const [columnVisibility, setColumnVisibility] = persistedSignal<VisibilityState>(
-    'invflux:po-expected:colvis',
-    {},
-  );
-  const [columnOrder, setColumnOrder] = persistedSignal<ColumnOrderState>(
-    'invflux:po-expected:colorder',
-    COLUMN_ORDER,
-  );
-  const [columnSizing, setColumnSizing] = persistedSignal<Record<string, number>>(
-    'invflux:po-expected:colsize',
-    {},
-  );
-  const [expandedColumnSections, setExpandedColumnSections] = persistedSignal<string[]>(
-    'invflux:po-expected:colsections',
-    ['document-capture'],
-  );
   const [rowSelection, setRowSelection] = createSignal<RowSelectionState>({});
   const [cellSelection, setCellSelection] = createSignal<SelectionState>(EMPTY_SELECTION);
 
@@ -476,19 +455,13 @@ export function PoExpectedCaptureGrid(props: {
           getStagedValue={getStagedValue}
           resolveClearedValue={resolveClearedValue}
           resolveEditorMeta={resolveEditorMeta}
-          settingsKey="po-expected-capture"
           onStageEdit={onStageEdit}
           onClearCells={onClearCells}
           sorting={sorting}
           onSortingChange={(next) => setSorting(() => next)}
-          columnVisibility={columnVisibility}
-          setColumnVisibility={(updater) => setColumnVisibility(updater)}
-          columnOrder={columnOrder}
-          setColumnOrder={(updater) => setColumnOrder(updater)}
-          columnSizing={columnSizing}
-          setColumnSizing={(updater) => setColumnSizing(updater)}
-          expandedColumnSections={expandedColumnSections}
-          setExpandedColumnSections={(updater) => setExpandedColumnSections(updater)}
+          scope="po-expected"
+          defaultColumnOrder={COLUMN_ORDER}
+          defaultExpandedSections={['document-capture']}
           rowSelection={rowSelection}
           setRowSelection={(updater) => setRowSelection(updater)}
           cellSelection={cellSelection}

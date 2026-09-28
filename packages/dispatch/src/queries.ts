@@ -67,8 +67,10 @@ import {
   createTag,
   deleteTag,
   fetchArchivedTags,
+  fetchLabelTranslations,
   fetchTags,
   restoreTag,
+  saveLabelTranslations,
   unassignOrderTag,
   updateTag,
 } from './api';
@@ -86,6 +88,7 @@ import type {
   ManageAuthority,
   ProcessCorrectionsPayload,
   TagSummary,
+  LabelTranslations,
   ArchivedTagName,
   TagListResult,
 } from './types';
@@ -183,7 +186,8 @@ export function useDispatchOrderDetailQuery(
 // ---------------------------------------------------------------------------
 
 export interface StageLineMutationVariables {
-  lineHexId: string;
+  /** The line's number within the order being staged. */
+  lineId: number;
   stagedQty: number;
   source: StageLineRequest['source'];
 }
@@ -211,7 +215,7 @@ export function useStageLineMutation(
 
   return createMutation(() => ({
     mutationFn: (variables: StageLineMutationVariables) =>
-      stageLine(ctx, orderHexId(), variables.lineHexId, {
+      stageLine(ctx, orderHexId(), variables.lineId, {
         stagedQty: variables.stagedQty,
         source: variables.source,
       }),
@@ -252,7 +256,7 @@ export function useStageLineMutation(
             updatedAt: response.order.updatedAt ?? prev.order.updatedAt,
           },
           lines: prev.lines.map((line) =>
-            line.id === response.line.id ? withStagingFrom(line, response.line) : line,
+            line.lineId === response.line.lineId ? withStagingFrom(line, response.line) : line,
           ),
         };
       });
@@ -678,7 +682,7 @@ function applyOptimisticStage(
 ): DispatchOrderDetail {
   const nowIso = new Date().toISOString();
   const updatedLines = prev.lines.map((line) => {
-    if (line.id !== variables.lineHexId) return line;
+    if (line.lineId !== variables.lineId) return line;
     const isStaging = variables.stagedQty > 0;
     return {
       ...line,
@@ -859,6 +863,56 @@ export function useArchivedTagsQuery(
     staleTime: 5 * 60_000,
     get enabled() {
       return enabled();
+    },
+  }));
+}
+
+/**
+ * One entity's merchant-supplied translations, fetched only when the editor is actually opened.
+ *
+ * Nobody translates a label often, and most never do — so this stays off the tag list's critical
+ * path and costs a request only when someone asks to see the languages.
+ */
+export function useLabelTranslationsQuery(
+  entityType: () => string,
+  entityKey: () => string,
+  enabled: () => boolean,
+): CreateQueryResult<LabelTranslations, Error> {
+  const ctx = useDispatch();
+  return createQuery(() => ({
+    queryKey: qk.labels.forEntity(entityType(), entityKey()),
+    queryFn: () => fetchLabelTranslations(ctx, entityType(), entityKey()),
+    staleTime: 5 * 60_000,
+    get enabled() {
+      return enabled();
+    },
+  }));
+}
+
+/**
+ * Save one entity's translations for one field.
+ *
+ * Invalidates the tag list as well as this entity's own entry: the resolved name travels on every
+ * chip, so a translation someone just wrote has to reach the queue, not only the editor they wrote
+ * it in.
+ */
+export function useLabelTranslationsMutation(
+  entityType: () => string,
+  entityKey: () => string,
+): CreateMutationResult<
+  LabelTranslations,
+  Error,
+  { translations: Record<string, string>; sourceText: string }
+> {
+  const ctx = useDispatch();
+  const queryClient = useQueryClient();
+  return createMutation(() => ({
+    mutationFn: (v: { translations: Record<string, string>; sourceText: string }) =>
+      saveLabelTranslations(ctx, entityType(), entityKey(), v.translations, v.sourceText),
+    onSuccess: (data: LabelTranslations) => {
+      queryClient.setQueryData(qk.labels.forEntity(entityType(), entityKey()), data);
+      void queryClient.invalidateQueries({ queryKey: qk.dispatch.tags() });
+      void queryClient.invalidateQueries({ queryKey: qk.dispatch.queue() });
     },
   }));
 }

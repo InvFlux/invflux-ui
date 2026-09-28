@@ -7,6 +7,16 @@ import type { AddOption } from '../sections/purchase-orders/AddPicker';
 interface CatalogueAddConfig {
   /** Addable catalogue products (supplier catalogue minus products already on the PO). */
   addOptions?: () => AddOption[];
+  /**
+   * Called when the picker opens, so the host can fetch the catalogue it needs.
+   *
+   * The catalogue is not loaded with the page: most purchase orders are generated and never have a
+   * product added by hand, so it was thousands of rows fetched for nothing. Opening this editor is
+   * the first moment anybody actually needs it.
+   */
+  onNeeded?: () => void;
+  /** Whether that fetch is still in flight — the empty list means "wait", not "none left". */
+  loading?: () => boolean;
   /** Portal target for the dropdown (escapes the cell's overflow clip). */
   portalRoot?: HTMLElement;
   /** Supplier display/nickname — for the "all products added" empty state. */
@@ -31,7 +41,12 @@ function CataloguePickerEditor(props: EditProps): JSX.Element {
   const options = (): SearchSelectOption[] =>
     (cfg().addOptions?.() ?? []).map((o) => ({ value: String(o.subjectId), label: o.label }));
   const emptyMessage = (): string => {
+    // An empty list while the catalogue is still arriving is not "none left" — saying so would be
+    // a confident wrong answer, and the merchant would stop looking.
+    if (true === cfg().loading?.()) return __('Loading the supplier catalogue…');
+
     const label = cfg().supplierLabel ?? '';
+
     return 0 === (cfg().addOptions?.() ?? []).length
       ? sprintf(
           __('All %s products added, no more available'),
@@ -49,6 +64,9 @@ function CataloguePickerEditor(props: EditProps): JSX.Element {
     const label = options().find((o) => o.value === val)?.label ?? '';
     props.onCommit({ value: val, label } satisfies SearchSelectOption, 'down');
   };
+
+  // Opening the picker is what makes the catalogue worth fetching; ask for it now.
+  onMount(() => cfg().onNeeded?.());
 
   // Escape cancels the edit — capture so it beats Kobalte's own "Escape closes the dropdown".
   onMount(() => {

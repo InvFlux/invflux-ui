@@ -898,7 +898,7 @@ export function OrderList() {
   }
 
   function tagLabel(id: string): string {
-    return tagsQuery.data?.find((t) => String(t.id) === id)?.name ?? `#${id}`;
+    return tagsQuery.data?.find((t) => String(t.id) === id)?.displayName ?? `#${id}`;
   }
 
   function skuLabel(sku: string): string {
@@ -1546,7 +1546,7 @@ export function OrderList() {
               label: __('Tags'),
               options: (tagsQuery.data ?? []).map((t) => ({
                 value: String(t.id),
-                label: t.name,
+                label: t.displayName,
               })),
             },
             values,
@@ -1574,7 +1574,7 @@ export function OrderList() {
         options: () =>
           withFacets(
             'tag_id',
-            (tagsQuery.data ?? []).map((t) => ({ value: String(t.id), label: t.name })),
+            (tagsQuery.data ?? []).map((t) => ({ value: String(t.id), label: t.displayName })),
           ),
         // Any/All match-mode toggle on the popover title row.
         extra: () => (
@@ -1623,7 +1623,7 @@ export function OrderList() {
         options: () =>
           withFacets(
             'tag_id_not',
-            (tagsQuery.data ?? []).map((t) => ({ value: String(t.id), label: t.name })),
+            (tagsQuery.data ?? []).map((t) => ({ value: String(t.id), label: t.displayName })),
           ),
         // Excluding a tag drops it from the include set, and vice versa: holding one in both lists
         // is a contradiction that always returns nothing, and an operator who ticks a tag here has

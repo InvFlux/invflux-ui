@@ -65,7 +65,7 @@ export function EmbeddedWorkbench(props: EmbeddedWorkbenchProps) {
             'sku',
             'gtin',
             'backorders',
-            'reorder_threshold',
+            'low_stock_amount',
             'atp',
             'res',
             'ctd',

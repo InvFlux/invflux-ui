@@ -59,7 +59,7 @@ const STATE_RANK: Record<string, number> = { pnd: 0, qi: 1, atp: 2, res: 3, ctd:
 
 /**
  * A slot key's location and state. The key's order is the slot space's dimension order, not a fixed
- * notation — the engine stores `atp.oh` (state first) — so the state is recognised rather than
+ * notation, and a stored key may carry either part first — so the state is recognised rather than
  * assumed to come second: a known state on either side, or else whichever side the other part is a
  * known location for. A key with one segment is a location alone.
  */

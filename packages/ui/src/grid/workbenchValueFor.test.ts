@@ -23,12 +23,13 @@ function row(overrides: Partial<WorkbenchRow> = {}): WorkbenchRow {
     catalogVisibility: 'visible',
     featured: false,
     postStatus: 'publish',
-    reorderThreshold: null,
+    lowStockAmount: null,
     reorderStatus: 'none',
     atp: 10,
     res: 2,
     ctd: 3,
     total: 15,
+    staged: 0,
     ...overrides,
   };
 }

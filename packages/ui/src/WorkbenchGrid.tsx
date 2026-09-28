@@ -43,14 +43,10 @@ import {
   type JSX,
 } from 'solid-js';
 import { Button } from './Button';
-import { TableViewIcon, RecordViewIcon, ColumnsSettingsIcon } from './icons';
+import { TableViewIcon, RecordViewIcon, ColumnsSettingsIcon, GearIcon } from './icons';
+import { useSurface } from './surfaceCtx';
 import { createInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/solid-query';
-import type {
-  ColumnOrderState,
-  SortingState,
-  VisibilityState,
-  RowSelectionState,
-} from '@tanstack/solid-table';
+import type { SortingState, VisibilityState, RowSelectionState } from '@tanstack/solid-table';
 import { __, _n, _x, formatNumber, sprintf } from '@invflux/i18n';
 import {
   DataGrid,
@@ -60,6 +56,7 @@ import {
   type DataGridMenuItem,
   type RowAttrs,
 } from './grid/DataGrid';
+import { gridStorageKey } from './grid/gridStorage';
 import {
   EMPTY_SELECTION,
   selectionRectsFromCells,
@@ -92,6 +89,7 @@ import {
   splitSubmittableRows,
   type SubmittedCell,
 } from './grid/applyPartition';
+import { countMatched, nextPageParam } from './grid/matchedPaging';
 import { IconButton } from './IconButton';
 import { Spinner } from './Spinner';
 import { toast } from './toast';
@@ -193,6 +191,9 @@ export interface WorkbenchGridProps {
   /** Column ids visible by default when nothing is stored yet — overrides the server's
    *  `visibleByDefault` for this surface; every other column starts hidden. Stored prefs still win. */
   defaultVisibleColumnIds?: string[];
+  /** Columns this surface pins and the merchant may not unpin. Unlike `defaultVisibleColumnIds` a
+   *  stored preference does NOT win here: the surface is asserting a requirement, not a default. */
+  lockedPinnedColumnIds?: string[];
   /** Surface-level default display settings (density / wrap / text size) applied when nothing is
    *  stored. Stored user prefs still win. */
   defaultGridSettings?: Partial<GridSettings>;
@@ -361,10 +362,6 @@ function writeJson(key: string, value: unknown): void {
   }
 }
 
-const isStringArray = (v: unknown): v is string[] =>
-  Array.isArray(v) && v.every((x) => typeof x === 'string');
-const isNumberRecord = (v: unknown): v is Record<string, number> =>
-  typeof v === 'object' && v !== null && Object.values(v).every((n) => typeof n === 'number');
 const isBoolean = (v: unknown): v is boolean => typeof v === 'boolean';
 const isVisibility = (v: unknown): v is VisibilityState =>
   typeof v === 'object' && v !== null && Object.values(v).every((b) => typeof b === 'boolean');
@@ -548,17 +545,13 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   const tableSorting = (): SortingState => [{ id: sort().sortBy, desc: sort().sortDir === 'desc' }];
 
   // ── Controlled DataGrid state (persisted per surface) ──
+  // Only VISIBILITY is ours. This surface seeds an exhaustive visible/hidden map from
+  // `defaultVisibleColumnIds` when nothing is stored, and supersedes the grid's own
+  // `visibleByDefault` pass — behaviour the grid cannot infer, so we own the piece and pass it down.
+  // Order, widths, folded sections and pins are the grid's, stored under `scope`; owning them here
+  // bought nothing and was how pinning came to exist on this surface alone.
   const [columnVisibility, setColumnVisibility] = createSignal<VisibilityState>(
-    readJson(key('cols'), {}, isVisibility),
-  );
-  const [columnOrder, setColumnOrder] = createSignal<ColumnOrderState>(
-    readJson(key('col_order'), [], isStringArray),
-  );
-  const [columnSizing, setColumnSizing] = createSignal<Record<string, number>>(
-    readJson(key('col_sizing'), {}, isNumberRecord),
-  );
-  const [expandedColSections, setExpandedColSections] = createSignal<string[]>(
-    readJson(key('col_sections'), [], isStringArray),
+    readJson(gridStorageKey(props.storageKeyPrefix, 'cols'), {}, isVisibility),
   );
   // Variation names: full `Parent - Attribute` or just the distinguishing part. The prop is the
   // surface's DEFAULT (the product tab embeds one family, where the parent's name on every row is
@@ -574,10 +567,7 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   const [cellSelection, setCellSelection] = createSignal<SelectionState>(EMPTY_SELECTION);
 
   createEffect(() => writeJson(key('varnames_compact'), compactVariations()));
-  createEffect(() => writeJson(key('cols'), columnVisibility()));
-  createEffect(() => writeJson(key('col_order'), columnOrder()));
-  createEffect(() => writeJson(key('col_sizing'), columnSizing()));
-  createEffect(() => writeJson(key('col_sections'), expandedColSections()));
+  createEffect(() => writeJson(gridStorageKey(props.storageKeyPrefix, 'cols'), columnVisibility()));
 
   // ── Fetch: infinite query over the paged products endpoint ──
   const queryClient = useQueryClient();
@@ -612,10 +602,9 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
       if (!res.ok) throw new Error(`Request failed (${res.status})`);
       return (await res.json()) as WorkbenchPage;
     },
-    getNextPageParam: (lastPage, allPages) => {
-      const loaded = allPages.reduce((n, p) => n + p.products.length, 0);
-      return loaded < lastPage.total ? allPages.length + 1 : undefined;
-    },
+    // Progress is counted in matched rows, not in rows received: brought-with context rows ride
+    // along on the page that produced them and are not in `total`. See `grid/matchedPaging`.
+    getNextPageParam: (lastPage, allPages) => nextPageParam(lastPage, allPages),
   }));
 
   // Live-update overlay: subjectId → latest patched fields (keyed by column id). Folded onto the
@@ -764,7 +753,11 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
     }
   });
 
-  const loadedCount = (): number => rows().length;
+  // Matched rows only, so this counts the same population as `total`: the size of the filter's
+  // result set, against how much of it has been fetched. Paired with it in the footer here and in
+  // the host shell's own indicator (via `onMeta`), so both read one population; brought-with context
+  // rows are on screen but belong to neither number.
+  const loadedCount = (): number => countMatched(rows());
   const totalCount = (): number => {
     const data = query.data as InfiniteData<WorkbenchPage> | undefined;
     return data?.pages[0]?.total ?? 0;
@@ -792,7 +785,7 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   // exhaustive; the `select` checkbox can't be hidden.
   const hadStoredVisibility = (() => {
     try {
-      return localStorage.getItem(key('cols')) !== null;
+      return localStorage.getItem(gridStorageKey(props.storageKeyPrefix, 'cols')) !== null;
     } catch {
       return false;
     }
@@ -866,8 +859,8 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
     } else {
       setColumnVisibility({});
     }
-    setColumnOrder([]);
-    setColumnSizing({});
+    // Order, widths, sections and pins live in the grid now, so it clears them.
+    apiResetLayout();
   }
 
   // ── Dirty model (staged edits) ──
@@ -968,7 +961,7 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
       if (row.stockManaged === false) return false;
     }
     // A variable parent has no price/cost of its own — those live on each variation (and WC ignores a
-    // parent price). `reorder_threshold` stays editable: it's the variations' default. Slot columns are
+    // parent price). `low_stock_amount` stays editable: it's the variations' default. Slot columns are
     // already covered by the `total` guard above.
     if (
       isVariableParent &&
@@ -1554,7 +1547,13 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   // ── Imperative handles (host toolbar drives these) ──
   let apiFocusGrid: () => void = () => {};
   let apiOpenColumnManager: () => void = () => {};
+  // Grid display settings live in the surface's page-level gear when the grid is inside the app shell.
+  // Outside it (the embedded product-tab grid), there is no page gear, so the built-in toolbar shows a
+  // settings button that drives this handle — the sole entry the removed hover-gear used to provide.
+  const surface = useSurface();
+  let apiOpenGridSettings: () => void = () => {};
   let apiScrollToTop: () => void = () => {};
+  let apiResetLayout: () => void = () => {};
   let apiGetSelectedCells: () => Array<{ row: WorkbenchRow; columnId: string }> = () => [];
 
   // ── Layout: horizontal grid vs transposed "record" mode (fields → rows, records → columns). ──
@@ -1774,7 +1773,9 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
         targets: group.rows.map((row) => {
           const staged = dirty.edit(row.subjectId, group.columnId);
           return {
-            subjectId: row.subjectId,
+            // The modal's identity field is `key`, not `subjectId`: it is generic over the row type
+            // now, and a draft PO line is keyed by its line id. Here that key IS the subject id.
+            key: row.subjectId,
             row,
             value: staged ? staged.new : workbenchValueFor(row, group.columnId),
           };
@@ -1803,7 +1804,9 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
     // where it started (raise 10%, then undo it) is exactly that case.
     dirty.patchMany(
       edits.map((e) => ({
-        subjectId: e.subjectId,
+        // `subjectId` is the dirty store's own field and stays; only the read moves to the modal's
+        // generic `key`, which on this surface is the subject id.
+        subjectId: e.key,
         columnId: e.columnId,
         original: workbenchValueFor(e.row, e.columnId),
         next: e.newValue,
@@ -1880,6 +1883,7 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
     refreshLiveUpdates: () => void refetchAndResetLive(),
     openSaveReview: () => openSaveReview(),
     getSelectedCells: () => apiGetSelectedCells(),
+    getVisibleColumnIds: () => apiSelectableColumnIds(),
     isDirty: () => dirty.isDirty(),
     loadAllPages: async () => {
       while (query.hasNextPage && !query.isFetchingNextPage) await query.fetchNextPage();
@@ -2039,6 +2043,21 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
             >
               <ColumnsSettingsIcon class="h-5 w-5" />
             </Button>
+            {/* Grid display settings (density / wrap / text size). Inside the app shell these live in
+                the surface's page-level gear, so the button is only shown when there is no surface —
+                the embedded product-tab grid, which has no page gear. */}
+            <Show when={!surface}>
+              <Button
+                variant="secondary"
+                class="px-2!"
+                data-testid="workbench-grid-display-settings"
+                aria-label={`${__('Grid display')} (Ctrl+,)`}
+                title={`${__('Grid display')} (Ctrl+,)`}
+                onClick={() => apiOpenGridSettings()}
+              >
+                <GearIcon class="h-5 w-5" />
+              </Button>
+            </Show>
           </div>
         </div>
       </Show>
@@ -2049,7 +2068,6 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
         <DataGrid<WorkbenchRow>
           rows={rows}
           getRowId={(row) => String(row.subjectId)}
-          settingsKey={props.storageKeyPrefix}
           columnMetas={() => stableColumns()}
           groupLabels={stableGroupLabels}
           getValue={workbenchValueFor}
@@ -2133,14 +2151,10 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
             if (first) setSort({ sortBy: first.id, sortDir: first.desc ? 'desc' : 'asc' });
             else setSort({ sortBy: 'name', sortDir: 'asc' });
           }}
+          scope={props.storageKeyPrefix}
           columnVisibility={columnVisibility}
           setColumnVisibility={(updater) => setColumnVisibility((prev) => updater(prev))}
-          columnOrder={columnOrder}
-          setColumnOrder={(updater) => setColumnOrder((prev) => updater(prev))}
-          columnSizing={columnSizing}
-          setColumnSizing={(updater) => setColumnSizing((prev) => updater(prev))}
-          expandedColumnSections={expandedColSections}
-          setExpandedColumnSections={(updater) => setExpandedColSections((prev) => updater(prev))}
+          lockedPinnedColumnIds={() => props.lockedPinnedColumnIds ?? []}
           onResetColumns={resetColumns}
           canRenameColumns={() => props.ctx.capabilities.manageSettings === true}
           onRenameColumn={renameColumn}
@@ -2159,7 +2173,9 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
           apiRef={(api) => {
             apiFocusGrid = api.focusGrid;
             apiOpenColumnManager = api.openColumnManager;
+            apiOpenGridSettings = api.openGridSettings;
             apiScrollToTop = api.scrollToTop;
+            apiResetLayout = api.resetLayout;
             apiSelectableColumnIds = api.getSelectableColumnIds;
             apiGetSelectedCells = api.getSelectedCells;
           }}
@@ -2241,7 +2257,7 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
       <Show when={props.showFooterCount !== false}>
         <div class="flex shrink-0 items-center justify-between py-2 text-sm text-text-muted">
           <Show when={query.data} fallback={<span>—</span>}>
-            <span>
+            <span data-testid="workbench-loaded-count">
               {loadedCount()} / {totalCount()}
             </span>
           </Show>

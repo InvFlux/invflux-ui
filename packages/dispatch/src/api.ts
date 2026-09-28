@@ -16,6 +16,7 @@ import type {
   ProcessCorrectionsPayload,
   TagSummary,
   ArchivedTagName,
+  LabelTranslations,
   TagListResult,
 } from './types';
 
@@ -424,11 +425,11 @@ export async function deleteCorrection(
 export async function stageLine(
   ctx: DispatchContext,
   orderHexId: string,
-  lineHexId: string,
+  lineId: number,
   request: StageLineRequest,
 ): Promise<StageLineResponse> {
   return api(ctx)
-    .patch<StageLineResponse>(route(path`/orders/${orderHexId}/lines/${lineHexId}`), request)
+    .patch<StageLineResponse>(route(path`/orders/${orderHexId}/lines/${lineId}`), request)
     .catch(typedAs((c, st, ms) => new StageLineError(c, st, ms), 'Stage request failed'));
 }
 
@@ -661,6 +662,47 @@ export async function fetchTags(ctx: DispatchContext): Promise<TagListResult> {
     route('/tags'),
   );
   return { tags: body.tags, archivedNames: body.archivedNames ?? [] };
+}
+
+/**
+ * The merchant's own translations of one entity's label, plus the languages this install offers.
+ *
+ * Not under the dispatch namespace: one table holds every labelled entity's translations, and one
+ * route pair serves them all. A tag reaches it as `tag/{id}` the same way a column header reaches
+ * it as `workbench_column/{id}` — what differs per entity is only which capability may write.
+ */
+export function fetchLabelTranslations(
+  ctx: DispatchContext,
+  entityType: string,
+  entityKey: string,
+): Promise<LabelTranslations> {
+  return api(ctx).get<LabelTranslations>(labelRoute(entityType, entityKey));
+}
+
+/**
+ * Replace one field's translations with exactly this set.
+ *
+ * The whole set, never a delta: the editor sends what its boxes hold, so clearing one removes that
+ * language without a second control and the server never has to guess which absences were meant.
+ * `sourceText` records what the label read as while these were typed, so a later rename can be
+ * pointed out rather than silently changing what the translation describes.
+ */
+export function saveLabelTranslations(
+  ctx: DispatchContext,
+  entityType: string,
+  entityKey: string,
+  translations: Record<string, string>,
+  sourceText: string,
+  field = 'name',
+): Promise<LabelTranslations> {
+  return api(ctx)
+    .put<LabelTranslations>(labelRoute(entityType, entityKey), { field, translations, sourceText })
+    .catch(tagError('Save translations failed'));
+}
+
+/** A label-translation route: its own namespace, since labels are not a dispatch concern. */
+function labelRoute(entityType: string, entityKey: string): string {
+  return `/invflux/v1/labels/${encodeURIComponent(entityType)}/${encodeURIComponent(entityKey)}`;
 }
 
 /** The retired tags in full — fetched when the merchant opens the retired section. */

@@ -73,7 +73,29 @@ export type ManageAuthority = 'Anyone' | 'Managed' | 'System';
 export interface TagSummary {
   id: number;
   slug: string;
+  /**
+   * The tag's canonical name — what the merchant typed, in the language they typed it.
+   *
+   * **Not what to show a reader**: that is {@link displayName}. This is the text a rename edits and
+   * the slug was derived from, so the editor, the name-collision probe and anything comparing two
+   * tags work on it. Translating it in place would mean a French reader renaming a tag silently
+   * overwrote the name everyone else reads.
+   */
   name: string;
+  /**
+   * The name to put on screen: the merchant's translation for this reader's language, else the
+   * seeding plugin's own wording for a built-in they have not renamed, else {@link name}.
+   *
+   * Resolved server-side, so every surface renders the same answer without knowing the rules.
+   */
+  displayName: string;
+  /**
+   * Every language this tag has been translated into, locale-keyed — not only this reader's.
+   *
+   * Carried so a search can match across all of them: a merchant hunting for the tag they know as
+   * « Fragile » has to find it while reading English. Empty for a tag nobody has translated.
+   */
+  nameTranslations?: Record<string, string>;
   /** Index (0..23) into the fixed Gmail-modeled palette (`@invflux/ui` TAG_PALETTE). */
   colorId: number;
   /**
@@ -107,7 +129,10 @@ export interface TagSummary {
  */
 export interface ArchivedTagName {
   id: number;
+  /** The canonical name — what a collision is actually against. */
   name: string;
+  /** What to show when naming the tag that blocks the slug, in this reader's language. */
+  displayName: string;
   slug: string;
 }
 
@@ -489,7 +514,13 @@ export interface ProductLink {
 }
 
 export interface DispatchOrderLine {
-  id: string; // 32-char lowercase hex (UUIDv7)
+  /**
+   * The line's number within its order — 1, 2, 3… — unique there and nowhere else.
+   *
+   * It identifies a line only alongside the order id the response already carries, so never use it
+   * as a key across orders, and never render it as an identifier a user might quote back.
+   */
+  lineId: number;
   externalLineRef: string;
   subjectId: number;
   name: string;
@@ -644,7 +675,8 @@ export type EssentialsCorrectionTypeCode =
 
 export interface DispatchCorrection {
   id: string; // 32-char lowercase hex
-  lineId: string;
+  /** The corrected line's number within the order this correction belongs to. */
+  lineId: number;
   typeCode: string; // includes LPSC codes when reading
   typeName: string;
   reasonCode: string | null;
@@ -708,7 +740,8 @@ export interface DispatchCorrectionsResponse {
  * line — the price paid for those units — and never takes one from the client.
  */
 export interface CreateCorrectionRequest {
-  lineId: string;
+  /** The line's number within the order, as {@link DispatchOrderLine.lineId} carries it. */
+  lineId: number;
   typeCode: EssentialsCorrectionTypeCode;
   qty: number;
   note?: string | null;
@@ -1009,4 +1042,39 @@ export interface OrderDetailActionSlotProps {
 export interface OrderDetailCardSlotProps {
   orderHexId: string;
   order: DispatchOrderSummary;
+}
+
+/** One language a merchant may translate a label into on this install. */
+export interface OfferableLocale {
+  /** A WordPress locale, e.g. `fr_FR`. */
+  code: string;
+  /** Its name in the reader's own language, falling back to the bare code. */
+  label: string;
+  /** The site's own language — offered first, and the one most stores fill. */
+  isSite: boolean;
+}
+
+/** One merchant-supplied translation, with what the label read as when it was written. */
+export interface LabelTranslationEntry {
+  text: string;
+  /**
+   * The label as it read when this translation was typed, or null when unknown.
+   *
+   * Advisory: a translation outlives the thing it translates, and comparing this against the
+   * label's current text is the only way to notice that the two have drifted apart. Never consulted
+   * when rendering — a stale translation still shows, because falling back to the default would
+   * replace a slightly-wrong label with a foreign one.
+   */
+  sourceText: string | null;
+}
+
+/** Everything the per-language editor opens on, for one entity. */
+export interface LabelTranslations {
+  entityType: string;
+  entityKey: string;
+  /** field (`name`, `description`) → locale → the merchant's entry. */
+  fields: Record<string, Record<string, LabelTranslationEntry>>;
+  locales: OfferableLocale[];
+  /** Whether this reader may write them — the capability that edits this entity's own name. */
+  canEdit: boolean;
 }

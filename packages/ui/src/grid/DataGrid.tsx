@@ -32,7 +32,7 @@ import {
   type RowSelectionState,
 } from '@tanstack/solid-table';
 import type { Cell, Column, Row, RowData, Table } from '@tanstack/table-core';
-import { GearIcon, PencilIcon } from '../icons';
+import { PencilIcon, PinIcon } from '../icons';
 import {
   Modal,
   MODAL_BAR_TINT,
@@ -71,12 +71,31 @@ import {
   type CellCoord,
   type SelectionState,
 } from './cellSelection';
+import {
+  isPinLocked,
+  isPinned,
+  mergePinnedColumns,
+  movePinnedColumn,
+  pinColumn,
+  pinDropAction,
+  pinnedLeafOrder,
+  pinnedWidthExceeded,
+  unpinColumn,
+} from './columnPinning';
+import { mergeColumnOrder } from './columnOrder';
+import {
+  isColumnOrder,
+  isNumberRecord,
+  isStringArray,
+  isVisibility,
+  persistedGridSignal,
+} from './gridStorage';
 import { buildClipboard, cellCopyValue, selectionBounds } from './clipboard';
 import { pasteTargets, resolvePastedCell } from './paste';
 import { parseSpreadsheetTsv } from '../excel-tsv-parser';
 import type { GridColumnMeta, TaxonomySpace } from '../types';
 import { __, _n, _x, sprintf } from '@invflux/i18n';
-import { iconButtonClass, menuItemClass } from '../primitives';
+import { menuItemClass } from '../primitives';
 import { ErrorBanner } from '../ErrorBanner';
 
 // Single owner of the `align` column-meta augmentation (moved verbatim from WorkbenchGrid).
@@ -91,7 +110,7 @@ const RIGHT_ALIGNED = new Set([
   'price',
   'sale_price',
   'weight',
-  'reorder_threshold',
+  'low_stock_amount',
   'atp',
   'res',
   'ctd',
@@ -109,24 +128,6 @@ function moveArrayItem<T>(items: T[], fromIndex: number, toIndex: number): T[] {
 
 function sameStringArray(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((value, index) => value === b[index]);
-}
-
-function mergeColumnOrder(
-  currentOrder: ColumnOrderState,
-  availableColumnIds: string[],
-): ColumnOrderState {
-  // `availableColumnIds` can be transiently INCOMPLETE during load (server columns arrive async, and
-  // the set is rebuilt across ticks). So preserve the saved order verbatim — filtering it down to the
-  // currently-available ids would DROP an id that simply hasn't loaded yet, and it would then
-  // re-append as "missing" at the end, silently losing its saved position (the column-reorder-doesn't-
-  // persist bug). A genuinely-removed id lingering in the order is harmless: TanStack ignores unknown
-  // columnOrder ids and the reorder UI filters to existing columns. We only APPEND newly-seen ids.
-  const hasSelect = availableColumnIds.includes('select') || currentOrder.includes('select');
-  const orderedMovableIds = currentOrder.filter((id) => id !== 'select');
-  const seen = new Set(orderedMovableIds);
-  const missingMovableIds = availableColumnIds.filter((id) => id !== 'select' && !seen.has(id));
-
-  return [...(hasSelect ? ['select'] : []), ...orderedMovableIds, ...missingMovableIds];
 }
 
 /** Section title for a column `group` key: the host-provided label (server payload / host map),
@@ -202,9 +203,8 @@ const TEXT_SIZE_CLASS_SMALLER: Record<GridTextSize, string> = {
 const DENSITY_BASE_PX: Record<GridDensity, number> = { compact: 38, normal: 49, large: 60 };
 const TEXT_SIZE_BUMP_PX: Record<GridTextSize, number> = { small: -2, normal: 0, large: 4 };
 
-function loadGridSettings(key: string | undefined, defaults?: Partial<GridSettings>): GridSettings {
+function loadGridSettings(key: string, defaults?: Partial<GridSettings>): GridSettings {
   const base: GridSettings = { ...DEFAULT_GRID_SETTINGS, ...defaults };
-  if (key === undefined) return base;
   try {
     const raw = localStorage.getItem(`invflux:grid-settings:${key}`);
     // Stored user preference wins over the surface default, which wins over the global default.
@@ -237,11 +237,7 @@ function saveGridSettings(key: string, settings: GridSettings): void {
 }
 
 /** Record-layout column widths (field-label column + the uniform record columns), persisted per key. */
-function loadRecordWidth(
-  key: string | undefined,
-  which: 'field' | 'col',
-  fallback: number,
-): number {
+function loadRecordWidth(key: string, which: 'field' | 'col', fallback: number): number {
   if (key === undefined) return fallback;
   try {
     const raw = localStorage.getItem(`invflux:record-width:${key}:${which}`);
@@ -427,18 +423,59 @@ export interface DataGridProps<TRow> {
    *  e.g. Ctrl/Cmd+Enter save, `*` group-fold. Return true if handled. */
   keyHandlersInGrid?: Array<(e: KeyboardEvent, active: CellCoord | null) => boolean>;
 
-  // ── Controlled table state (host owns persistence) ──────────────────────────
+  /**
+   * This grid's identity for stored layout — a stable slug, one per surface.
+   *
+   * Everything the merchant arranges (visibility, order, widths, folded sections, pins) is kept
+   * under it automatically; see {@link gridStorageKey}. Two grids sharing a scope share a layout,
+   * which is occasionally what you want and never what you want by accident, so the slug names the
+   * surface rather than the component.
+   */
+  scope: string;
+
+  // ── Controlled table state ──────────────────────────────────────────────────
   sorting: () => SortingState;
   onSortingChange: (next: SortingState) => void;
-  columnVisibility: () => VisibilityState;
-  setColumnVisibility: (updater: (prev: VisibilityState) => VisibilityState) => void;
-  columnOrder: () => ColumnOrderState;
-  setColumnOrder: (updater: (prev: ColumnOrderState) => ColumnOrderState) => void;
-  columnSizing: () => Record<string, number>;
-  setColumnSizing: (updater: (prev: Record<string, number>) => Record<string, number>) => void;
-  /** Expanded column-manager section keys (empty = all folded, the default). Host-persisted so the
-   *  open/closed sections survive reloads; omit for in-memory-only. */
+
+  /**
+   * Layout overrides, for the pieces a surface genuinely has to control.
+   *
+   * **Omit them.** The grid stores each piece under {@link DataGridProps.scope} and every feature is
+   * on by default; pass a pair only where the surface must do something the grid cannot know about —
+   * the Workbench seeds visibility from the server's `visibleByDefault` and offers a reset, so it
+   * owns visibility and nothing else.
+   *
+   * They are optional because they are overrides, which is the opposite of how this started: each
+   * piece used to be a required prop, so every surface hand-wired every feature and a surface that
+   * missed one silently lacked it. Pinning shipped that way and reached one grid of six.
+   *
+   * A pair is all-or-nothing — pass both halves or neither.
+   */
+  columnVisibility?: () => VisibilityState;
+  setColumnVisibility?: (updater: (prev: VisibilityState) => VisibilityState) => void;
+  columnOrder?: () => ColumnOrderState;
+  setColumnOrder?: (updater: (prev: ColumnOrderState) => ColumnOrderState) => void;
+  columnSizing?: () => Record<string, number>;
+  setColumnSizing?: (updater: (prev: Record<string, number>) => Record<string, number>) => void;
+  pinnedColumns?: () => string[];
+  setPinnedColumns?: (updater: (prev: string[]) => string[]) => void;
   expandedColumnSections?: () => string[];
+  /**
+   * Declarations, not state: this surface's starting arrangement, used as the fallback for the
+   * pieces the grid stores. A default describes the first run and loses to the merchant's later
+   * choice — unlike {@link DataGridProps.lockedPinnedColumnIds}, which is a requirement and wins.
+   *
+   * `defaultColumnOrder` is the canonical order a new column is also slotted into, beside its
+   * neighbour rather than at the far end; see `mergeColumnOrder`. Omit it and the server's column
+   * order plays that role.
+   */
+  defaultColumnOrder?: string[];
+  defaultExpandedSections?: string[];
+  /** Columns this surface pins and the merchant may not unpin — the grid renders their affordances as
+   *  refusing rather than hiding them, so the constraint is visible rather than mysterious. A locked
+   *  column cannot be hidden either: a pinned column that is not rendered would reserve edge space
+   *  for nothing. Not layout state: an assertion by the surface, so it has no stored counterpart. */
+  lockedPinnedColumnIds?: () => string[];
   setExpandedColumnSections?: (updater: (prev: string[]) => string[]) => void;
   /** Reset column visibility / order / sizing to the surface defaults (the host owns what "default"
    *  means). When provided, the column manager shows a "Reset to default" button. */
@@ -470,8 +507,16 @@ export interface DataGridProps<TRow> {
    *  when the click misses the checkbox itself. The grid can't read the typed row to do this. */
   onLeadingCellClick?: (row: TRow, columnId: string, event: MouseEvent) => void;
 
-  /** Persist the grid display settings (density / wrap / text size) under this key in localStorage.
-   *  Omit for in-memory-only (resets each mount). The settings modal + their effect are grid-internal. */
+  /**
+   * Override the key the grid's DISPLAY settings (density / wrap / text size, record-view widths)
+   * are stored under. Defaults to {@link DataGridProps.scope}, which is almost always right.
+   *
+   * Pass it only for two grids that should deliberately share one set of display preferences.
+   * It used to be an independent optional prop, which meant a surface could name its layout one
+   * thing and its display settings another and split one merchant's preferences across two names —
+   * and a surface that forgot it kept its layout while density and wrap silently stopped
+   * persisting, with nothing raised anywhere. Two grids were already diverging.
+   */
   settingsKey?: string;
   /** Surface-level default display settings, applied when nothing is stored yet (a compact embed
    *  wants density:"compact" / textSize:"small" out of the box). Stored user prefs still win. */
@@ -511,9 +556,27 @@ export interface DataGridApi<TRow> {
   /** Distinct (row, columnId) cells covered by the current cell selection — the host reads them
    *  for dirty-model ops (e.g. Revert). */
   getSelectedCells: () => Array<{ row: TRow; columnId: string }>;
-  /** Selectable column ids in live display order (visible leaf columns minus the checkbox) — the
-   *  host orders its save-review sections by this. */
+  /**
+   * Visible leaf column ids in live display order, checkbox excluded.
+   *
+   * Two hosts read it: one orders its save-review sections by it, another builds its export column
+   * set from it so the file matches what is on screen. The second used to read the grid's
+   * localStorage keys directly — the single place a host coupled to the grid's storage layout, and
+   * one that silently returned a stale answer whenever the grid owned a default the store had never
+   * been told about. Ask the grid what it is showing instead.
+   *
+   * Evaluated at call time, never reactive.
+   */
   getSelectableColumnIds: () => string[];
+  /**
+   * Clear the layout this grid stores under its {@link DataGridProps.scope} — order, widths, folded
+   * sections, pins — back to its defaults.
+   *
+   * It resets only the pieces the grid actually owns. A surface that passed an override keeps that
+   * piece and is responsible for resetting it, which is the same division as everywhere else: the
+   * grid cannot reset what it was not trusted to store.
+   */
+  resetLayout: () => void;
 }
 
 /**
@@ -578,6 +641,19 @@ export function ColumnManagerModal<TRow>(props: {
   /** Host-provided localized section titles by group key (see {@link DataGridProps.groupLabels}). */
   groupLabels?: () => Record<string, string>;
   onMoveColumn: (sourceId: string, targetId: string) => void;
+  /**
+   * Pinning, or nothing when the surface has not wired it up.
+   *
+   * The Reorder tab shows the pinned group as a section above a divider, because pinned columns
+   * *are* the grid's first columns — showing them anywhere else would be a list that disagrees with
+   * what the merchant sees. `pinRefusal` returns why a pin is refused so the control can say so.
+   */
+  pinnedColumnIds?: () => string[];
+  lockedPinnedColumnIds?: () => string[];
+  onPinColumn?: (columnId: string, atIndex?: number) => void;
+  onUnpinColumn?: (columnId: string) => void;
+  onMovePinnedColumn?: (sourceId: string, targetId: string) => void;
+  pinRefusal?: (columnId: string) => string | undefined;
   /** Persisted set of expanded section keys (empty = all folded, the default). Controlled by the
    *  host so it survives reloads; falls back to in-memory state when not provided. */
   expandedSections?: () => string[];
@@ -609,9 +685,33 @@ export function ColumnManagerModal<TRow>(props: {
   const [internalExpanded, setInternalExpanded] = createSignal<string[]>([]);
   const expandedList = (): string[] => props.expandedSections?.() ?? internalExpanded();
   const isExpanded = (key: string): boolean => filtering() || expandedList().includes(key);
+  const pinnedIds = (): string[] => props.pinnedColumnIds?.() ?? [];
+  const pinningEnabled = (): boolean => props.onPinColumn !== undefined;
+  const isColumnPinLocked = (columnId: string): boolean =>
+    (props.lockedPinnedColumnIds?.() ?? []).includes(columnId);
+
+  /** Apply a drop as the zones read it — see {@link pinDropAction}. */
+  const handleDrop = (sourceId: string, targetId: string): void => {
+    const drop = pinDropAction(pinnedIds(), sourceId, targetId);
+    switch (drop.kind) {
+      case 'reorder-pinned':
+        props.onMovePinnedColumn?.(sourceId, targetId);
+        break;
+      case 'pin':
+        props.onPinColumn?.(drop.columnId, drop.atIndex);
+        break;
+      case 'unpin':
+        props.onUnpinColumn?.(drop.columnId);
+        break;
+      case 'reorder-free':
+        props.onMoveColumn(drop.columnId, drop.targetId);
+        break;
+    }
+  };
+
   // Drag-to-reorder the visible columns — the shared @invflux/ui primitive (same one the app's tab
   // strips use). onReorder moves the dragged column to the drop target's slot.
-  const columnReorder = createDragReorder(props.onMoveColumn);
+  const columnReorder = createDragReorder(handleDrop);
 
   const metaById = createMemo(() => new Map(props.columns.map((c) => [c.id, c])));
   const priorityOf = (col: Column<TRow>): number => metaById().get(col.id)?.priority ?? 1000;
@@ -740,13 +840,63 @@ export function ColumnManagerModal<TRow>(props: {
       .filter((section) => section.shownCols.length > 0);
   });
 
+  /**
+   * The columns the Reorder tab lists: the hideable ones, plus any pinned column that is not.
+   *
+   * Hideability is about *visibility*, and the Reorder tab is about position — the two coincide often
+   * enough to look like one rule, and the Product column is where they part. It is declared
+   * `enableHiding: false` because a grid of rows with no row identity is useless, and it is also the
+   * first column anyone pins. Listing only hideable columns left it out of its own pinned group: the
+   * grid froze it at the edge while the list showed no pinned section at all, and there was no way to
+   * unpin it from here.
+   */
+  const reorderable = createMemo(() => {
+    const pinned = new Set(pinnedIds());
+    return props.table.getAllLeafColumns().filter((col) => col.getCanHide() || pinned.has(col.id));
+  });
+
   // Reorder tab: the visible columns only, in the live grid order.
   const visibleOrdered = createMemo(() => {
-    const byId = new Map(hideable().map((col) => [col.id, col]));
+    const byId = new Map(reorderable().map((col) => [col.id, col]));
     return props.columnOrder
       .map((id) => byId.get(id))
       .filter((col): col is Column<TRow> => col !== undefined && col.getIsVisible());
   });
+
+  /**
+   * The Reorder list: the pinned group first, in pinned order, then the free columns.
+   *
+   * Pinned order is its own list, so it cannot be read off `columnOrder` — and the grid puts the
+   * pinned group first regardless of where those columns sit in the merchant's arrangement. A list
+   * that showed them in `columnOrder` position would describe a grid that does not exist.
+   *
+   * A locked pin can be neither hidden nor unpinned, so it cannot leave the group. It still drags
+   * *within* it: the surface fixed which columns anchor the grid, not what order they anchor it in.
+   */
+  const reorderRows = createMemo<{ col: Column<TRow>; pinned: boolean }[]>(() => {
+    const pinned = pinnedIds();
+    const cols = visibleOrdered();
+    if (pinned.length === 0) return cols.map((col) => ({ col, pinned: false }));
+
+    const byId = new Map(cols.map((col) => [col.id, col]));
+    const front = pinned
+      .map((id) => byId.get(id))
+      .filter((col): col is Column<TRow> => col !== undefined);
+    const frontIds = new Set(front.map((col) => col.id));
+
+    return [
+      ...front.map((col) => ({ col, pinned: true })),
+      ...cols.filter((col) => !frontIds.has(col.id)).map((col) => ({ col, pinned: false })),
+    ];
+  });
+
+  /** The last pinned row, which is where the divider goes. Absent when nothing is pinned. */
+  const lastPinnedRowId = createMemo(
+    () =>
+      reorderRows()
+        .filter((row) => row.pinned)
+        .at(-1)?.col.id,
+  );
 
   const toggleSection = (key: string): void => {
     const update = (prev: string[]): string[] =>
@@ -866,11 +1016,12 @@ export function ColumnManagerModal<TRow>(props: {
           </button>
           <button
             type="button"
+            data-testid="column-manager-tab-reorder"
             class={tabClass(tab() === 'reorder')}
             onClick={() => setTab('reorder')}
           >
             {/* Context-tagged: "Reorder" here means rearrange columns, not the stock "Reorder"
-                (reorder_threshold) column — which shares the bare msgid and mistranslates in fr. */}
+                (low_stock_amount) column — which shares the bare msgid and mistranslates in fr. */}
             {_x('Reorder', 'column manager tab: rearrange the visible columns')}
           </button>
         </ModalDragHandle>
@@ -1093,32 +1244,96 @@ export function ColumnManagerModal<TRow>(props: {
             </For>
           </Show>
 
-          {/* ── Reorder: drag the visible columns ── */}
+          {/* ── Reorder: drag the visible columns; the pinned group sits above the divider ── */}
           <Show when={tab() === 'reorder'}>
             <ul class="space-y-1">
+              {/* Named zones, not a bare rule: a divider alone in a drag list reads as decoration,
+                  and which side a row sits on is the whole meaning here. */}
+              <Show when={lastPinnedRowId() !== undefined}>
+                <li
+                  class="flex items-center gap-2 pb-1 text-[11px] uppercase tracking-wide text-text-muted"
+                  aria-hidden="true"
+                >
+                  {_x('Pinned', 'column reorder list: the frozen group at the left edge')}
+                  <span class="h-px flex-1 bg-border" />
+                </li>
+              </Show>
               <For
-                each={visibleOrdered()}
+                each={reorderRows()}
                 fallback={
                   <li class="px-2 py-1 text-sm text-text-muted">{__('No visible columns.')}</li>
                 }
               >
-                {(col) => (
-                  <>
-                    <Show when={columnReorder.isDropTarget(col.id)}>
-                      <li class="h-0.5 rounded bg-primary" aria-hidden="true" />
-                    </Show>
-                    <li
-                      class="flex cursor-move items-center gap-2 rounded border border-border px-2 py-1 text-sm hover:bg-gray-100"
-                      classList={{ 'opacity-50': columnReorder.isDragging(col.id) }}
-                      {...columnReorder.itemProps(col.id)}
-                    >
-                      <span class="w-4 select-none text-text-muted" aria-hidden="true">
-                        ⋮⋮
-                      </span>
-                      <span class="min-w-0 flex-1 truncate">{labelOf(col)}</span>
-                    </li>
-                  </>
-                )}
+                {(row) => {
+                  const col = row.col;
+                  const locked = (): boolean => isColumnPinLocked(col.id);
+                  const refusal = (): string | undefined =>
+                    row.pinned ? undefined : props.pinRefusal?.(col.id);
+
+                  return (
+                    <>
+                      <Show when={columnReorder.isDropTarget(col.id)}>
+                        <li class="h-0.5 rounded bg-primary" aria-hidden="true" />
+                      </Show>
+                      <li
+                        data-testid={`reorder-row-${col.id}`}
+                        data-pinned={row.pinned ? '' : undefined}
+                        class="flex cursor-move items-center gap-2 rounded border border-border px-2 py-1 text-sm hover:bg-gray-100"
+                        classList={{
+                          'opacity-50': columnReorder.isDragging(col.id),
+                          // A pinned row reads as part of a group, not as a decorated free row.
+                          'border-primary/40 bg-primary/5': row.pinned,
+                        }}
+                        {...columnReorder.itemProps(col.id)}
+                      >
+                        <span class="w-4 select-none text-text-muted" aria-hidden="true">
+                          ⋮⋮
+                        </span>
+                        <span class="min-w-0 flex-1 truncate">{labelOf(col)}</span>
+                        <Show when={pinningEnabled()}>
+                          <IconButton
+                            data-testid={`column-pin-${col.id}`}
+                            label={
+                              locked()
+                                ? __('Pinned by this screen — cannot be unpinned')
+                                : refusal() !== undefined
+                                  ? (refusal() as string)
+                                  : row.pinned
+                                    ? __('Unpin column')
+                                    : __('Pin column')
+                            }
+                            disabled={locked() || refusal() !== undefined}
+                            // Not draggable: a press on the button must not start the row's drag,
+                            // or the click never lands and the control looks broken.
+                            draggable={false}
+                            onDragStart={(event: DragEvent) => event.preventDefault()}
+                            class={
+                              row.pinned ? 'text-primary' : 'text-text-muted hover:text-text-base'
+                            }
+                            onClick={() =>
+                              row.pinned
+                                ? props.onUnpinColumn?.(col.id)
+                                : props.onPinColumn?.(col.id)
+                            }
+                          >
+                            <PinIcon class="h-4 w-4" />
+                          </IconButton>
+                        </Show>
+                      </li>
+                      {/* The zone boundary: dragging a row across it pins or unpins. */}
+                      <Show when={col.id === lastPinnedRowId()}>
+                        <li
+                          data-testid="reorder-pin-divider"
+                          class="flex items-center gap-2 pb-1 pt-2 text-[11px] uppercase tracking-wide text-text-muted"
+                          aria-hidden="true"
+                        >
+                          {_x('Scrolls', 'column reorder list: the columns that are not pinned')}
+                          <span class="h-px flex-1 bg-border" />
+                        </li>
+                      </Show>
+                    </>
+                  );
+                }}
               </For>
             </ul>
           </Show>
@@ -1175,6 +1390,65 @@ function toContextMenuItem(m: DataGridMenuItem): ContextMenuItem {
 
 export function DataGrid<TRow>(props: DataGridProps<TRow>) {
   const ch = createColumnHelper<TRow>();
+
+  // ── Layout state: the surface's, if it passed a pair; otherwise the grid's own, under `scope`.
+  //
+  // Resolved once at setup rather than per read. Whether a consumer controls a piece is a property
+  // of the call site, not of the render — and a piece that changed owner mid-life would swap which
+  // store its state lives in, silently, which no caller could want. Reading `props` here is safe for
+  // the same reason: presence is fixed, even though the values behind it stay reactive.
+  //
+  // The owned signal is only created when the pair is absent, so an overridden piece writes no key
+  // and leaves no orphan behind in storage.
+  const ownVisibility =
+    props.columnVisibility === undefined
+      ? persistedGridSignal<VisibilityState>(props.scope, 'cols', {}, isVisibility)
+      : undefined;
+  const ownOrder =
+    props.columnOrder === undefined
+      ? persistedGridSignal<ColumnOrderState>(
+          props.scope,
+          'col_order',
+          props.defaultColumnOrder ?? [],
+          isColumnOrder,
+        )
+      : undefined;
+  const ownSizing =
+    props.columnSizing === undefined
+      ? persistedGridSignal<Record<string, number>>(props.scope, 'col_sizing', {}, isNumberRecord)
+      : undefined;
+  const ownSections =
+    props.expandedColumnSections === undefined
+      ? persistedGridSignal<string[]>(
+          props.scope,
+          'col_sections',
+          props.defaultExpandedSections ?? [],
+          isStringArray,
+        )
+      : undefined;
+  const ownPinned =
+    props.pinnedColumns === undefined
+      ? persistedGridSignal<string[]>(props.scope, 'col_pinned', [], isStringArray)
+      : undefined;
+
+  const columnVisibility = (): VisibilityState => (props.columnVisibility ?? ownVisibility![0])();
+  const setColumnVisibility = (u: (prev: VisibilityState) => VisibilityState): void =>
+    (props.setColumnVisibility ?? ownVisibility![1])(u);
+  const columnOrderState = (): ColumnOrderState => (props.columnOrder ?? ownOrder![0])();
+  const setColumnOrderState = (u: (prev: ColumnOrderState) => ColumnOrderState): void =>
+    (props.setColumnOrder ?? ownOrder![1])(u);
+  const columnSizing = (): Record<string, number> => (props.columnSizing ?? ownSizing![0])();
+  const setColumnSizing = (u: (prev: Record<string, number>) => Record<string, number>): void =>
+    (props.setColumnSizing ?? ownSizing![1])(u);
+  const expandedColumnSections = (): string[] =>
+    (props.expandedColumnSections ?? ownSections![0])();
+  const setExpandedColumnSections = (u: (prev: string[]) => string[]): void =>
+    (props.setExpandedColumnSections ?? ownSections![1])(u);
+  /** Display settings share the surface's identity unless a consumer deliberately splits them. */
+  const settingsKey = (): string => props.settingsKey ?? props.scope;
+  const pinnedColumnsState = (): string[] => (props.pinnedColumns ?? ownPinned![0])();
+  const setPinnedColumnsState = (u: (prev: string[]) => string[]): void =>
+    (props.setPinnedColumns ?? ownPinned![1])(u);
 
   let scrollContainerRef!: HTMLDivElement;
 
@@ -1243,17 +1517,13 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
     return 'string' === typeof header ? header : columnId;
   };
   const [showGridSettings, setShowGridSettings] = createSignal(false);
-  const [showGearMenu, setShowGearMenu] = createSignal(false);
-  let gearRef: HTMLDivElement | undefined;
 
-  // Grid display settings (density / wrap / text size) — grid-internal, persisted per props.settingsKey.
+  // Grid display settings (density / wrap / text size) — grid-internal, persisted per settingsKey().
   const [gridSettings, setGridSettings] = createSignal<GridSettings>(
-    loadGridSettings(props.settingsKey, props.defaultGridSettings),
+    loadGridSettings(settingsKey(), props.defaultGridSettings),
   );
   createEffect(() => {
-    const key = props.settingsKey;
-    const s = gridSettings();
-    if (key !== undefined) saveGridSettings(key, s);
+    saveGridSettings(settingsKey(), gridSettings());
   });
 
   // Inside the unified app shell, contribute a "Data Grid" section to the active surface's gear popover
@@ -1279,18 +1549,16 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
 
   // Record-layout column widths (field-label column + the uniform record columns), drag-resizable.
   const [recordFieldWidth, setRecordFieldWidth] = createSignal(
-    loadRecordWidth(props.settingsKey, 'field', 200),
+    loadRecordWidth(settingsKey(), 'field', 200),
   );
   const [recordColWidth, setRecordColWidth] = createSignal(
-    loadRecordWidth(props.settingsKey, 'col', 190),
+    loadRecordWidth(settingsKey(), 'col', 190),
   );
   createEffect(() => {
-    if (props.settingsKey !== undefined)
-      saveRecordWidth(props.settingsKey, 'field', recordFieldWidth());
+    saveRecordWidth(settingsKey(), 'field', recordFieldWidth());
   });
   createEffect(() => {
-    if (props.settingsKey !== undefined)
-      saveRecordWidth(props.settingsKey, 'col', recordColWidth());
+    saveRecordWidth(settingsKey(), 'col', recordColWidth());
   });
   // Drag a record-layout column edge — the field-label column, or the (uniform) record columns.
   // Uses POINTER CAPTURE on the grip element itself: once captured, all pointermove/up events are
@@ -1399,17 +1667,6 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
     });
   }
 
-  // Close the gear menu on an outside click (shadow-DOM aware — the SPA mounts in a shadow root).
-  createEffect(() => {
-    if (!showGearMenu()) return;
-    const root = (gearRef?.getRootNode() ?? document) as Document | ShadowRoot;
-    const onDown = (e: Event): void => {
-      if (gearRef && !e.composedPath().includes(gearRef)) setShowGearMenu(false);
-    };
-    root.addEventListener('pointerdown', onDown, true);
-    onCleanup(() => root.removeEventListener('pointerdown', onDown, true));
-  });
-
   const componentChoiceId = (dataType: string, role: DataGridComponentRole): string | undefined =>
     props.componentChoiceId?.(dataType, role);
   const taxonomySpace = (): TaxonomySpace | undefined => props.taxonomySpace?.();
@@ -1432,6 +1689,24 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
     });
   }
 
+  /**
+   * Mark the surface's locked pins unhideable.
+   *
+   * A locked pin is the surface's own anchor, and an anchor the merchant has hidden is not one. This
+   * goes through `enableHiding` rather than a check at each affordance because `getCanHide()` is the
+   * single gate TanStack already exposes: the column picker, the header menu's Hide item and the
+   * reorder list all read it, so none of them has to know pinning exists.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function withPinLock(defs: ColumnDef<TRow, any>[]): ColumnDef<TRow, any>[] {
+    const locked = new Set(props.lockedPinnedColumnIds?.() ?? []);
+    if (locked.size === 0) return defs;
+
+    return defs.map((def) =>
+      typeof def.id === 'string' && locked.has(def.id) ? { ...def, enableHiding: false } : def,
+    );
+  }
+
   // Server-driven column list: leading + (server columns mapped to bespoke-or-generic) +
   // trailing structural. Before metadata arrives, fall back to the bespoke columns (in their
   // leading/trailing order) so the first paint is unchanged.
@@ -1439,7 +1714,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
   const columns = createMemo<ColumnDef<TRow, any>[]>(() => {
     const serverColumns = props.columnMetas();
     const bespoke = props.bespokeColumns;
-    if (serverColumns.length === 0) return [...bespoke.values()];
+    if (serverColumns.length === 0) return withPinLock([...bespoke.values()]);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ordered: ColumnDef<TRow, any>[] = [];
@@ -1460,7 +1735,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
       if (def) ordered.push({ ...def, size: 130 });
     }
 
-    return ordered;
+    return withPinLock(ordered);
   });
   const availableColumnIds = createMemo(() =>
     columns()
@@ -1468,9 +1743,29 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
       .filter((id): id is string => typeof id === 'string' && id !== ''),
   );
 
+  /**
+   * The order a column *should* sit in, which decides where an unseen one is slotted.
+   *
+   * The surface's declared order leads where it has an opinion; everything else follows in the order
+   * the columns were built (server priority). Declared ids that no column provides are dropped here
+   * — unlike the merchant's saved order, this list is not a preference to preserve, it is a statement
+   * about columns that are supposed to exist.
+   */
+  const canonicalColumnOrder = createMemo(() => {
+    const declared = props.defaultColumnOrder;
+    const available = availableColumnIds();
+    if (declared === undefined) return available;
+
+    const present = new Set(available);
+    const lead = declared.filter((id) => present.has(id));
+    const seen = new Set(lead);
+
+    return [...lead, ...available.filter((id) => !seen.has(id))];
+  });
+
   function moveColumn(sourceId: string, targetId: string): void {
-    props.setColumnOrder((prev) => {
-      const order = mergeColumnOrder(prev, availableColumnIds());
+    setColumnOrderState((prev) => {
+      const order = mergeColumnOrder(prev, canonicalColumnOrder());
       const fromIndex = order.indexOf(sourceId);
       const toIndex = order.indexOf(targetId);
       if (fromIndex <= 0 || toIndex <= 0 || fromIndex === toIndex) return order;
@@ -1480,9 +1775,9 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
   }
 
   createEffect(() => {
-    const merged = mergeColumnOrder(props.columnOrder(), availableColumnIds());
-    if (!sameStringArray(props.columnOrder(), merged)) {
-      props.setColumnOrder(() => merged);
+    const merged = mergeColumnOrder(columnOrderState(), canonicalColumnOrder());
+    if (!sameStringArray(columnOrderState(), merged)) {
+      setColumnOrderState(() => merged);
     }
   });
 
@@ -1493,7 +1788,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
     const serverColumns = props.columnMetas();
     if (serverColumns.length === 0) return;
 
-    props.setColumnVisibility((prev) => {
+    setColumnVisibility((prev) => {
       let changed = false;
       const next = { ...prev };
       for (const column of serverColumns) {
@@ -1506,6 +1801,132 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
       return changed ? next : prev;
     });
   });
+
+  /** The pinned group as the table wants it: locked ids reconciled in, checkbox in front. */
+  const pinnedColumnIds = createMemo(() =>
+    mergePinnedColumns(pinnedColumnsState(), props.lockedPinnedColumnIds?.() ?? []),
+  );
+  const pinnedLeft = createMemo(() => pinnedLeafOrder(pinnedColumnIds()));
+  const lockedPinIds = createMemo(() => props.lockedPinnedColumnIds?.() ?? []);
+
+  /**
+   * Why pinning this column is refused, or `undefined` when it is allowed.
+   *
+   * Returned as the reason rather than a boolean because every caller renders it: a control that is
+   * merely dead teaches nothing, and the budget is a fact the merchant cannot otherwise discover.
+   */
+  function pinRefusal(columnId: string): string | undefined {
+    if (isPinned(pinnedColumnIds(), columnId)) return undefined;
+
+    const widths = Object.fromEntries(
+      table.getVisibleLeafColumns().map((column) => [column.id, column.getSize()]),
+    );
+    const viewport = scrollContainerRef?.clientWidth ?? 0;
+    if (pinnedWidthExceeded([...pinnedColumnIds(), columnId], widths, viewport, 150)) {
+      return __('Pinning this column would leave too little of the grid to scroll.');
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Pin a column, optionally at a position within the group, and make sure it is visible.
+   *
+   * Visibility comes with it because the merchant's intent is "keep this in front of me", and a
+   * pinned-but-hidden column honours the letter of that and none of it. The width budget is enforced
+   * here too, not only in the affordances: a keyboard path or a host call reaches this directly.
+   */
+  function pinColumnId(columnId: string, atIndex?: number): void {
+    if (pinRefusal(columnId) !== undefined) return;
+
+    const column = table.getColumn(columnId);
+    if (column && !column.getIsVisible()) column.toggleVisibility(true);
+    setPinnedColumnsState((prev) => {
+      const pinned = pinColumn(prev, columnId);
+
+      return atIndex === undefined ? pinned : movePinnedColumn(pinned, columnId, atIndex);
+    });
+  }
+
+  function unpinColumnId(columnId: string): void {
+    setPinnedColumnsState((prev) => unpinColumn(prev, columnId, lockedPinIds()));
+  }
+
+  /** Reorder within the pinned group, moving `sourceId` into `targetId`'s slot. */
+  function movePinnedColumnId(sourceId: string, targetId: string): void {
+    setPinnedColumnsState((prev) => {
+      const to = prev.indexOf(targetId);
+
+      return to === -1 ? prev : movePinnedColumn(prev, sourceId, to);
+    });
+  }
+
+  /** The pinned group's right edge — where the frozen region visibly ends. */
+  const lastPinnedId = createMemo(() => pinnedLeft().at(-1));
+
+  /**
+   * Depth at the group's right edge, so the scrolling columns read as passing *under* the frozen
+   * ones rather than stopping at them.
+   *
+   * A shadow and nothing else. The separators themselves are ordinary cell borders, which is only
+   * true because the table is `border-separate`: under `collapse` the borders belong to the table
+   * rather than the cells, so a sticky cell moves and its border stays, leaving a transparent 1px at
+   * every pinned boundary. That same model also hid this shadow — the neighbouring cell painted over
+   * it — which is why the edge once needed a drawn line to be visible at all. With cell-owned
+   * borders the shadow lands, and a rule on top of it would only compete.
+   */
+  const pinnedEdgeShadow = (columnId: string): string | undefined =>
+    columnId === lastPinnedId() ? '3px 0 5px -2px rgba(0, 0, 0, 0.22)' : undefined;
+
+  /**
+   * The order the table renders in: pinned columns first, then the merchant's own order.
+   *
+   * TanStack's `columnPinning` marks a column pinned and computes its offset, but in a single-table
+   * layout it does NOT move it — `getVisibleCells()` keeps declaration order, and the split
+   * `getLeftVisibleCells()` API exists for rendering three tables side by side, which this grid does
+   * not do. Left alone, each pinned column sticks at *its own* natural offset and the unpinned
+   * columns scroll through the gaps between them, which looks like a rendering fault rather than a
+   * feature. Composing the order here is what makes the pinned group contiguous at the edge.
+   *
+   * Composed for the table only. The stored `col_order` stays the merchant's arrangement of ALL
+   * columns, so unpinning restores a column to where they last put it rather than to the end.
+   */
+  const effectiveColumnOrder = createMemo<ColumnOrderState>(() => {
+    const pinned = pinnedLeft();
+    if (pinned.length === 0) return columnOrderState();
+
+    const front = new Set(pinned);
+
+    return [...pinned, ...columnOrderState().filter((id) => !front.has(id))];
+  });
+
+  /**
+   * Sticky placement for a pinned cell, or `undefined` for every other cell.
+   *
+   * `left` is cumulative over the pinned columns before this one — asked of the table rather than
+   * summed here, so a resize moves the offsets with it. The z-indices are the load-bearing part: the
+   * header (`thead`, z-10) and the totals row (z-10) must stay above a pinned *body* cell while it
+   * scrolls under them, and a pinned *header* cell must sit above its unpinned neighbours inside the
+   * header's own stacking context. Anything else and cells slide over each other mid-scroll.
+   */
+  const pinnedCellStyle = (
+    column: { id: string; getStart: (position: 'left') => number },
+    role: 'header' | 'body' | 'footer',
+  ): Record<string, string> | undefined => {
+    if (!isPinned(pinnedColumnIds(), column.id)) return undefined;
+
+    const shadow = pinnedEdgeShadow(column.id);
+
+    return {
+      position: 'sticky',
+      left: `${column.getStart('left')}px`,
+      // Below `thead`/totals (both z-10) in the body; above unpinned siblings within the header.
+      'z-index': role === 'body' ? '5' : '11',
+      // Omitted rather than empty: the first pinned column when it is not also the last has no edge
+      // of its own to draw, and `box-shadow: ''` is not a valid declaration.
+      ...(shadow ? { 'box-shadow': shadow } : {}),
+    };
+  };
 
   const table = createSolidTable({
     get data() {
@@ -1527,32 +1948,33 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
         return props.sorting();
       },
       get columnVisibility() {
-        return props.columnVisibility();
+        return columnVisibility();
       },
       get rowSelection() {
         return props.rowSelection();
       },
       get columnOrder() {
-        return props.columnOrder();
+        return effectiveColumnOrder();
       },
       get columnSizing() {
-        return props.columnSizing();
+        return columnSizing();
+      },
+      get columnPinning() {
+        return { left: pinnedLeft(), right: [] };
       },
     },
     onColumnSizingChange: (updater) => {
-      props.setColumnSizing((prev) => (typeof updater === 'function' ? updater(prev) : updater));
+      setColumnSizing((prev) => (typeof updater === 'function' ? updater(prev) : updater));
     },
     onSortingChange: (updater) => {
       const next = typeof updater === 'function' ? updater(props.sorting()) : updater;
       props.onSortingChange(next);
     },
     onColumnVisibilityChange: (updater) => {
-      props.setColumnVisibility((prev) =>
-        typeof updater === 'function' ? updater(prev) : updater,
-      );
+      setColumnVisibility((prev) => (typeof updater === 'function' ? updater(prev) : updater));
     },
     onColumnOrderChange: (updater) => {
-      props.setColumnOrder((prev) => (typeof updater === 'function' ? updater(prev) : updater));
+      setColumnOrderState((prev) => (typeof updater === 'function' ? updater(prev) : updater));
     },
     onRowSelectionChange: (updater) => {
       props.setRowSelection((prev) => (typeof updater === 'function' ? updater(prev) : updater));
@@ -2339,7 +2761,8 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
    * edit-entry). Drives +/- over a selected stock cell (§2 keys). Clamps to the SAME per-row bounds
    * the editor enforces — `resolveEditorMeta` injects `editorConfig.min` / `.max` (e.g. a receipt
    * Damaged cell capped at this session's Received), so +/- can never stage a value typing couldn't.
-   * Defaults to `min` 0 / no upper bound when the column declares neither.
+   * Defaults to `min` 0 / no upper bound when the column declares neither, and starts from
+   * `editorConfig.dotDefault` when the cell holds no value of its own.
    */
   function adjustActiveNumberCell(step: 1 | -1): boolean {
     const active = props.cellSelection().active;
@@ -2350,11 +2773,17 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
     const persisted = props.getValue(target.row, target.columnId);
     const staged = props.getStagedValue(target.row, target.columnId);
     const stagedNum = staged.staged ? staged.value : undefined;
-    const currentNum =
-      typeof stagedNum === 'number' ? stagedNum : typeof persisted === 'number' ? persisted : 0;
     const cfg = (
       props.resolveEditorMeta ? props.resolveEditorMeta(target.meta, target.row) : target.meta
     ).editorConfig;
+    // An empty cell that displays a figure anyway — a PO quantity showing the suggestion it
+    // inherits — increments from *that*, not from zero. `dotDefault` is the same number the "."
+    // key would fill in, so +/- and "." agree about what the cell is implicitly worth, and the
+    // merchant nudging a suggested 28 gets 29 rather than 1. A cell with no value and no default
+    // still starts at 0.
+    const base = typeof cfg.dotDefault === 'number' ? cfg.dotDefault : 0;
+    const currentNum =
+      typeof stagedNum === 'number' ? stagedNum : typeof persisted === 'number' ? persisted : base;
     const min = typeof cfg.min === 'number' ? cfg.min : 0;
     const max = typeof cfg.max === 'number' ? cfg.max : Infinity;
     props.onStageEdit(
@@ -2462,6 +2891,15 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
     },
     getSelectedCells: selectedCellRefs,
     getSelectableColumnIds: () => selectableColumnIds(),
+    resetLayout: () => {
+      ownOrder?.[1](() => []);
+      ownSizing?.[1](() => ({}));
+      ownSections?.[1](() => []);
+      ownVisibility?.[1](() => ({}));
+      // Locked pins survive a reset by construction: `mergePinnedColumns` puts them back on the next
+      // read. Clearing to empty is therefore the right target even for a surface that locks one.
+      ownPinned?.[1](() => []);
+    },
   });
 
   // ─── Right-click context menu (6b.5) ──────────────────────────────────────
@@ -2701,6 +3139,26 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
       meta: columnMetaById().get(columnId),
     }) ?? []) {
       items.push(toContextMenuItem(extra));
+    }
+    // Pin / unpin, above the escape hatches: it is a property of the column the operator
+    // right-clicked, so it belongs with that column's own actions rather than in the footer.
+    if (columnId !== 'select') {
+      const pinnedNow = isPinned(pinnedColumnIds(), columnId);
+      const locked = isPinLocked(lockedPinIds(), columnId);
+      const refusal = pinnedNow ? undefined : pinRefusal(columnId);
+      items.push({
+        key: 'pin',
+        label: pinnedNow ? __('Unpin column') : __('Pin column'),
+        disabled: locked || refusal !== undefined,
+        // "this screen", not "the surface": one concept, one word. `surface` is our architecture
+        // term and belongs in the code and the docs; the merchant-facing register is the one
+        // SavedFilterControl already set ("everyone who works this screen"). The sibling label on
+        // the reorder-list button says the same thing the same way.
+        title: locked
+          ? __('This column is pinned by this screen and cannot be unpinned.')
+          : refusal,
+        run: () => (pinnedNow ? unpinColumnId(columnId) : pinColumnId(columnId)),
+      });
     }
     if (column.getCanHide()) {
       items.push({
@@ -3216,9 +3674,26 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
         data-pending={pending() ? '' : undefined}
         data-readonly={readOnly() ? '' : undefined}
         data-inherited={inheritedCell() ? '' : undefined}
-        style={outlineStyle() ? { 'box-shadow': outlineStyle() } : undefined}
+        style={(() => {
+          const pinnedStyle = pinnedCellStyle(cell.column, 'body');
+          // `box-shadow` carries three unrelated jobs on this element — the drag/selection outline,
+          // the pinned separator, the group edge — so they are CONCATENATED, never overwritten.
+          // Assigning one over the other is how the active-cell outline silently erased the frozen
+          // boundary (or the reverse, depending on which spread came last).
+          const shadows = [outlineStyle(), pinnedStyle?.['box-shadow']].filter(Boolean).join(', ');
+
+          return { ...(pinnedStyle ?? {}), ...(shadows ? { 'box-shadow': shadows } : {}) };
+        })()}
         aria-busy={pending() ? 'true' : undefined}
-        class={`border-r border-gray-200 ${editing() ? 'overflow-hidden p-0' : `${base} ${cellDensityText()}${cellWrapClass(cell.column.id)}`}${bg()}${
+        class={`border-r border-t border-r-ground border-t-border ${editing() ? 'overflow-hidden p-0' : `${base} ${cellDensityText()}${cellWrapClass(cell.column.id)}`}${
+          bg() ||
+          (isPinned(pinnedColumnIds(), cell.column.id)
+            ? // A pinned cell slides over the rows behind it, so it needs a background of its
+              // own — the row paints behind the row, not the cell. Mirrors the row's own surface
+              // and hover step so a pinned column still lights up with the row it belongs to.
+              ' bg-surface group-hover/row:bg-blue-50'
+            : '')
+        }${
           isAct() && !editing() ? ' ring-2 ring-inset ring-blue-500' : ''
         }${drillable() || pending() ? ' relative' : ''}${
           drillable() && readOnly() ? ' cursor-zoom-in' : ''
@@ -3339,12 +3814,18 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
       <Show when={showColManager()}>
         <ColumnManagerModal
           table={table}
-          columnOrder={props.columnOrder()}
+          columnOrder={columnOrderState()}
           columns={props.columnMetas()}
           groupLabels={props.groupLabels}
           onMoveColumn={moveColumn}
-          expandedSections={props.expandedColumnSections}
-          setExpandedSections={props.setExpandedColumnSections}
+          pinnedColumnIds={pinnedColumnIds}
+          lockedPinnedColumnIds={lockedPinIds}
+          onPinColumn={pinColumnId}
+          onUnpinColumn={unpinColumnId}
+          onMovePinnedColumn={movePinnedColumnId}
+          pinRefusal={pinRefusal}
+          expandedSections={expandedColumnSections}
+          setExpandedSections={setExpandedColumnSections}
           onReset={props.onResetColumns}
           canRenameColumns={props.canRenameColumns}
           onRenameColumn={props.onRenameColumn}
@@ -3546,60 +4027,8 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
         }}
       </Show>
 
-      {/* ── Scrollable table (hover-revealed settings gear straddles the top-right corner) ── */}
+      {/* ── Scrollable table ── */}
       <div class="group relative flex min-h-0 flex-1 flex-col">
-        {/* Settings gear — absolute over the top-right corner (outside the scroll clip so it straddles
-            the border), fades + slides in left-to-right on grid hover/focus. The discoverable entry to
-            Columns + Grid display; the keyboard shortcuts stay for power users. */}
-        <div ref={gearRef} class="absolute -right-1 -top-2 z-40">
-          <button
-            type="button"
-            class={iconButtonClass(
-              'md',
-              false,
-              // The gear is hover-revealed: it slides in from under the grid's right edge and
-              // fades up, so it carries motion + a card border the plain icon button has no
-              // reason to.
-              '-translate-x-3 rounded-md border border-border bg-surface opacity-0 shadow-sm transition duration-300 ease-in group-hover:translate-x-0 group-hover:opacity-100 group-focus-within:translate-x-0 group-focus-within:opacity-100',
-            )}
-            aria-label={__('Grid options')}
-            title={__('Grid options')}
-            onClick={() => setShowGearMenu((v) => !v)}
-          >
-            <GearIcon />
-          </button>
-          <Show when={showGearMenu()}>
-            <ul class="absolute right-0 top-full mt-1 min-w-44 rounded-md border border-border bg-surface py-1 text-sm shadow-lg">
-              <li>
-                <button
-                  type="button"
-                  class={menuItemClass(false, false, 'justify-between gap-6')}
-                  onClick={() => {
-                    setShowGearMenu(false);
-                    openColumnManager();
-                  }}
-                >
-                  {__('Columns')}
-                  <span class="text-xs text-text-muted">Ctrl+M</span>
-                </button>
-              </li>
-              <li>
-                <button
-                  type="button"
-                  class={menuItemClass(false, false, 'justify-between gap-6')}
-                  onClick={() => {
-                    setShowGearMenu(false);
-                    if (surface) surface.openSettings();
-                    else setShowGridSettings(true);
-                  }}
-                >
-                  {__('Grid display')}
-                  <span class="text-xs text-text-muted">Ctrl+,</span>
-                </button>
-              </li>
-            </ul>
-          </Show>
-        </div>
         <div
           ref={scrollContainerRef}
           tabindex="0"
@@ -3749,7 +4178,15 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
             }
           >
             <table
-              class="table-fixed border-collapse text-left text-sm"
+              // `border-separate`, not `collapse`, and the reason is column pinning. Under
+              // `collapse` the borders belong to the TABLE rather than to the cells, so a sticky
+              // cell translates and its border does not — leaving a transparent 1px at every pinned
+              // boundary with the scrolling columns showing through it. Painting the seam with
+              // shadows patches the symptom and misses cases; making every border cell-owned removes
+              // the class of bug, because a cell carries its own borders wherever it is stuck.
+              // The cost is that rows can no longer draw borders (the separated model does not paint
+              // them on `tr`), so the horizontal rules live on the cells — see the `border-t` there.
+              class="table-fixed border-separate border-spacing-0 text-left text-sm"
               style={{ width: `${table.getTotalSize()}px`, 'min-width': '100%' }}
             >
               {/* Column widths (table-fixed honours these); getSize() is live during a resize. */}
@@ -3804,7 +4241,14 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
                                 // a plain variant on the sort arrows lights up every header's
                                 // arrows whenever the pointer is anywhere in the grid.
                                 canSort ? 'group/sort' : '',
+                                // A pinned header needs an opaque background of its own: it now
+                                // slides over other headers, and `thead`'s tint paints behind the
+                                // row rather than the cell.
+                                isPinned(pinnedColumnIds(), header.column.id)
+                                  ? 'bg-surface-raised'
+                                  : '',
                               ].join(' ')}
+                              style={pinnedCellStyle(header.column, 'header')}
                               // Not draggable while a resize is in progress — flipped off
                               // synchronously on grip-press so a leftward narrowing drag can't be
                               // hijacked into a native header drag before it starts.
@@ -4016,7 +4460,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
                                   onClick={(event) => event.stopPropagation()}
                                   onDblClick={(event) => {
                                     event.stopPropagation();
-                                    props.setColumnSizing((prev) => {
+                                    setColumnSizing((prev) => {
                                       const next = { ...prev };
                                       delete next[header.column.id];
                                       return next;
@@ -4059,7 +4503,9 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
                           // all. It must be named: the grid's own wrapper at the top of this component
                           // is a bare `group`, so a plain `group-hover:` on a cell answers to "pointer
                           // anywhere in the grid" instead of "pointer on this row".
-                          class={`group/row border-t border-border hover:bg-blue-50${row.getIsSelected() ? ' bg-blue-100' : ''}`}
+                          // No `border-t` here: the separated border model does not paint borders on
+                          // a `tr`, so the row rule lives on the cells instead.
+                          class={`group/row hover:bg-blue-50${row.getIsSelected() ? ' bg-blue-100' : ''}`}
                           classList={attrs().class ? { [attrs().class!]: true } : undefined}
                           title={attrs().title}
                           // A host may publish row state as `data-*` alongside the class it styles with.
@@ -4083,14 +4529,20 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
               </tbody>
               <Show when={hasFooter() && visibleRows().length > 0}>
                 <tfoot>
-                  <tr class="sticky bottom-0 z-10 border-t-2 border-border bg-gray-100 font-semibold">
+                  <tr class="sticky bottom-0 z-10 bg-gray-100 font-semibold">
                     <For each={table.getVisibleLeafColumns()}>
                       {(col) => {
                         const isSum = (): boolean =>
                           columnMetaById().get(col.id)?.aggregate === 'sum';
                         return (
                           <td
-                            class={`overflow-hidden bg-gray-100 px-2 py-2 ${
+                            // A pinned column keeps its total: without this the row's values stay
+                            // put while their sum scrolls away, which reads as the total having
+                            // vanished rather than moved.
+                            style={pinnedCellStyle(col, 'footer')}
+                            // The totals rule is on the cells for the same reason as the row rules:
+                            // a `tr` paints no borders in the separated model.
+                            class={`overflow-hidden border-t-2 border-border bg-gray-100 px-2 py-2 ${
                               isRightAlignedCol(col.id) ? 'text-right tabular-nums' : 'text-left'
                             }`}
                             title={

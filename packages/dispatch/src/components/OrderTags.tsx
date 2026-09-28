@@ -19,9 +19,10 @@ import {
   ESC_LOCAL_ATTR,
   HighlightMatch,
   IconButton,
+  ArchiveIcon,
+  TranslateIcon,
   PencilIcon,
   filterControlRegistry,
-  iconButtonClass,
   menuItemClass,
   slotRegistry,
   fuzzyScore,
@@ -40,6 +41,8 @@ import {
   useTagAdminMutations,
   useArchivedTagNamesQuery,
   useArchivedTagsQuery,
+  useLabelTranslationsQuery,
+  useLabelTranslationsMutation,
   useTagsQuery,
 } from '../queries';
 import { useDispatch } from '../context';
@@ -495,13 +498,13 @@ export function TagPill(props: {
       title={
         props.title ??
         (archived()
-          ? sprintf(__('%s — archived label, no longer affects the queue'), props.tag.name)
-          : props.tag.name)
+          ? sprintf(__('%s — archived label, no longer affects the queue'), props.tag.displayName)
+          : props.tag.displayName)
       }
       onRemove={props.onRemove}
-      removeLabel={sprintf(__('Remove %s'), props.tag.name)}
+      removeLabel={sprintf(__('Remove %s'), props.tag.displayName)}
     >
-      {props.tag.name}
+      {props.tag.displayName}
       {props.count !== undefined ? ` (${props.count})` : ''}
     </Pill>
   );
@@ -586,7 +589,7 @@ export function TagPickerPills(props: {
                 type="button"
                 class="cursor-pointer rounded-full transition hover:opacity-75 focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-400"
                 classList={{ 'ring-2 ring-offset-1 ring-gray-700': selected() }}
-                title={selected() ? sprintf(__('%s (selected)'), t.name) : t.name}
+                title={selected() ? sprintf(__('%s (selected)'), t.displayName) : t.displayName}
                 onClick={() => props.onPick(t)}
               >
                 <TagPill tag={t} count={count()} />
@@ -734,10 +737,10 @@ export function OrderTagsBar(props: { orderHexId: string; tags?: TagSummary[] })
                  "not applied yet"; the surface carries "this is a button". */
               class="inline-flex cursor-pointer items-center gap-1 rounded-full border border-dashed bg-surface px-2 py-1 text-2xs font-medium leading-none opacity-70 transition hover:opacity-100"
               style={{ 'border-color': paletteInk(t.colorId), color: paletteInk(t.colorId) }}
-              title={sprintf(__('Apply %s'), t.name)}
+              title={sprintf(__('Apply %s'), t.displayName)}
               onClick={() => applyTag(t)}
             >
-              + {t.name}
+              + {t.displayName}
             </button>
           );
         }}
@@ -771,7 +774,7 @@ export function OrderTagsBar(props: { orderHexId: string; tags?: TagSummary[] })
                   }}
                 >
                   <TagDot colorId={t.colorId} />
-                  <span class="truncate">{t.name}</span>
+                  <span class="truncate">{t.displayName}</span>
                   <Show when={isGovernanceTag(t)}>
                     <span class="ml-auto text-2xs text-text-muted" title={__('Governance tag')}>
                       ⚑
@@ -863,6 +866,80 @@ function rankAgainst(query: string, name: string): { similarity: number; typed: 
   return { similarity, typed: typed?.score ?? 0 };
 }
 
+/**
+ * How much a match in a language the reader cannot see is worth, against one they can.
+ *
+ * Not a filter — a tag the merchant knows as « Fragile » must be findable while they read English,
+ * which is the whole reason translations travel with the list. But it must not *outrank* a tag
+ * whose visible label matches just as well, because a row that floats to the top for a reason
+ * nowhere on screen reads as a bug in the search rather than a feature of it.
+ */
+const UNSEEN_LANGUAGE_WEIGHT = 0.85;
+
+/** Every name a tag answers to: the one on screen first, then the canonical and each translation. */
+function namesOf(tag: TagSummary): { text: string; visible: boolean }[] {
+  const seen = new Set<string>([tag.displayName]);
+  const names = [{ text: tag.displayName, visible: true }];
+  for (const text of [tag.name, ...Object.values(tag.nameTranslations ?? {})]) {
+    if ('' !== text && !seen.has(text)) {
+      seen.add(text);
+      names.push({ text, visible: false });
+    }
+  }
+  return names;
+}
+
+/**
+ * Rank a tag against what is being typed, in **any** language it has been named in.
+ *
+ * A shop with French and German staff has one vocabulary per language, and whoever is searching
+ * knows the tag by one of them. Scoring only the visible label would make a tag unfindable by the
+ * name half the floor uses for it. So every name is scored and the best one wins — weighted so the
+ * reader's own language leads when the scores are otherwise level.
+ */
+function rankTagAgainst(
+  query: string,
+  tag: TagSummary,
+): { similarity: number; typed: number; matchedName: string } | null {
+  let best: { similarity: number; typed: number; matchedName: string } | null = null;
+  for (const { text, visible } of namesOf(tag)) {
+    const rank = rankAgainst(query, text);
+    if (null === rank) continue;
+    const weight = visible ? 1 : UNSEEN_LANGUAGE_WEIGHT;
+    const scored = {
+      similarity: rank.similarity * weight,
+      typed: rank.typed * weight,
+      matchedName: text,
+    };
+    if (
+      null === best ||
+      scored.similarity > best.similarity ||
+      (scored.similarity === best.similarity && scored.typed > best.typed)
+    ) {
+      best = scored;
+    }
+  }
+  return best;
+}
+
+/**
+ * The name that explains why a tag is in the results, when it is **not** the one written on the
+ * row — otherwise null.
+ *
+ * `shown` is the text the row renders, which is the tag's canonical name: a match against anything
+ * else (a translation, or the resolved label when that differs) leaves a row whose visible text
+ * does not contain what was typed, and that is indistinguishable from a broken filter. Saying which
+ * name matched turns it back into an answer.
+ *
+ * Compared against what the row *shows* rather than against "is this the reader's language",
+ * because the reader is looking at one string and wants to know why it is in front of them.
+ */
+function matchedInAnotherLanguage(query: string, tag: TagSummary, shown: string): string | null {
+  if ('' === query) return null;
+  const matched = rankTagAgainst(query, tag)?.matchedName;
+  return undefined !== matched && matched !== shown ? matched : null;
+}
+
 function sortByRank<T>(rows: { row: T; rank: { similarity: number; typed: number } }[]): T[] {
   return rows
     .sort((a, b) => b.rank.similarity - a.rank.similarity || b.rank.typed - a.rank.typed)
@@ -897,7 +974,7 @@ export function TagManagerModal(props: { onClose: () => void }): JSX.Element {
     if ('' === q) return all;
     const ranked: { row: TagSummary; rank: { similarity: number; typed: number } }[] = [];
     for (const row of all) {
-      const rank = rankAgainst(q, row.name);
+      const rank = rankTagAgainst(q, row);
       if (rank) ranked.push({ row, rank });
     }
     return sortByRank(ranked);
@@ -925,9 +1002,9 @@ export function TagManagerModal(props: { onClose: () => void }): JSX.Element {
     const slug = deriveSlug(query());
     if ('' === slug) return null;
     const live = (tags.data ?? []).find((t) => t.slug === slug);
-    if (live) return { archived: false, id: live.id, name: live.name };
+    if (live) return { archived: false, id: live.id, name: live.displayName };
     const gone = (archivedNames.data ?? []).find((t) => t.slug === slug);
-    if (gone) return { archived: true, id: gone.id, name: gone.name };
+    if (gone) return { archived: true, id: gone.id, name: gone.displayName };
     return null;
   });
 
@@ -1134,7 +1211,7 @@ function ArchivedTagRow(props: {
     >
       <TagPill tag={props.tag} />
       <span class="min-w-0 flex-1 truncate text-xs text-gray-500">
-        <HighlightMatch text={props.tag.name} query={props.query} />
+        <HighlightMatch text={props.tag.displayName} query={props.query} />
         <Show when={undefined !== props.tag.orderCount}>
           <span class="ml-1 text-text-muted">
             {sprintf(
@@ -1168,6 +1245,7 @@ function TagManagerRow(props: { tag: TagSummary; query?: string }): JSX.Element 
   const [editingName, setEditingName] = createSignal(false);
   let nameInputEl: HTMLInputElement | undefined;
   const [showGov, setShowGov] = createSignal(false);
+  const [showTranslations, setShowTranslations] = createSignal(false);
   // Local mirrors so the controls feel responsive; each change persists immediately.
   const [flags, setFlags] = createSignal<GovernanceFlag[]>(props.tag.governanceFlags);
   const [priority, setPriority] = createSignal(props.tag.priority);
@@ -1192,7 +1270,9 @@ function TagManagerRow(props: { tag: TagSummary; query?: string }): JSX.Element 
 
   return (
     <div class={showGov() ? 'rounded-md border border-gray-200 bg-gray-50 p-2' : ''}>
-      <div class="relative flex items-center gap-2">
+      {/* gap-1, not gap-2: four affordances share this row, and the horizontal space is better
+          spent on the tag name than on the gaps between icons. */}
+      <div class="relative flex items-center gap-1">
         {/* Render the tag exactly as it appears on an order (live preview of the
             edited name/colour) — quicker to identify by width + colour + text.
             Clicking it opens the colour picker. */}
@@ -1202,7 +1282,14 @@ function TagManagerRow(props: { tag: TagSummary; query?: string }): JSX.Element 
           aria-label={__('Change colour')}
           onClick={() => setEditingColor((v) => !v)}
         >
-          <TagPill tag={{ ...props.tag, name: name().trim() === '' ? props.tag.name : name() }} />
+          {/* While renaming, the preview shows what is being typed — the canonical name is what
+              a rename edits, so it stands in for the resolved one until the edit lands. */}
+          <TagPill
+            tag={{
+              ...props.tag,
+              displayName: name().trim() === '' ? props.tag.displayName : name(),
+            }}
+          />
         </button>
         {/* Renaming is behind a pencil rather than living in an always-editable input. Two reasons,
             and the second is why it changed: a row is read far more often than it is renamed, and an
@@ -1268,16 +1355,28 @@ function TagManagerRow(props: { tag: TagSummary; query?: string }): JSX.Element 
         >
           ⚑
         </button>
-        <button
-          type="button"
-          class={iconButtonClass('xs', true, 'w-auto shrink-0 px-1.5 text-rose-500')}
-          onClick={() => admin.remove.mutate(props.tag.id)}
-          title={__(
+        <IconButton
+          label={__('Translations: what this tag is called in each language your staff read')}
+          size="xs"
+          class={hasTranslations(props.tag) ? 'text-indigo-600' : undefined}
+          aria-expanded={showTranslations()}
+          data-testid="tag-translations-toggle"
+          onClick={() => setShowTranslations((v) => !v)}
+        >
+          <TranslateIcon class="h-3.5 w-3.5" />
+        </IconButton>
+        {/* An icon rather than the word, now that it sits in a row of icons: the accessible name
+            carries the meaning, and the row wins back width for the name itself. */}
+        <IconButton
+          label={__(
             'Retire tag (hidden from the picker; existing orders keep it, and history stays readable)',
           )}
+          size="xs"
+          class="text-rose-500"
+          onClick={() => admin.remove.mutate(props.tag.id)}
         >
-          {_x('Retire', 'button: retire an order tag — hidden from the picker, orders keep it')}
-        </button>
+          <ArchiveIcon class="h-3.5 w-3.5" />
+        </IconButton>
         <Show when={editingColor()}>
           <div class="absolute right-2 top-full z-30 mt-1 rounded-md border border-gray-200 bg-surface p-2 shadow-lg">
             <PaletteSwatchPicker
@@ -1309,6 +1408,180 @@ function TagManagerRow(props: { tag: TagSummary; query?: string }): JSX.Element 
             onAuthority={saveAuthority}
           />
         </div>
+      </Show>
+
+      {/* Why this row is in the results when the name on screen does not match what was typed.
+          Without it, a tag appearing for a word the reader cannot see reads as a broken search. */}
+      <Show when={matchedInAnotherLanguage(props.query ?? '', props.tag, props.tag.name)}>
+        {(matched) => {
+          const [before, after] = splitAroundValue(__('Also called “%s”'));
+          return (
+            <div class="mt-0.5 pl-1 text-2xs text-text-muted">
+              {before}
+              {/* The same letter-by-letter marking the name above carries, so the eye lands on
+               *why* this row matched rather than merely being told that it did. */}
+              <HighlightMatch text={matched()} query={props.query ?? ''} />
+              {after}
+            </div>
+          );
+        }}
+      </Show>
+
+      <Show when={showTranslations()}>
+        <div class="mt-1.5 border-t border-gray-100 pt-1.5">
+          <TagTranslationsEditor tag={props.tag} />
+        </div>
+      </Show>
+    </div>
+  );
+}
+
+/**
+ * A translated sentence split around its `%s`, so the value can be *rendered* rather than
+ * interpolated.
+ *
+ * `sprintf` produces a string, and a string cannot carry the per-letter match marking. Splitting
+ * keeps the whole sentence one msgid — quotation marks included, which matters because each
+ * language sets its own (“…” in English, « … » in French, „…“ in German) and pulling them out into
+ * JSX would freeze every locale on the English pair.
+ *
+ * A translation that drops the token renders as the sentence followed by the value: wrong-looking,
+ * but never a lost name.
+ */
+function splitAroundValue(sentence: string): [string, string] {
+  const at = sentence.indexOf('%s');
+  return at < 0 ? [sentence, ''] : [sentence.slice(0, at), sentence.slice(at + 2)];
+}
+
+/** Whether a tag has been given any translation at all — what tints the globe. */
+function hasTranslations(tag: TagSummary): boolean {
+  return Object.keys(tag.nameTranslations ?? {}).length > 0;
+}
+
+/**
+ * What this tag is called in each language the store's staff read.
+ *
+ * **The merchant translates their own vocabulary; we do not.** A tag name is typed after the build
+ * and never reaches a `.po` file, so no amount of shipped translation can help — which is why this
+ * is an editor rather than something automatic. A box left empty is not a gap to fill in later: it
+ * means "no translation", and the tag falls back to the name it was given.
+ *
+ * Fetched only when opened, and saved as a whole set on blur, so clearing a box removes that
+ * language without needing a second control.
+ */
+function TagTranslationsEditor(props: { tag: TagSummary }): JSX.Element {
+  const entityKey = (): string => String(props.tag.id);
+  const data = useLabelTranslationsQuery(
+    () => 'tag',
+    entityKey,
+    () => true,
+  );
+  const save = useLabelTranslationsMutation(() => 'tag', entityKey);
+
+  /** Locally edited values, so typing stays responsive between saves. */
+  const [draft, setDraft] = createSignal<Record<string, string>>({});
+
+  const stored = (): Record<string, { text: string; sourceText: string | null }> =>
+    data.data?.fields['name'] ?? {};
+  const valueFor = (code: string): string => draft()[code] ?? stored()[code]?.text ?? '';
+
+  /**
+   * The name this translation was written against, when that is no longer what the tag is called.
+   *
+   * A translation outlives the thing it translates: rename a tag and its other languages keep
+   * applying, now describing something subtly different, with nothing on screen to say so.
+   */
+  const drifted = (code: string): string | null => {
+    const source = stored()[code]?.sourceText ?? null;
+    return null !== source && source !== props.tag.name ? source : null;
+  };
+
+  const commit = (code: string, text: string): void => {
+    const next: Record<string, string> = {};
+    for (const locale of data.data?.locales ?? []) {
+      const v = locale.code === code ? text : valueFor(locale.code);
+      if ('' !== v.trim()) next[locale.code] = v.trim();
+    }
+    // The canonical name is the source: it is the text the person doing the translating was
+    // looking at, and what a later rename will be compared against.
+    save.mutate({ translations: next, sourceText: props.tag.name });
+  };
+
+  return (
+    <div class="flex flex-col gap-1.5" data-testid="tag-translations-editor">
+      <p class="text-2xs text-text-muted">
+        {sprintf(
+          __('What “%s” is called in each language. Leave a box empty to use the name above.'),
+          props.tag.name,
+        )}
+      </p>
+      <Show when={data.data} fallback={<p class="text-2xs text-text-muted">{__('Loading…')}</p>}>
+        {(loaded) => (
+          <Show
+            when={loaded().canEdit}
+            fallback={
+              <p class="text-2xs text-text-muted">
+                {__('You do not have permission to edit these.')}
+              </p>
+            }
+          >
+            <For each={loaded().locales}>
+              {(locale) => (
+                <label class="flex items-center gap-2 text-2xs">
+                  <span class="w-32 shrink-0 truncate text-text-muted" title={locale.code}>
+                    {locale.label}
+                    <Show when={locale.isSite}>
+                      <span class="ml-1 text-text-muted">
+                        {_x('(site)', 'marks the store’s own language in a list')}
+                      </span>
+                    </Show>
+                  </span>
+                  <input
+                    // Escape belongs to this input: it should abandon the box, not close the
+                    // manager and take the whole list with it.
+                    {...{ [ESC_LOCAL_ATTR]: '' }}
+                    class="min-w-0 flex-1 rounded border border-gray-300 px-1 py-0.5 text-xs"
+                    data-testid={`tag-translation-${locale.code}`}
+                    value={valueFor(locale.code)}
+                    placeholder={props.tag.name}
+                    aria-label={sprintf(__('Name in %s'), locale.label)}
+                    disabled={save.isPending}
+                    onInput={(e) =>
+                      setDraft((d) => ({ ...d, [locale.code]: e.currentTarget.value }))
+                    }
+                    onBlur={(e) => commit(locale.code, e.currentTarget.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') e.currentTarget.blur();
+                      if (e.key === 'Escape') {
+                        e.stopPropagation();
+                        setDraft((d) => {
+                          const { [locale.code]: _dropped, ...rest } = d;
+                          return rest;
+                        });
+                      }
+                    }}
+                  />
+                  <Show when={drifted(locale.code)}>
+                    {(source) => (
+                      <span
+                        class="shrink-0 text-amber-600"
+                        title={sprintf(
+                          __('Written when this tag was called “%s” — check it still fits.'),
+                          source(),
+                        )}
+                      >
+                        {'\u26A0'}
+                      </span>
+                    )}
+                  </Show>
+                </label>
+              )}
+            </For>
+            <Show when={save.error}>
+              {(error) => <p class="text-2xs text-rose-600">{error().message}</p>}
+            </Show>
+          </Show>
+        )}
       </Show>
     </div>
   );

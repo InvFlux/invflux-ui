@@ -1,5 +1,5 @@
 import { ErrorBanner } from '@invflux/ui';
-import { __, _x, sprintf } from '@invflux/i18n';
+import { __, _x, formatDate, sprintf } from '@invflux/i18n';
 import { A, useParams } from '@solidjs/router';
 import { createQuery } from '@tanstack/solid-query';
 import { createMemo, createSignal, For, type JSX, Show } from 'solid-js';
@@ -44,6 +44,12 @@ interface LedgerSibling {
   label: string;
 }
 
+/** Who counts this product's stock right now. `since` is null when no date can be stated honestly. */
+interface LedgerGovernance {
+  state: string;
+  since: string | null;
+}
+
 interface LedgerResponse {
   subject: {
     subjectId: number;
@@ -57,7 +63,60 @@ interface LedgerResponse {
   rows: LedgerRow[];
   /** The variable-product family (empty for a simple product) — drives the variation switcher. */
   siblings: LedgerSibling[];
+  governance: LedgerGovernance;
   capabilities: { viewCosts: boolean };
+}
+
+/**
+ * Says who counts this product's stock, whenever that is not InvFlux.
+ *
+ * The rows cannot say it themselves. Releasing a product leaves its ledger and its slot quantities
+ * exactly as they were, so the newest row's running balance stays on screen — right as history,
+ * wrong as stock — while WooCommerce or another plugin moves the real quantity. Amber, matching the
+ * "⚠ Unmanaged" marker the dispatch surfaces already use for this same fact.
+ *
+ * It sits above the table rather than inside it because it describes the whole page. A period-by-
+ * period banding of the history needs the governance transition log to be complete, which it is not
+ * yet; this is the band for the period that is still open, and the one that can mislead today.
+ */
+function GovernanceBand(props: { governance: LedgerGovernance; hasRows: boolean }): JSX.Element {
+  const externallyTracked = (): boolean => 'external' === props.governance.state;
+  /** Undated when nothing can date it: never adopted, or a log that disagrees with the live flag. */
+  const lead = (): string =>
+    props.governance.since === null
+      ? __('InvFlux doesn’t track this product’s stock.')
+      : sprintf(
+          /* translators: %s: the date on which InvFlux stopped tracking this product's stock. */
+          __('InvFlux stopped tracking this product’s stock on %s.'),
+          formatDate(props.governance.since),
+        );
+  const consequence = (): string => {
+    if (props.hasRows) {
+      return externallyTracked()
+        ? __(
+            'WooCommerce or another plugin counts it now, so the quantities below are not this product’s stock today.',
+          )
+        : __(
+            'Nothing is counting a quantity for it now, so the quantities below are not this product’s stock today.',
+          );
+    }
+
+    return externallyTracked()
+      ? __('WooCommerce or another plugin counts it, so there are no movements to show.')
+      : __('Nothing is counting a quantity for it, so there are no movements to show.');
+  };
+
+  return (
+    <Show when={'invflux' !== props.governance.state}>
+      <p
+        class="mb-3 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+        data-testid="ledger-governance-band"
+        data-state={props.governance.state}
+      >
+        <span class="font-medium">⚠ {lead()}</span> {consequence()}
+      </p>
+    </Show>
+  );
 }
 
 /** `from → to` with the moved quantity. */
@@ -511,10 +570,15 @@ export default function LedgerSection(): JSX.Element {
                 </p>
               }
             >
+              <GovernanceBand governance={data().governance} hasRows={data().rows.length > 0} />
               <Show
                 when={data().rows.length > 0}
                 fallback={
-                  <p class="text-sm text-slate-500">{__('No stock movements recorded.')}</p>
+                  // "Nothing happened" is only true while InvFlux is the one counting; otherwise the
+                  // band above has already said why there is nothing here.
+                  <Show when={'invflux' === data().governance.state}>
+                    <p class="text-sm text-slate-500">{__('No stock movements recorded.')}</p>
+                  </Show>
                 }
               >
                 <div class="mb-2 flex justify-end">

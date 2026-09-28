@@ -23,7 +23,7 @@ import type { ProductLink } from './productActionsMenu';
 // Grid row
 // ---------------------------------------------------------------------------
 
-/** Where the subject stands relative to its reorder threshold. */
+/** Where the subject stands relative to its low stock threshold. */
 export type ReorderStatus = 'below' | 'at' | 'above' | 'none';
 
 /**
@@ -70,7 +70,7 @@ export interface WorkbenchRow {
   postStatus: string;
 
   // ── Inventory state ──
-  reorderThreshold: number | null;
+  lowStockAmount: number | null;
   reorderStatus: ReorderStatus;
   stockConcerns?: number;
   stockDeficitQty?: number;
@@ -87,6 +87,9 @@ export interface WorkbenchRow {
   res: number;
   ctd: number;
   total: number;
+  /** Units picked to the dispatch bench, still off the shelf — SUM(qty_staged) over open orders.
+   *  Read-only reconciliation aid: shelf count ≈ total − staged. Defaults 0. */
+  staged: number;
 
   // ── Taxonomy + extension ──
   taxonomy?: Record<string, number[]>;
@@ -238,6 +241,14 @@ export interface WorkbenchHandles {
   openSaveReview: () => void;
   /** The cells currently in the DataGrid selection (row + column id) — for host features that act on
    *  the selection, e.g. the shell's `*`-fold-over-selection. */
+  /**
+   * Visible column ids in live display order, checkbox excluded — what the merchant is looking at.
+   *
+   * The export builder needs it so the file matches the screen. It used to read the grid's
+   * localStorage keys directly, which was the one place a host coupled to the grid's storage layout
+   * and broke silently the moment the grid changed where it stored things.
+   */
+  getVisibleColumnIds: () => string[];
   getSelectedCells: () => Array<{ row: WorkbenchRow; columnId: string }>;
   /** Whether the grid has unsaved staged edits — drives host Save-button state / unload prompts. */
   isDirty: () => boolean;

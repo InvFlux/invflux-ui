@@ -92,7 +92,7 @@ export function TimelinePanel(props: {
   // retired tags the query still returns; unknown ids fall back to `#id` in the row.
   const resolveTag: TagChipResolver = (id) => {
     const t = (tagsQuery.data ?? []).find((tag) => tag.id === id);
-    return t ? { name: t.name, colorId: t.colorId } : undefined;
+    return t ? { name: t.displayName, colorId: t.colorId } : undefined;
   };
 
   // Interleave annotation threads: map each thread to a synthetic `annotation.note` event at its
@@ -101,8 +101,8 @@ export function TimelinePanel(props: {
   // renders it.
   /** Line id → line, and correction id → the line it was raised against. */
   const lineById = createMemo(() => {
-    const m = new Map<string, DispatchOrderLine>();
-    for (const l of props.lines ?? []) m.set(l.id, l);
+    const m = new Map<number, DispatchOrderLine>();
+    for (const l of props.lines ?? []) m.set(l.lineId, l);
     return m;
   });
   const lineByCorrectionId = createMemo(() => {
@@ -160,8 +160,11 @@ export function TimelinePanel(props: {
           ? { ...p, currency: props.currency }
           : p;
 
+    // A stored event's `line_id` is the line's number within its order. Historical payloads were
+    // rewritten to that from the line's former id when the column was re-keyed, so there is one
+    // shape here, not two.
     const single = (payload as { line_id?: unknown }).line_id;
-    if (typeof single === 'string') {
+    if (typeof single === 'number') {
       const correctionId = (payload as { correction_id?: unknown }).correction_id;
       const line = lineById().get(single);
       const code = (payload as { type_code?: unknown }).type_code;
@@ -472,6 +475,62 @@ interface OrderSourceDeletedPayload {
   external_id?: string;
   released?: Array<{ subject_id?: number; qty?: number }>;
   refunds_owed?: Array<{ total?: string; currency?: string | null }>;
+}
+
+/** `order.lines_unstaged` — `units` is the total dropped; `reason` says what closed the order. */
+interface OrderLinesUnstagedPayload {
+  units?: number;
+  reason?: string;
+}
+
+/** Why the order closed, in the words an operator would use. Unknown reasons simply say nothing. */
+const UNSTAGE_REASON_LABEL: Record<string, () => string> = {
+  host_status: () => __('the order was closed in WooCommerce'),
+  source_deleted: () => __('the order was deleted'),
+  host_terminal_repair: () => __('the order was already finished in WooCommerce'),
+  host_dispatched_repair: () => __('WooCommerce had already dispatched it'),
+};
+
+/**
+ * Units that were picked and set aside, released when the order closed.
+ *
+ * Worth a row of its own because it is the only warning anyone gets: the count is gone from the
+ * line, but the units are still on the packing bench until someone carries them back.
+ */
+function OrderLinesUnstagedRow(props: TimelineRowProps): JSX.Element {
+  const p = props.event.payload as OrderLinesUnstagedPayload | null;
+  const units = (): number => p?.units ?? 0;
+  const reason = (): string | null => UNSTAGE_REASON_LABEL[p?.reason ?? '']?.() ?? null;
+
+  return (
+    <RowShell
+      event={props.event}
+      tone="lifecycle"
+      icon={<>↩</>}
+      label={__('Staged units released')}
+      detail={
+        <span>
+          {sprintf(
+            /* translators: %d: number of units that had been picked for this order */
+            _n(
+              '%d unit was still staged — put it back on the shelf.',
+              '%d units were still staged — put them back on the shelf.',
+              units(),
+            ),
+            units(),
+          )}
+          <Show when={reason()}>
+            {(why) => (
+              <>
+                {' · '}
+                {why()}
+              </>
+            )}
+          </Show>
+        </span>
+      }
+    />
+  );
 }
 
 function OrderSourceDeletedRow(props: TimelineRowProps): JSX.Element {
@@ -1064,6 +1123,7 @@ const REGISTRATIONS: Array<[string, string, (p: TimelineRowProps) => JSX.Element
   ['order.parked', 'dispatch.order.parked', OrderParkedRow],
   ['order.unparked', 'dispatch.order.unparked', OrderUnparkedRow],
   ['order.source_deleted', 'dispatch.order.source_deleted', OrderSourceDeletedRow],
+  ['order.lines_unstaged', 'dispatch.order.lines_unstaged', OrderLinesUnstagedRow],
   ['order.address_corrected', 'dispatch.order.address_corrected', AddressCorrectedRow],
   [
     'order.address_changed_externally',

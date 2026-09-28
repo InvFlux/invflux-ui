@@ -28,6 +28,7 @@ import { Dynamic } from 'solid-js/web';
 import { A } from '@solidjs/router';
 import { OnOrderDrilldown } from './components/OnOrderDrilldown';
 import { StatusPill } from './components/StatusPill';
+import { commitNavEntitlements, commitNavRegistry, type CommitNavRule } from './gridCommitNav';
 
 /**
  * The `window.invflux.procurement.*` plug-in surface — a thin host binding over the shared
@@ -40,6 +41,21 @@ import { StatusPill } from './components/StatusPill';
  * bundle but before the (deferred) mount and can register their sections/tabs/columns first.
  */
 export interface ProcurementBridge {
+  /**
+   * Contribute a rule deciding where focus goes after a grid cell is committed.
+   *
+   * The base moves the way the editor asked and offers no opinion beyond that, so an unextended
+   * install has no rule at all. A capability that wants to close a filter/edit cycle — so an
+   * operator never reaches for the keyboard between entries — contributes it here, composed from
+   * the operations the rule's context hands over.
+   *
+   * Gate the rule on whatever gates the capability, through `enabled`. A bundle loads whenever its
+   * plugin is active, which is not the same question as whether its licence currently allows the
+   * feature; an unconditional rule would leave a lapsed install still behaving as though paid.
+   */
+  registerCommitNav: (rule: CommitNavRule) => void;
+  /** This install's procurement entitlements, for gating a contributed rule. */
+  entitlements: () => Record<string, boolean>;
   /** Curated SolidJS runtime subset for add-on components. */
   solid: {
     createSignal: typeof createSignal;
@@ -95,6 +111,8 @@ export function installPluginApi(): ProcurementPluginApi {
       Match,
       Dynamic,
     },
+    registerCommitNav: (rule) => commitNavRegistry.register(rule),
+    entitlements: () => commitNavEntitlements(),
     ui: {
       Button,
       IconButton,

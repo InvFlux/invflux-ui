@@ -42,7 +42,7 @@ export interface InventorySettings {
    * positive-delta path. Always present; 0 when no deficit / unmanaged.
    */
   stock_deficit_qty: number;
-  reorder_threshold: number | null;
+  low_stock_amount: number | null;
   /** WC `_backorders` policy: 'no' rejects, 'notify' allows + flags, 'yes' allows silently. */
   backorders: 'no' | 'notify' | 'yes';
   sku: string;
@@ -99,7 +99,7 @@ export interface StockAdjustResponse {
 
 export interface SavePayload {
   stock_management: 'invflux' | 'external' | 'none';
-  reorder_threshold: number | null;
+  low_stock_amount: number | null;
   backorders: 'no' | 'notify' | 'yes';
   sku: string;
   gtin: string;

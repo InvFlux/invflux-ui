@@ -25,7 +25,7 @@ describe('stockSlotOf (stock-`kind` seam)', () => {
   it('returns null for non-stock columns', () => {
     expect(stockSlotOf(meta('name'))).toBeNull();
     expect(stockSlotOf(meta('price'))).toBeNull();
-    expect(stockSlotOf(meta('reorder_threshold'))).toBeNull();
+    expect(stockSlotOf(meta('low_stock_amount'))).toBeNull();
     // A column whose id merely starts with the letters of a slot but isn't one.
     expect(stockSlotOf(meta('atprice'))).toBeNull();
     expect(stockSlotOf(meta('taxonomy.brand'))).toBeNull();

@@ -100,6 +100,14 @@ export interface PurchaseOrder {
   receivingOpen: boolean;
   /** How many people are on that count. Shown so a buyer can see the dock is busy, never who. */
   receivingCounters: number;
+  /**
+   * How many rows the activity timeline has — on the detail read only, absent on a listing row.
+   *
+   * Rows, not stored events: the server counts what `GET …/events` would return, so a collapsed
+   * "Activity (5)" stays 5 when it is opened. It is here so the label can be written without
+   * fetching the events, which is what lets that request wait for the fold.
+   */
+  eventCount?: number;
 }
 
 /** `GET /procurement/purchase-orders` response envelope. */
@@ -123,7 +131,10 @@ export interface PoLine {
   gtin: string | null;
   imageUrl: string | null;
   exists: boolean;
-  qtyRequested: number;
+  /** How many units the line orders — **null on a draft means it inherits {@link suggestedQty}**,
+   *  the same way a null {@link unitCost} inherits {@link catalogUnitCost}. Resolved into a stored
+   *  number when the order is issued, because a quantity a supplier has been told is a promise. */
+  qtyRequested: number | null;
   /** What the supplier confirmed they'd ship (ASN/email) — the GR-variance baseline; null if unknown. */
   qtyExpected: number | null;
   qtyReceived: number;
@@ -159,8 +170,8 @@ export interface PoLine {
   available: number | null;
   /** Draft-only: open qty already inbound on other (submitted+) POs — stock that's coming. */
   onOrder: number | null;
-  /** Draft-only: the subject's reorder threshold (null when unset). */
-  reorderThreshold: number | null;
+  /** Draft-only: the subject's low stock threshold (null when unset). */
+  lowStockAmount: number | null;
   /** Draft-only: MOQ-floored replenishment suggestion the "." key fills into the Qty cell (null when
    *  the subject isn't in the supplier's catalogue / no data). */
   suggestedQty: number | null;
@@ -171,6 +182,18 @@ export interface PoLine {
 /** `GET /procurement/purchase-orders/{id}` response envelope. */
 export interface PurchaseOrderDetail {
   purchaseOrder: PurchaseOrder;
+  /** Absent when the header was fetched on its own (`?lines=0`) — see {@link PoLinesResponse}. */
+  lines?: PoLine[];
+}
+
+/**
+ * The lines on their own, from `GET /purchase-orders/{id}/lines`.
+ *
+ * Fetched separately from the header because on a large order the header is a rounding error of the
+ * payload — 0.6 KB of 974 KB on a 1,760-line draft — and waiting for the rest means the page shows
+ * nothing at all while it arrives. The header renders at once; only the grid waits for these.
+ */
+export interface PoLinesResponse {
   lines: PoLine[];
 }
 

@@ -57,8 +57,8 @@ export function ProcessCorrectionsModal(props: {
   );
 
   const linesById = createMemo(() => {
-    const map = new Map<string, DispatchOrderLine>();
-    for (const line of props.lines) map.set(line.id, line);
+    const map = new Map<number, DispatchOrderLine>();
+    for (const line of props.lines) map.set(line.lineId, line);
     return map;
   });
 
@@ -284,7 +284,12 @@ export function ProcessCorrectionsModal(props: {
                       <tr class="hover:bg-gray-50">
                         <td class="px-4 py-2 text-gray-700">{c.typeName}</td>
                         <td class="px-4 py-2 text-gray-600 truncate max-w-[16ch]">
-                          {line ? line.name : c.lineId.slice(0, 8) + '…'}
+                          {line
+                            ? line.name
+                            : sprintf(
+                                _x('Line %d', 'correction whose line is no longer on the order'),
+                                c.lineId,
+                              )}
                         </td>
                         <td class="px-4 py-2 text-right tabular-nums text-gray-700">{c.qty}</td>
                         <td class="px-4 py-2 text-right tabular-nums text-gray-600">

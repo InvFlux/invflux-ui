@@ -2,7 +2,7 @@ import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show }
 import { Dynamic } from 'solid-js/web';
 import { createStore, reconcile } from 'solid-js/store';
 import { createQuery, useQueryClient } from '@tanstack/solid-query';
-import { __, _n, sprintf } from '@invflux/i18n';
+import { __, _n, _x, sprintf } from '@invflux/i18n';
 import {
   ErrorBanner,
   Button,
@@ -772,9 +772,26 @@ export function SettingsView(props: SettingsViewProps) {
 
   // ── Order-status policy table (bespoke section) ──────────────────────────
   function OrderStatusSection() {
+    /**
+     * What entering the status does to the order's stock — never the name of a stock state.
+     *
+     * `res` has no behaviour at all: nothing in the plugin reads it, so entering such a status
+     * changes nothing. Calling it "Reserved" misled both ways — a `pending` order sitting for days
+     * read as reserving stock it held none of, and a paid order parked in `pending` (the unlock
+     * procedure) read as reserving stock that was actually committed. `none` was worse: it reads as
+     * "do nothing" while it is the one option that releases or consumes what the order holds.
+     */
     const bucketOptions: Array<[string, string]> = [
-      ['none', __('None')],
-      ['res', __('Reserved')],
+      [
+        'none',
+        /* translators: stock effect of entering an order status: whatever the order held is freed for sale (a cancellation) or has physically left (a dispatch). */
+        _x('Released or dispatched', 'order status stock effect'),
+      ],
+      [
+        'res',
+        /* translators: stock effect of entering an order status: entering it moves no stock at all. */
+        _x('No stock change', 'order status stock effect'),
+      ],
       ['ctd', __('Awaiting dispatch')],
     ];
     const dispatchOptions: Array<[string, string]> = [
@@ -812,7 +829,12 @@ export function SettingsView(props: SettingsViewProps) {
               <th class="px-3 py-2 font-medium">{__('Status')}</th>
               <th class="px-3 py-2 font-medium">{__('Slug')}</th>
               <th class="px-3 py-2 font-medium">{__('Colour')}</th>
-              <th class="px-3 py-2 font-medium">{__('Stock bucket')}</th>
+              {/* "Stock effect", not "Stock bucket": the column says what entering the status
+                  does to the order's stock, and a bucket is InvFlux's own vocabulary. */}
+              <th class="px-3 py-2 font-medium">
+                {/* translators: column header in the order-status mapping table. */}
+                {_x('Stock effect', 'order status table column')}
+              </th>
               <th class="px-3 py-2 font-medium">{__('Dispatch status')}</th>
             </tr>
           </thead>
@@ -857,7 +879,11 @@ export function SettingsView(props: SettingsViewProps) {
                         // Named per row, matching the `Colour for %s` control above it: a column
                         // name alone repeats identically down every row, so it never says WHICH
                         // status is being changed.
-                        aria-label={sprintf(__('Stock bucket for %s'), r.label)}
+                        /* translators: %s is an order status name, e.g. "Processing". */
+                        aria-label={sprintf(
+                          _x('Stock effect for %s', 'order status control'),
+                          r.label,
+                        )}
                         disabled={r.is_core}
                         value={osValue(r).stock_bucket}
                         onChange={(e) => setBucket(r, e.currentTarget.value)}

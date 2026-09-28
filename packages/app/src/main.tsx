@@ -21,6 +21,7 @@ import { registerEssentialsWelcome } from './sections/welcome';
 import { registerWorkbenchSection } from './sections/workbench';
 import { installPluginApi as installDispatchPluginSurface } from '@invflux/dispatch/src/plugin-api';
 import { installPluginApi as installProcurementPluginSurface } from '@invflux/procurement/src/plugin-api';
+import { publishCommitNavEntitlements } from '@invflux/procurement/src/gridCommitNav';
 import { installPluginApi as installWorkbenchPluginSurface } from '@invflux/workbench/src/plugin-api';
 import type { AppContext } from './types';
 import { hasSeenSurface, markSeen, pinTab, restoreTabs } from './openTabs';
@@ -128,6 +129,10 @@ setCapabilities(context.capabilities);
 setSurfaceModes(context.surfaceModes);
 // First-run offer state, seeded before mount so the landing route resolves correctly on first render.
 setOnboarding(context.onboarding);
+// Hand procurement the install's entitlement map, so a contributed commit-navigation rule can ask
+// whether its capability is licensed *at the moment it would act* rather than when its bundle
+// loaded — a bundle is present whenever its plugin is active, which is a different question.
+publishCommitNavEntitlements(() => context.entitlements ?? {});
 
 function mount(): void {
   const host = document.getElementById('invflux-app');

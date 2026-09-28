@@ -14,6 +14,18 @@ import { splitProps, type JSX } from 'solid-js';
  * affordance holds it (an `IconButton`'s muted-to-text hover, a coloured toast, a disabled control),
  * and sized by class so the caller controls it. Icons are decorative — the *affordance* carries the
  * accessible name (`IconButton.label`), so they are `aria-hidden` by default.
+ *
+ * **The artwork is third-party and carries attribution obligations.** None of these glyphs are drawn
+ * here: the stroked set comes from Feather (MIT) and its fork Lucide (ISC), the one filled glyph from
+ * Material Design Icons (Apache-2.0). The notes below explain why a shape was *chosen* or how it was
+ * adapted — mirrored, recombined, restyled — which is not the same as authorship, and adapting does
+ * not end the obligation. The notices ship in the adapter's `LICENSE-THIRD-PARTY`; a new glyph needs
+ * an entry there before it lands.
+ *
+ * Expect the path data to differ character-for-character from the set it came from: these are
+ * optimiser-rewritten (a circle lobe as one large-arc rather than two half-arcs), so searching an
+ * icon gallery for a matching *string* finds nothing while the geometry is identical. Compare the
+ * constants, not the text.
  */
 
 export interface IconProps extends JSX.SvgSVGAttributes<SVGSVGElement> {
@@ -109,6 +121,45 @@ export function PencilIcon(props: IconProps): JSX.Element {
     <svg {...strokeProps()} {...rest} class={local.class ?? 'h-4 w-4'}>
       <path d="M12 20h9" />
       <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
+    </svg>
+  );
+}
+
+/**
+ * Translate — the conventional two-script mark.
+ *
+ * **Not drawn here, and deliberately so.** Three original attempts were rendered at the 14px these
+ * buttons actually use and every one of them read as a maths symbol rather than as two writing
+ * systems: an "A" beside a barred x. The reason is structural, not a lack of care — the shared 1.8
+ * stroke is about one device pixel at that size, and a CJK character cannot survive being reduced
+ * to four or five strokes of it. Filled artwork holds its shape where strokes collapse, which is
+ * why every icon set that ships this mark draws it filled.
+ *
+ * So this is Material Design Icons' `translate` (Apache-2.0), the shape a reader has already met in
+ * every browser and document tool.
+ *
+ * **It carries an attribution obligation**, discharged in the adapter's `LICENSE-THIRD-PARTY`,
+ * which ships in the plugin zip: Apache-2.0 asks that the licence notice travel with anything
+ * redistributing the work. A docblock is not a substitute for that file, because a shipped bundle
+ * carries no comments. Anything swapped in from another icon set needs an entry there before it
+ * lands.
+ *
+ * Filled rather than stroked, unlike its neighbours, because that is the whole point of using it;
+ * `strokeProps()` is therefore not applied.
+ */
+export function TranslateIcon(props: IconProps): JSX.Element {
+  const [local, rest] = splitProps(props, ['class']);
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden="true"
+      {...rest}
+      class={local.class ?? 'h-4 w-4'}
+    >
+      {/* The bounding `M0 0h24v24H0z` path the set ships alongside this one is omitted: it has no
+          fill and no stroke, so it draws nothing and only the viewBox matters. */}
+      <path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z" />
     </svg>
   );
 }
@@ -352,6 +403,24 @@ export function ArchiveIcon(props: IconProps): JSX.Element {
       <rect x="2" y="3" width="20" height="5" rx="1" />
       <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
       <line x1="10" y1="12" x2="14" y2="12" />
+    </svg>
+  );
+}
+
+/**
+ * Pushpin — holding something in place. The data grid's column pinning, where a pinned column stays
+ * at the left edge while the rest scroll past it.
+ *
+ * A pushpin, not Feather's `map-pin`: that one is a *location* marker, and a grid column is not
+ * somewhere on a map. Drawn head-up with the point straight down, because this sits in a list of
+ * rows — a tilted pin reads as a decorative sticker rather than as a control.
+ */
+export function PinIcon(props: IconProps): JSX.Element {
+  const [local, rest] = splitProps(props, ['class']);
+  return (
+    <svg {...strokeProps()} {...rest} class={local.class ?? 'h-4 w-4'}>
+      <line x1="12" y1="17" x2="12" y2="22" />
+      <path d="M9 10.8a2 2 0 0 1-1.1 1.8l-1.8.9A2 2 0 0 0 5 15.3V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.7a2 2 0 0 0-1.1-1.8l-1.8-.9A2 2 0 0 1 15 10.8V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
     </svg>
   );
 }

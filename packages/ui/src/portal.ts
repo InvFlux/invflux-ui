@@ -43,7 +43,9 @@ export function usePortalRootOptional(): HTMLElement | undefined {
  *
  * This works around a gap in `@kobalte/core` 0.13.14 (`ariaHideOutside` does not look through shadow
  * boundaries). Remove it, and {@link keepWordPressAnnouncementsAudible}, once a `@kobalte/core`
- * release fixes that; the Dispatch partial-ship E2E specs fail again if the gap returns.
+ * *release* contains the fix from kobaltedev/kobalte#735 — which is a later event than that pull
+ * request merging, and npm is what we install. The Dispatch partial-ship E2E specs fail again if
+ * the gap returns.
  */
 export function keepVisibleDuringModals(el: HTMLElement): void {
   el.dataset.liveAnnouncer = 'true';

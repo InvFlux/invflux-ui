@@ -1,5 +1,8 @@
 import { __, _n, _x, sprintf } from '@invflux/i18n';
 import {
+  BulkEditModal,
+  type BulkEditColumn,
+  type BulkEditResult,
   DataGrid,
   type DataGridMenuItem,
   drilldownRegistry,
@@ -8,14 +11,10 @@ import {
   type SearchSelectOption,
   type SelectionState,
   type StagedCell,
+  createViewportFill,
 } from '@invflux/ui';
 import { type ColumnDef, createColumnHelper } from '@tanstack/solid-table';
-import type {
-  ColumnOrderState,
-  RowSelectionState,
-  SortingState,
-  VisibilityState,
-} from '@tanstack/solid-table';
+import type { RowSelectionState, SortingState } from '@tanstack/solid-table';
 import { createEffect, createMemo, createSignal, type JSX, Show } from 'solid-js';
 import { useProcurement } from '../../context';
 import { createApi } from '../../lib/api';
@@ -24,7 +23,6 @@ import { registerCataloguePickerEditor } from '../../grid/cataloguePickerEditor'
 import { registerReceiptEditor } from '../../grid/receiptEditor';
 import { firstEditableColumnId } from '../../grid/editableColumn';
 import { fuzzyMatches } from '../../grid/fuzzyMatch';
-import { persistedSignal } from '../../grid/persistedSignal';
 import { belowMoq, offCasePack } from '../../grid/qtyRules';
 import { QuickFilter, isTypingInField } from '../../grid/QuickFilter';
 import { usePortalRoot } from '../../portal';
@@ -52,7 +50,8 @@ const PRODUCT_EDITOR_TYPE = 'text:catalogue-add';
 
 /** Patch a single editable field of an existing draft line (immediate, optimistic — the host owns it). */
 export interface DraftLinePatch {
-  qty_requested?: number;
+  /** How many to order; `null` returns the line to the suggested replenishment quantity. */
+  qty_requested?: number | null;
   /** The price before any discount; `null` returns the line to the catalogue price. */
   unit_cost?: string | null;
   /** The supplier's discount in percent, taken off `unit_cost`; `null` removes it. */
@@ -76,6 +75,29 @@ const COLUMN_ORDER = [
   'line_total',
   'note',
 ];
+
+/**
+ * Space left under the grid, inside its filled box, for the Activity section's header row.
+ *
+ * **One row, not two.** The order total sits at the right-hand end of that same header rather than
+ * on a line of its own — a full-width row to hold one number wastes the vertical space this fill
+ * exists to reclaim, and the header's right edge is empty anyway.
+ *
+ * Named rather than inlined because it has to agree with the real height of that header: it is
+ * reserved here and consumed in `PoDetail`, so a change to either belongs next to this constant.
+ */
+const FOOTER_GUTTER = '3.25rem';
+
+/**
+ * Which patch field each editable column writes. The one place the mapping lives, so the clear
+ * path and the bulk-edit path cannot disagree about what a column means.
+ */
+const PATCH_FIELD: Record<string, keyof DraftLinePatch | undefined> = {
+  qty_requested: 'qty_requested',
+  unit_cost: 'unit_cost',
+  discount_pct: 'discount_pct',
+  note: 'note',
+};
 
 /** GridColumnMeta with draft-editor defaults filled in; all columns share the one "Procurement" group. */
 function colMeta(
@@ -108,13 +130,34 @@ interface PoDraftGridProps {
   casePackFor: (subjectId: number) => number | null;
   /** Addable catalogue products (supplier catalogue minus products already on the PO) for the append row. */
   addOptions: () => AddOption[];
+  /**
+   * Fired when the append row's picker opens. The catalogue behind {@link addOptions} is fetched on
+   * first use rather than with the page — most orders are generated and never have a product added
+   * by hand — so this is what asks for it.
+   */
+  onAddOptionsNeeded: () => void;
+  /** Whether that fetch is in flight, so an empty list reads as "loading" and not as "none left". */
+  addOptionsLoading: () => boolean;
   /** Supplier display/nickname — for the append-row's "all products added" empty state. */
   supplierLabel: string;
+  /**
+   * Controls placed on the filter row, after the filter itself — the host's add / import actions.
+   *
+   * They share the filter's row rather than owning one, because every row of chrome is a row the
+   * grid does not get, and the filter leaves its own line mostly empty.
+   */
+  toolbarEnd?: JSX.Element;
   /** Append-row commit: persist a new line for the picked product (server auto-fills qty + cost via
    *  replenishment), resolving to the new line's id (null on failure) so the grid can focus its qty. */
   onAddLine: (subjectId: number) => Promise<number | null>;
   /** Immediate-commit seam: persist one changed field of a line (optimistic). */
   onEdit: (lineId: number, patch: DraftLinePatch) => void;
+  /**
+   * Many cells from one gesture — a cleared selection, a bulk edit. Distinct from calling
+   * {@link onEdit} in a loop: the host paints the whole set once and writes it as one request,
+   * where the loop repaints and writes per cell and stalls the page on a large selection.
+   */
+  onEditMany: (edits: Array<{ id: number; patch: DraftLinePatch }>) => void;
   /** Remove the given lines (the right-click "Delete N selected rows"). */
   onRemoveMany: (lineIds: number[]) => void;
 }
@@ -124,6 +167,13 @@ interface PoDraftGridProps {
  * note) persists at once via {@link PoDraftGridProps.onEdit} (optimistic) — no staged dirty model, so the
  * grid reads the freshly-updated value straight back through `getValue`. Quick-filter + persisted column
  * layout mirror the reception grid; the catalogue add-picker + paste import stay around the grid as chrome.
+ *
+ * **Immediate is not the same as one-request-per-cell.** The host coalesces writes behind a short
+ * debounce, so a held key or a gesture over a selection settles as one request; a gesture that spans
+ * many cells hands them over together ({@link PoDraftGridProps.onEditMany}) so the grid repaints once
+ * rather than once per cell. Staging was considered and rejected for this grid: a draft PO already
+ * commits at numbering, so a per-cell "not saved yet" would compete with the boundary the document
+ * already has. The catalogue grid stages precisely because it has no such boundary.
  *
  * Stage 1: existing-line editing. Stage 2 (this file) adds the MS-Access-style append-row: a permanent
  * blank row at the bottom whose product cell is a portaled search-combobox; picking a product focuses
@@ -162,9 +212,13 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
 
   // Effective cost = the line's own unit cost, or the inherited catalogue price when unset.
   const effectiveCost = (l: PoLine): string | null => l.unitCost ?? l.catalogUnitCost;
+  // Effective qty, the same shape one field over: the typed quantity, or the replenishment suggestion
+  // it inherits while the cell is empty. 0 only when there is no suggestion either — a product with no
+  // threshold and nothing inbound has nothing to suggest, and the line is waiting on a number.
+  const effectiveQty = (l: PoLine): number => l.qtyRequested ?? l.suggestedQty ?? 0;
   const lineTotalNum = (l: PoLine): number => {
     const cost = effectiveCost(l);
-    return null === cost ? 0 : l.qtyRequested * Number(cost);
+    return null === cost ? 0 : effectiveQty(l) * Number(cost);
   };
 
   // Quick-filter: fuzzy-match the rows on the identifier fields; non-matching lines hide immediately.
@@ -208,7 +262,7 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
     lineTotal: null,
     available: null,
     onOrder: null,
-    reorderThreshold: null,
+    lowStockAmount: null,
     suggestedQty: null,
     catalogUnitCost: null,
     note: null,
@@ -284,10 +338,10 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
       id: 'reorder',
       label: _x(
         'Reorder',
-        'column header: the reorder threshold, the stock level that triggers a reorder',
+        'column header: the low stock threshold, the stock level that triggers a reorder',
       ),
       description: __(
-        'The reorder threshold — replenishment tops the product back up to here when it drops below.',
+        'The stock level that marks a product as needing a reorder. Replenishment fills it back up to Target stock, not to this line.',
       ),
       dataType: 'number',
       defaultWidth: 76,
@@ -463,11 +517,11 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
         header: () =>
           _x(
             'Reorder',
-            'column header: the reorder threshold, the stock level that triggers a reorder',
+            'column header: the low stock threshold, the stock level that triggers a reorder',
           ),
         cell: (info) => (
           <Show when={!isDraft(info.row.original)}>
-            <NumCell value={info.row.original.reorderThreshold} />
+            <NumCell value={info.row.original.lowStockAmount} />
           </Show>
         ),
       }) as ColumnDef<PoLine, unknown>,
@@ -481,7 +535,7 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
           <Show when={!isDraft(info.row.original)}>
             <MoqCell
               moq={props.moqFor(info.row.original.subjectId)}
-              qty={info.row.original.qtyRequested}
+              qty={effectiveQty(info.row.original)}
             />
           </Show>
         ),
@@ -496,7 +550,7 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
           <Show when={!isDraft(info.row.original)}>
             <CasePackCell
               casePack={props.casePackFor(info.row.original.subjectId)}
-              qty={info.row.original.qtyRequested}
+              qty={effectiveQty(info.row.original)}
             />
           </Show>
         ),
@@ -510,7 +564,8 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
         cell: (info) => (
           <Show when={!isDraft(info.row.original)}>
             <QtyCell
-              qty={info.row.original.qtyRequested}
+              own={info.row.original.qtyRequested}
+              inherited={info.row.original.suggestedQty}
               moq={props.moqFor(info.row.original.subjectId)}
               casePack={props.casePackFor(info.row.original.subjectId)}
             />
@@ -579,26 +634,16 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
 
   // ── DataGrid state ────────────────────────────────────────────────────────────────────────────
   const [sorting, setSorting] = createSignal<SortingState>([]);
-  const [columnVisibility, setColumnVisibility] = persistedSignal<VisibilityState>(
-    'invflux:po-draft:colvis',
-    {},
-  );
   // Versioned: a saved order predating a column would show that column at the far end, away from
   // the neighbours it belongs with. Bump the suffix when a column joins the middle of the order.
-  const [columnOrder, setColumnOrder] = persistedSignal<ColumnOrderState>(
-    'invflux:po-draft:colorder:v2',
-    COLUMN_ORDER,
-  );
-  const [columnSizing, setColumnSizing] = persistedSignal<Record<string, number>>(
-    'invflux:po-draft:colsize',
-    {},
-  );
-  const [expandedColumnSections, setExpandedColumnSections] = persistedSignal<string[]>(
-    'invflux:po-draft:colsections',
-    ['po-draft'],
-  );
   const [rowSelection, setRowSelection] = createSignal<RowSelectionState>({});
   const [cellSelection, setCellSelection] = createSignal<SelectionState>(EMPTY_SELECTION);
+
+  // The grid box fills from wherever it starts down to the viewport bottom. Measured rather than
+  // assumed — see the box's own comment, and `createViewportFill` for why a vh fraction is wrong
+  // for anything sitting below page chrome.
+  let gridBoxEl: HTMLDivElement | undefined;
+  const gridBoxHeight = createViewportFill(() => gridBoxEl);
 
   const getValue = (row: PoLine, columnId: string): unknown => {
     if (isDraft(row)) return undefined; // the append row renders its own controls; no grid value
@@ -616,7 +661,7 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
       case 'on_order':
         return row.onOrder;
       case 'reorder':
-        return row.reorderThreshold;
+        return row.lowStockAmount;
       case 'moq':
         return props.moqFor(row.subjectId);
       case 'case_pack':
@@ -647,11 +692,14 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
     _row: PoLine,
     meta: GridColumnMeta,
   ): { ok: boolean; value: unknown } =>
-    'unit_cost' === meta.id || 'discount_pct' === meta.id || 'note' === meta.id
-      ? { ok: true, value: null } // nullable → clear to empty
-      : 'qty_requested' === meta.id
-        ? { ok: true, value: 0 } // non-nullable → Del sets it to 0
-        : { ok: false, value: null };
+    // All four are nullable on a draft, and an emptied cell means the same thing in each: inherit.
+    // Qty clears to the replenishment suggestion, cost to the catalogue price.
+    'unit_cost' === meta.id ||
+    'discount_pct' === meta.id ||
+    'note' === meta.id ||
+    'qty_requested' === meta.id
+      ? { ok: true, value: null }
+      : { ok: false, value: null };
 
   // The product cell's editor needs the live catalogue + portal target + supplier label; inject them as
   // editorConfig for the append row only (real rows have no editable product cell).
@@ -661,6 +709,8 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
         ...meta,
         editorConfig: {
           addOptions: props.addOptions,
+          onNeeded: props.onAddOptionsNeeded,
+          loading: props.addOptionsLoading,
           portalRoot,
           supplierLabel: props.supplierLabel,
         },
@@ -684,7 +734,7 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
       if (null !== opt) void addAndEdit(Number(opt.value));
     } else if ('qty_requested' === columnId) {
       props.onEdit(row.id, {
-        qty_requested: null === next || undefined === next ? 0 : Number(next),
+        qty_requested: null === next || undefined === next || '' === next ? null : Number(next),
       });
     } else if ('unit_cost' === columnId) {
       props.onEdit(row.id, {
@@ -706,11 +756,99 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
   const onCommitNavigate = (row: PoLine, columnId: string): boolean =>
     isDraft(row) && 'product' === columnId;
   const onClearCells = (cells: Array<{ row: PoLine; columnId: string }>): void => {
+    // Collected, then handed over once. Clearing a whole column is a single gesture over as many
+    // cells as the draft has lines, so a write per cell is what froze the page on a 1700-line draft.
+    // Per row the patches merge, because one row can have several of its cells in the selection.
+    const patches = new Map<number, DraftLinePatch>();
+    const add = (id: number, patch: DraftLinePatch): void => {
+      patches.set(id, { ...(patches.get(id) ?? {}), ...patch });
+    };
+
     for (const { row, columnId } of cells) {
-      if ('unit_cost' === columnId) props.onEdit(row.id, { unit_cost: null });
-      else if ('discount_pct' === columnId) props.onEdit(row.id, { discount_pct: null });
-      else if ('note' === columnId) props.onEdit(row.id, { note: null });
-      else if ('qty_requested' === columnId) props.onEdit(row.id, { qty_requested: 0 });
+      if ('unit_cost' === columnId) add(row.id, { unit_cost: null });
+      else if ('discount_pct' === columnId) add(row.id, { discount_pct: null });
+      else if ('note' === columnId) add(row.id, { note: null });
+      // Clearing a quantity returns it to the suggestion, the way clearing a cost returns it to the
+      // catalogue price. Emptying a cell means "I have no figure of my own here" in every column.
+      else if ('qty_requested' === columnId) add(row.id, { qty_requested: null });
+    }
+
+    if (patches.size > 0) {
+      props.onEditMany([...patches].map(([id, patch]) => ({ id, patch })));
+    }
+  };
+
+  // ── Bulk edit (F2 / "Edit selection…" over a multi-cell selection) ──────────────────────────
+  // The Workbench's modal, reused rather than reimplemented: the same set / +N / +N% arithmetic a
+  // merchant already knows from the stock grid, and one place for it to be right. It is generic
+  // over the row type, so a target here is keyed by LINE id — the line is the thing being edited
+  // and its subject is an attribute of it.
+  const [bulkEditColumns, setBulkEditColumns] = createSignal<Array<BulkEditColumn<PoLine>> | null>(
+    null,
+  );
+
+  /**
+   * What an arithmetic operation starts from — the figure the cell is *showing*, not the figure it
+   * has stored.
+   *
+   * An inheriting cell stores null and displays the number it inherits, so on the stored value
+   * "Add 100%" has no base and silently skips the row: a merchant selects a column of inherited
+   * quantities, asks to double them, and most of the selection does not move. The number they were
+   * looking at is the one they meant, which is the same reasoning that makes `+`/`-` and `.` start
+   * from the inherited figure rather than from zero.
+   *
+   * The consequence is intended and unavoidable: a delta applied to an inheriting cell writes a
+   * real number, so that line stops inheriting. You cannot both double a figure and keep following
+   * whatever it would have been.
+   */
+  const bulkBaseValue = (row: PoLine, columnId: string): unknown => {
+    if ('qty_requested' === columnId) return row.qtyRequested ?? row.suggestedQty;
+    if ('unit_cost' === columnId) {
+      return atSupplierPrecision(
+        row.listUnitCost ?? row.unitCost ?? row.catalogUnitCost,
+        props.costDecimals,
+      );
+    }
+
+    return getValue(row, columnId);
+  };
+
+  const openBulkEditFromGroups = (
+    groups: Array<{ columnId: string; meta: GridColumnMeta; rows: PoLine[] }>,
+  ): boolean => {
+    const out: Array<BulkEditColumn<PoLine>> = [];
+    for (const group of groups) {
+      // The append row is not a line yet and has nothing to write to.
+      const rows = group.rows.filter((row) => !isDraft(row));
+      if (!group.meta.editable || 0 === rows.length) continue;
+      out.push({
+        meta: group.meta,
+        targets: rows.map((row) => ({
+          key: row.id,
+          row,
+          value: bulkBaseValue(row, group.columnId),
+        })),
+      });
+    }
+    if (0 === out.length) return false;
+    setBulkEditColumns(out);
+
+    return true;
+  };
+
+  const applyBulkEdits = (edits: Array<BulkEditResult<PoLine>>): void => {
+    // One handover for the whole selection: the host paints once and writes once, which is the
+    // difference between this and a few hundred per-cell round-trips.
+    const patches = new Map<number, DraftLinePatch>();
+    for (const edit of edits) {
+      const field = PATCH_FIELD[edit.columnId];
+      if (undefined === field) continue;
+      const value = '' === edit.newValue ? null : edit.newValue;
+      patches.set(edit.key, { ...(patches.get(edit.key) ?? {}), [field]: value });
+    }
+    setBulkEditColumns(null);
+    if (patches.size > 0) {
+      props.onEditMany([...patches].map(([id, patch]) => ({ id, patch })));
     }
   };
 
@@ -821,7 +959,11 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
 
   return (
     <div>
-      <div class="mb-2">
+      {/* One row, not two. The filter and the actions that add lines are both grid chrome, and a
+          row per control group spends vertical space the grid then does not get. The filter keeps
+          its own width rather than stretching: a search box as wide as the page reads as the
+          page's subject, and this one narrows a list. */}
+      <div class="mb-2 flex items-center gap-3">
         <QuickFilter
           value={filterText}
           onInput={setFilterText}
@@ -829,9 +971,27 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
           ref={(focus) => (focusFilter = focus)}
           placeholder={isPro ? __('Filter — name / SKU / barcode…') : __('Filter — name or SKU…')}
         />
+        <Show when={props.toolbarEnd}>
+          <div class="flex items-center gap-3">{props.toolbarEnd}</div>
+        </Show>
       </div>
 
-      <div class="flex max-h-[70vh] flex-col">
+      {/* Measured, not a viewport fraction. `70vh` was 594px of a 848px window while the grid
+          started 390px down it, so the box ended 136px BELOW the fold and the page scrolled — the
+          exact failure createViewportFill exists for, since a fraction of the viewport says nothing
+          about where the element begins. The fill measures this element's own top instead.
+
+          `FOOTER_GUTTER` is subtracted from the height rather than added as padding. Padding
+          would be the right tool for breathing room *inside* this box, which is the case
+          createViewportFill's docblock describes — but what has to fit is the Activity header,
+          a SIBLING rendered after it. Measured: with the gutter as padding the box still reached
+          the viewport bottom and that header landed 30px past the fold. */}
+      <div
+        ref={(el) => (gridBoxEl = el)}
+        data-testid="po-draft-grid-box"
+        class="box-border flex flex-col"
+        style={{ height: `calc(${gridBoxHeight()} - ${FOOTER_GUTTER})` }}
+      >
         <DataGrid<PoLine>
           rows={gridRows}
           getRowId={(l) => String(l.id)}
@@ -846,22 +1006,17 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
           resolveEditorMeta={resolveEditorMeta}
           apiRef={(api) => (gridApi = api)}
           contextMenuExtras={contextMenuExtras}
-          settingsKey="po-draft"
           keyHandlers={globalKeyHandlers}
           keyHandlersInGrid={inGridKeyHandlers}
           onStageEdit={onStageEdit}
           onCommitNavigate={onCommitNavigate}
           onClearCells={onClearCells}
+          onEditMulti={openBulkEditFromGroups}
           sorting={sorting}
           onSortingChange={(next) => setSorting(() => next)}
-          columnVisibility={columnVisibility}
-          setColumnVisibility={(updater) => setColumnVisibility(updater)}
-          columnOrder={columnOrder}
-          setColumnOrder={(updater) => setColumnOrder(updater)}
-          columnSizing={columnSizing}
-          setColumnSizing={(updater) => setColumnSizing(updater)}
-          expandedColumnSections={expandedColumnSections}
-          setExpandedColumnSections={(updater) => setExpandedColumnSections(updater)}
+          scope="po-draft"
+          defaultColumnOrder={COLUMN_ORDER}
+          defaultExpandedSections={['po-draft']}
           rowSelection={rowSelection}
           setRowSelection={(updater) => setRowSelection(updater)}
           cellSelection={cellSelection}
@@ -873,6 +1028,20 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
           }
         />
       </div>
+
+      {/* ── Bulk edit (multi-cell selection → one control per column) ── */}
+      <Show when={bulkEditColumns()}>
+        {(columns) => (
+          <BulkEditModal
+            columns={columns()}
+            // No term-picker columns on a purchase-order line, so there is no taxonomy to resolve.
+            taxonomySpace={undefined}
+            mount={portalRoot}
+            onApply={applyBulkEdits}
+            onClose={() => setBulkEditColumns(null)}
+          />
+        )}
+      </Show>
     </div>
   );
 }
@@ -898,23 +1067,53 @@ function NumCell(props: { value: number | null }): JSX.Element {
   );
 }
 
-/** Qty cell with MOQ / case-pack validation: red + bold when the entered qty breaks either supplier
- *  rule, with a native tooltip carrying one line per broken rule (blank / 0 is never a violation). */
-function QtyCell(props: { qty: number; moq: number | null; casePack: number | null }): JSX.Element {
+/** Qty cell — the typed quantity in normal text; when the cell is empty, the replenishment suggestion
+ *  it inherits, shown faded (italic) exactly as an inherited unit cost is. MOQ / case-pack violations
+ *  turn it red + bold with a native tooltip, one line per broken rule (blank / 0 is never a
+ *  violation, and a suggestion is floored and rounded server-side so it cannot break either rule).
+ *
+ *  A faded quantity is not a faded price, though they look alike: a catalogue price moves when someone
+ *  edits the catalogue, while this figure is recomputed from live stock, so it can differ between two
+ *  visits to the same draft. The tooltip says so rather than leaving the merchant to notice. */
+function QtyCell(props: {
+  own: number | null;
+  inherited: number | null;
+  moq: number | null;
+  casePack: number | null;
+}): JSX.Element {
+  const shown = (): number | null => props.own ?? props.inherited;
   const tips = (): string[] => {
     const msgs: string[] = [];
-    if (belowMoq(props.qty, props.moq)) msgs.push(__('qty < MOQ'));
-    if (offCasePack(props.qty, props.casePack)) msgs.push(__('case pack ∤ qty'));
+    const qty = shown() ?? 0;
+    if (belowMoq(qty, props.moq)) msgs.push(__('qty < MOQ'));
+    if (offCasePack(qty, props.casePack)) msgs.push(__('case pack ∤ qty'));
     return msgs;
   };
   return (
-    <span
-      class="block text-right tabular-nums"
-      classList={{ 'font-medium text-red-600': tips().length > 0 }}
-      title={tips().length > 0 ? tips().join('\n') : undefined}
+    <Show
+      when={null !== props.own}
+      fallback={
+        <span
+          data-testid="po-line-qty"
+          data-inherited=""
+          class="block text-right italic tabular-nums text-text-muted"
+          title={__(
+            'Suggested from stock on hand, what is already on order and the low-stock threshold — it follows them until you type a quantity.',
+          )}
+        >
+          {props.inherited ?? '—'}
+        </span>
+      }
     >
-      {props.qty}
-    </span>
+      <span
+        data-testid="po-line-qty"
+        class="block text-right tabular-nums"
+        classList={{ 'font-medium text-red-600': tips().length > 0 }}
+        title={tips().length > 0 ? tips().join('\n') : undefined}
+      >
+        {props.own}
+      </span>
+    </Show>
   );
 }
 

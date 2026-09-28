@@ -22,7 +22,7 @@ const RIGHT_ALIGNED = new Set([
   'price',
   'sale_price',
   'weight',
-  'reorder_threshold',
+  'low_stock_amount',
   'atp',
   'res',
   'ctd',

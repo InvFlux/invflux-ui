@@ -69,7 +69,7 @@ const asGridLine = (line: PoReceptionLine): PoLine => ({
   lineTotal: null,
   available: null,
   onOrder: null,
-  reorderThreshold: null,
+  lowStockAmount: null,
   note: null,
   suggestedQty: null,
 });
@@ -130,6 +130,12 @@ export function PoReception(props: { poId: number }): JSX.Element {
     // The landing lists show this count and, once it commits, the receipt it became.
     void queryClient.invalidateQueries({ queryKey: ['receiving', 'sessions'] });
     void queryClient.invalidateQueries({ queryKey: ['receiving', 'receipts'] });
+    // The order's own page is where the operator goes next, and it renders exactly what this
+    // changes: the stage pill, and whether a count is open against the order. Both surfaces live in
+    // one SPA, so returning to the order is a route change rather than a page load — without this
+    // it keeps answering from the cache, showing "Receiving" and offering to start counting an
+    // order that has just been received.
+    void queryClient.invalidateQueries({ queryKey: ['procurement', 'purchase-orders'] });
   };
 
   const po = () => query.data?.purchaseOrder;

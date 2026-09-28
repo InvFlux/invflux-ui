@@ -2,6 +2,7 @@ import { __, _n, sprintf } from '@invflux/i18n';
 import { createEffect, createSignal, type JSX, on, onCleanup, Show } from 'solid-js';
 import { Button, SplitActionButton, Textarea } from '@invflux/ui';
 import { PoReceiveGrid } from './PoReceiveGrid';
+import { orderedQty } from '../../lib/variance';
 import {
   PO_RECEIVE_ACTIONS_SCOPE,
   type PoReceiveActionContext,
@@ -201,7 +202,7 @@ export function PoReceiveForm(props: {
   // matching the server's qty_open, so the pre-confirm hint agrees with the prompt. A line fully received
   // across earlier deliveries is NOT short even if this session adds nothing to it.
   const shortLines = (): number =>
-    props.lines.filter((l) => l.qtyReceived + goodThisSession(l) < l.qtyRequested).length;
+    props.lines.filter((l) => l.qtyReceived + goodThisSession(l) < orderedQty(l)).length;
   const isShort = (): boolean => shortLines() > 0;
 
   // The three finalize effects. Each resolves FX first (a missing required rate flags + focuses the

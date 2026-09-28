@@ -50,7 +50,7 @@ export function OrderNotesPanel(props: {
   // Resolve a tag id → {name, colorId} so a note carrying a tag delta renders its chips.
   const resolveTag: TagChipResolver = (id) => {
     const t = (tagsQuery.data ?? []).find((tag) => tag.id === id);
-    return t ? { name: t.name, colorId: t.colorId } : undefined;
+    return t ? { name: t.displayName, colorId: t.colorId } : undefined;
   };
 
   // The composer picker shows the order's current tags (removable) plus every assignable tag the
@@ -67,7 +67,7 @@ export function OrderNotesPanel(props: {
     );
     return [...removable, ...addable].map((t) => ({
       id: t.id,
-      name: t.name,
+      name: t.displayName,
       colorId: t.colorId,
       requiresNote: governOn() && t.governanceFlags.includes('RequireNoteOnAdd'),
       requiresNoteOnRemove: governOn() && t.governanceFlags.includes('RequireNoteOnRemove'),

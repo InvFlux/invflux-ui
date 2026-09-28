@@ -12,14 +12,16 @@ import {
   type ResolvedRow,
 } from '@invflux/ui';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
-import { createSignal, type JSX, Show } from 'solid-js';
+import { createSignal, type JSX, onCleanup, Show } from 'solid-js';
 import { useProcurement } from '../../context';
 import { createApi } from '../../lib/api';
 import { AddPicker, type AddOption } from './AddPicker';
+import { prunePatch } from './linePatch';
 import { netOfDiscount } from './linePrice';
 import { type DraftLinePatch, PoDraftGrid } from './PoDraftGrid';
+import { effectiveQty } from './submissionRules';
 import type { SupplierProduct, SupplierProductsResponse } from '../suppliers/types';
-import type { PoLine, PurchaseOrderDetail } from './types';
+import type { PoLine, PoLinesResponse } from './types';
 
 interface EditorProps {
   poId: string;
@@ -43,17 +45,51 @@ export function PoLinesEditor(props: EditorProps): JSX.Element {
   const api = createApi(ctx);
   const isPro = ctx.hasPro; // supplier-SKU capture (non-key mapping) is Pro
   const queryClient = useQueryClient();
-  const key = (): [string, string, string] => ['procurement', 'purchase-orders', props.poId];
+  // The LINES cache, not the order's. The header is fetched separately so it can render before
+  // these arrive, so a line write updates the lines entry and leaves the header alone.
+  const key = (): [string, string, string, string] => [
+    'procurement',
+    'purchase-orders',
+    props.poId,
+    'lines',
+  ];
 
   const [adding, setAdding] = createSignal(false);
 
-  const catalogue = createQuery(() => ({
+  /**
+   * The catalogue terms for the products **on this order** — MOQ, case pack, the price an inherited
+   * cost displays.
+   *
+   * Scoped by `po_id` rather than fetched whole: the supplier's catalogue runs to thousands of
+   * products and this needs the few dozen on the order. The server does the join, so this goes out
+   * in parallel with the lines instead of waiting to learn their subject ids from them.
+   */
+  const lineCatalogue = createQuery(() => ({
+    queryKey: ['procurement', 'suppliers', props.supplierId, 'products', 'po', props.poId],
+    queryFn: () =>
+      api.get<SupplierProductsResponse>(`/procurement/suppliers/${props.supplierId}/products`, {
+        po_id: props.poId,
+      }),
+  }));
+
+  /**
+   * The **whole** catalogue, for the add-a-product pickers — they offer what is *not* on the order,
+   * so no scoping helps them.
+   *
+   * Fetched on first use rather than with the page. Most orders are generated and never have a
+   * product added by hand, so this was thousands of rows and seconds of waiting that nine times in
+   * ten nobody wanted. The pickers open immediately and show that it is loading.
+   */
+  const [catalogueWanted, setCatalogueWanted] = createSignal(false);
+  const fullCatalogue = createQuery(() => ({
     queryKey: ['procurement', 'suppliers', props.supplierId, 'products'],
     queryFn: () =>
       api.get<SupplierProductsResponse>(`/procurement/suppliers/${props.supplierId}/products`),
+    enabled: catalogueWanted(),
   }));
+
   const catalogueItem = (subjectId: number): SupplierProduct | undefined =>
-    catalogue.data?.products.find((p) => p.subjectId === subjectId);
+    lineCatalogue.data?.products.find((p) => p.subjectId === subjectId);
   const moqFor = (subjectId: number): number | null => catalogueItem(subjectId)?.moq ?? null;
   const casePackFor = (subjectId: number): number | null =>
     catalogueItem(subjectId)?.casePack ?? null;
@@ -62,7 +98,7 @@ export function PoLinesEditor(props: EditorProps): JSX.Element {
     catalogueItem(subjectId)?.unitPrice ?? null;
   const addOptions = (): AddOption[] => {
     const onPo = new Set(props.lines.map((l) => l.subjectId));
-    return (catalogue.data?.products ?? [])
+    return (fullCatalogue.data?.products ?? [])
       .filter((p) => !onPo.has(p.subjectId))
       .map((p) => ({
         subjectId: p.subjectId,
@@ -72,7 +108,7 @@ export function PoLinesEditor(props: EditorProps): JSX.Element {
   };
 
   const setLines = (fn: (lines: PoLine[]) => PoLine[]): void => {
-    queryClient.setQueryData<PurchaseOrderDetail>(key(), (old) =>
+    queryClient.setQueryData<PoLinesResponse>(key(), (old) =>
       old ? { ...old, lines: fn(old.lines) } : old,
     );
   };
@@ -84,7 +120,7 @@ export function PoLinesEditor(props: EditorProps): JSX.Element {
   const buildOptimisticLine = (
     subjectId: number,
     label: string,
-    qty: number,
+    qty: number | null,
     unitCost: string | null,
   ): PoLine => {
     const item = catalogueItem(subjectId);
@@ -104,35 +140,36 @@ export function PoLinesEditor(props: EditorProps): JSX.Element {
       qtyReceived: 0,
       qtyDamagedSoFar: 0,
       qtyClosedShort: 0,
-      qtyOpen: qty,
+      qtyOpen: qty ?? 0,
       unitCost,
       listUnitCost: null,
       discountPct: null,
       unitCostInvoiced: null,
       qtyInvoiced: 0,
       catalogUnitCost: catalogPriceFor(subjectId),
-      lineTotal: null === effectiveCost ? '0' : (qty * Number(effectiveCost)).toFixed(4),
+      lineTotal: null === effectiveCost ? '0' : ((qty ?? 0) * Number(effectiveCost)).toFixed(4),
       available: null,
       onOrder: null,
-      reorderThreshold: null,
+      lowStockAmount: null,
       suggestedQty: null,
       note: null,
     };
   };
 
-  // Toolbar quick-add: a clicked catalogue product appears as a qty-0 line immediately. Cost is left
-  // null → it inherits the catalogue price (faded) until overridden, and freezes at submission.
+  // Toolbar quick-add: a clicked catalogue product appears immediately, inheriting both figures —
+  // quantity from the replenishment suggestion, cost from the catalogue price — each shown faded
+  // until overridden, and both frozen at submission. A line starts as "what we would order", not 0.
   const add = createMutation(() => ({
     mutationFn: (o: AddOption) =>
       api.post(`/procurement/purchase-orders/${props.poId}/lines`, {
         subject_id: o.subjectId,
-        qty_requested: 0,
+        qty_requested: null,
         unit_cost: null,
       }),
     onMutate: async (o: AddOption) => {
       await queryClient.cancelQueries({ queryKey: key() });
-      const prev = queryClient.getQueryData<PurchaseOrderDetail>(key());
-      setLines((lines) => [...lines, buildOptimisticLine(o.subjectId, o.label, 0, null)]);
+      const prev = queryClient.getQueryData<PoLinesResponse>(key());
+      setLines((lines) => [...lines, buildOptimisticLine(o.subjectId, o.label, null, null)]);
       return { prev };
     },
     onError: (_e, _o, ctx) => {
@@ -175,20 +212,17 @@ export function PoLinesEditor(props: EditorProps): JSX.Element {
       ),
     onMutate: async (ids: number[]) => {
       await queryClient.cancelQueries({ queryKey: key() });
-      const prev = queryClient.getQueryData<PurchaseOrderDetail>(key());
+      const prev = queryClient.getQueryData<PoLinesResponse>(key());
       const idset = new Set(ids);
       setLines((lines) => lines.filter((l) => !idset.has(l.id)));
       return { prev };
     },
-    onError: (_e: unknown, _ids: number[], ctx: { prev?: PurchaseOrderDetail } | undefined) => {
+    onError: (_e: unknown, _ids: number[], ctx: { prev?: PoLinesResponse } | undefined) => {
       if (ctx?.prev) queryClient.setQueryData(key(), ctx.prev);
       toast.error(__('Could not remove the lines.'));
     },
     onSettled: () => void queryClient.invalidateQueries({ queryKey: key() }),
   }));
-
-  const grandTotal = (): number =>
-    props.lines.reduce((s, l) => s + (null === l.lineTotal ? 0 : Number(l.lineTotal)), 0);
 
   // Apply an immediate-commit patch to a line's optimistic cache row. Mirrors the server's price rules
   // (core `LinePrice`): the typed unit cost is the price before the discount, so retyping it keeps the
@@ -196,7 +230,8 @@ export function PoLinesEditor(props: EditorProps): JSX.Element {
   // stored unit cost is always the net. The refetch on settle replaces this with the server's answer.
   const applyPatch = (l: PoLine, patch: DraftLinePatch): PoLine => {
     const next: PoLine = { ...l };
-    if (undefined !== patch.qty_requested) next.qtyRequested = patch.qty_requested;
+    // `in`, not `undefined !==`: a null quantity is a real patch (back to inheriting), not an absent one.
+    if ('qty_requested' in patch) next.qtyRequested = patch.qty_requested ?? null;
     if ('unit_cost' in patch || 'discount_pct' in patch) {
       const clearsCost = 'unit_cost' in patch && null === (patch.unit_cost ?? null);
       const pct = 'discount_pct' in patch ? (patch.discount_pct ?? null) : next.discountPct;
@@ -218,30 +253,119 @@ export function PoLinesEditor(props: EditorProps): JSX.Element {
     }
     if ('note' in patch) next.note = patch.note ?? null;
     next.lineTotal =
-      null === next.unitCost ? null : (next.qtyRequested * Number(next.unitCost)).toFixed(4);
+      null === next.unitCost ? null : (effectiveQty(next) * Number(next.unitCost)).toFixed(4);
     return next;
   };
 
-  // Immediate-commit edit of one line field (qty / unit cost / note) — optimistic, then PATCH.
-  const editLine = createMutation(() => ({
-    mutationFn: ({ id, patch }: { id: number; patch: DraftLinePatch }) =>
-      api.patch(`/procurement/purchase-orders/${props.poId}/lines/${id}`, patch),
-    onMutate: async ({ id, patch }: { id: number; patch: DraftLinePatch }) => {
-      await queryClient.cancelQueries({ queryKey: key() });
-      const prev = queryClient.getQueryData<PurchaseOrderDetail>(key());
-      setLines((lines) => lines.map((l) => (l.id === id ? applyPatch(l, patch) : l)));
-      return { prev };
+  // Immediate-commit edits, coalesced. Each edit paints its cell at once and joins a pending batch;
+  // a short debounce later the batch goes out as ONE request.
+  //
+  // The batching is not an optimisation, it is what makes a grid-wide gesture survivable: clearing a
+  // selected quantity column on a 1700-line draft is one user action, and as a request per line it
+  // queued 1700 PATCHes behind the browser's six-per-origin limit and froze the page. Per line the
+  // work is also quadratic in re-renders, which is why a bulk gesture paints once (`editLines`)
+  // rather than once per cell.
+  //
+  // Debounced rather than staged, deliberately: a draft PO already has a commitment boundary at
+  // numbering, so a second "not saved yet" state would compete with it. The delay is short enough
+  // that a save is never something the merchant waits for, and long enough that holding a key down
+  // sends one write instead of one per repeat.
+  //
+  // Deliberately NO invalidate on success. `key()` is the order's key and TanStack matches by prefix,
+  // so invalidating it refetches the order AND its activity timeline — three requests for one
+  // keystroke, and a visible stall on every cell. A failure still re-syncs from the server, which is
+  // where a refetch actually earns its round-trip.
+  const FLUSH_DELAY_MS = 120;
+  const pending = new Map<number, DraftLinePatch>();
+  let flushTimer: ReturnType<typeof setTimeout> | undefined;
+  let inFlight = false;
+  // Captured when the queue goes empty → non-empty: what to restore if the batch is refused.
+  let rollbackTo: PoLinesResponse | undefined;
+
+  const editLines = createMutation(() => ({
+    mutationFn: (edits: Array<{ id: number; patch: DraftLinePatch }>) =>
+      api.patch<{ lines: PoLine[]; rejected: Array<{ id: number; reason: string }> }>(
+        `/procurement/purchase-orders/${props.poId}/lines`,
+        { edits },
+      ),
+    onSuccess: ({
+      lines,
+      rejected,
+    }: {
+      lines: PoLine[];
+      rejected: Array<{ id: number; reason: string }>;
+    }) => {
+      const settled = new Map(lines.map((l) => [l.id, l]));
+      setLines((ls) => ls.map((l) => settled.get(l.id) ?? l));
+      rollbackTo = undefined;
+      // A line the order no longer carries, or a discount the price model refuses. The rest saved,
+      // so the grid is right about them; only the refused rows need re-reading from the server.
+      if (rejected.length > 0) {
+        toast.error(__('Some lines could not be saved.'));
+        void queryClient.invalidateQueries({ queryKey: key() });
+      }
     },
-    onError: (
-      _e: unknown,
-      _v: { id: number; patch: DraftLinePatch },
-      ctx: { prev?: PurchaseOrderDetail } | undefined,
-    ) => {
-      if (ctx?.prev) queryClient.setQueryData(key(), ctx.prev);
-      toast.error(__('Could not save the line.'));
+    onError: () => {
+      if (rollbackTo) queryClient.setQueryData(key(), rollbackTo);
+      rollbackTo = undefined;
+      toast.error(__('Could not save the lines.'));
+      void queryClient.invalidateQueries({ queryKey: key() });
     },
-    onSettled: () => void queryClient.invalidateQueries({ queryKey: key() }),
+    onSettled: () => {
+      inFlight = false;
+      // Edits made while the batch was in flight are already painted and still queued; send them.
+      if (pending.size > 0) scheduleFlush();
+    },
   }));
+
+  const flush = (): void => {
+    flushTimer = undefined;
+    // One batch at a time: overlapping writes to the same lines could settle out of order, and the
+    // later response would put the earlier value back on screen.
+    if (inFlight || 0 === pending.size) return;
+    const edits = [...pending].map(([id, patch]) => ({ id, patch }));
+    pending.clear();
+    inFlight = true;
+    editLines.mutate(edits);
+  };
+
+  const scheduleFlush = (): void => {
+    if (undefined !== flushTimer) clearTimeout(flushTimer);
+    flushTimer = setTimeout(flush, FLUSH_DELAY_MS);
+  };
+
+  /** Queue one or more line edits: paint once, then write once. */
+  const queueEdits = (edits: Array<{ id: number; patch: DraftLinePatch }>): void => {
+    const current = queryClient.getQueryData<PoLinesResponse>(key());
+    const byId = new Map((current?.lines ?? []).map((l) => [l.id, l]));
+
+    const real: Array<{ id: number; patch: DraftLinePatch }> = [];
+    for (const { id, patch } of edits) {
+      const line = byId.get(id);
+      const pruned = line ? prunePatch(line, patch) : patch;
+      if (null === pruned) continue; // nothing to say about this cell
+      real.push({ id, patch: pruned });
+    }
+    if (0 === real.length) return;
+
+    if (0 === pending.size && !inFlight) rollbackTo = current;
+    for (const { id, patch } of real) {
+      pending.set(id, { ...(pending.get(id) ?? {}), ...patch });
+    }
+
+    // One pass over the rows for the whole gesture — a 1700-cell clear repaints the grid once.
+    const patches = new Map(real.map((e) => [e.id, e.patch]));
+    setLines((ls) =>
+      ls.map((l) => (patches.has(l.id) ? applyPatch(l, patches.get(l.id) as DraftLinePatch) : l)),
+    );
+    scheduleFlush();
+  };
+
+  // Leaving the screen must not drop a write still sitting in the debounce window.
+  onCleanup(() => {
+    if (undefined !== flushTimer) clearTimeout(flushTimer);
+    flush();
+  });
 
   // Bulk paste import (shared ImportWizard). Key candidates first, in priority order; qty required.
   const [importing, setImporting] = createSignal(false);
@@ -420,23 +544,6 @@ export function PoLinesEditor(props: EditorProps): JSX.Element {
 
   return (
     <div>
-      <div class="mb-2 flex items-center gap-3">
-        <div class="relative">
-          <Button size="sm" onClick={() => setAdding((a) => !a)}>
-            {__('+ Add')}
-          </Button>
-          <Show when={adding()}>
-            <AddPicker
-              options={addOptions()}
-              onAdd={(o) => add.mutate(o)}
-              onClose={() => setAdding(false)}
-            />
-          </Show>
-        </div>
-        <Button variant="secondary" size="sm" onClick={() => setImporting(true)}>
-          {__('Import / paste')}
-        </Button>
-      </div>
       <Show when={importing()}>
         <ImportWizard
           title={__('Import purchase-order lines')}
@@ -457,16 +564,56 @@ export function PoLinesEditor(props: EditorProps): JSX.Element {
         moqFor={moqFor}
         casePackFor={casePackFor}
         addOptions={addOptions}
+        onAddOptionsNeeded={() => setCatalogueWanted(true)}
+        addOptionsLoading={() => fullCatalogue.isPending}
         supplierLabel={props.supplierLabel}
         onAddLine={addDraftLine}
-        onEdit={(id, patch) => editLine.mutate({ id, patch })}
+        onEdit={(id, patch) => queueEdits([{ id, patch }])}
+        onEditMany={(edits) => queueEdits(edits)}
         onRemoveMany={(ids) => delMany.mutate(ids)}
+        // Grid chrome shares the filter's row: two control groups, one line, and the rows saved
+        // go to the grid. The picker's wrapper keeps `relative` — the dropdown positions against
+        // it, so it travels with the button rather than against the old toolbar.
+        toolbarEnd={
+          <>
+            <div class="relative">
+              {/* `text-nowrap`: these share a row with the filter now, so a narrow window would
+                  otherwise wrap a two-word label onto a second line and make the row taller than
+                  the one it replaced. */}
+              <Button
+                size="sm"
+                class="text-nowrap"
+                onClick={() => {
+                  // Opening the picker is the moment the catalogue is worth fetching.
+                  setCatalogueWanted(true);
+                  setAdding((a) => !a);
+                }}
+              >
+                {__('+ Add')}
+              </Button>
+              <Show when={adding()}>
+                <AddPicker
+                  options={addOptions()}
+                  loading={fullCatalogue.isPending}
+                  onAdd={(o) => add.mutate(o)}
+                  onClose={() => setAdding(false)}
+                />
+              </Show>
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              class="text-nowrap"
+              onClick={() => setImporting(true)}
+            >
+              {__('Import / paste')}
+            </Button>
+          </>
+        }
       />
-      <Show when={props.lines.length > 0}>
-        <div class="mt-2 flex justify-end pr-2 text-sm font-semibold tabular-nums">
-          {__('Total')}: {grandTotal().toFixed(props.costDecimals)}
-        </div>
-      </Show>
+      {/* No total row here: it rides the Activity section's header in `PoDetail`, at the right-hand
+          end of a row that already exists. A full-width row holding one number is the vertical
+          space the grid's viewport fill is trying to reclaim. */}
     </div>
   );
 }
