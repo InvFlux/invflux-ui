@@ -14,8 +14,8 @@ import { pendingActionsOf } from '../workingSet';
  *
  * Amber with an hourglass, matching the order detail's pending-correction pill: this is the SPA's
  * "a person still owes an action" treatment, and a queue chip that meant the same thing in another
- * colour would make the operator learn it twice. The glyph is not decoration for its own sake —
- * amber against the neighbouring tag pills is exactly the pair a colour-blind operator cannot
+ * color would make the operator learn it twice. The glyph is not decoration for its own sake —
+ * amber against the neighbouring tag pills is exactly the pair a color-blind operator cannot
  * separate, so the tooltip and the icon carry what the tone alone would.
  */
 export function PendingActionChips(props: {
@@ -23,9 +23,9 @@ export function PendingActionChips(props: {
   /** Gateway ids that cannot capture through the API — `payment_entry` is defined against them. */
   manualGateways: readonly string[];
 }): JSX.Element {
-  const chips = (): PendingActionChip[] =>
+  const chips = (): (PendingActionChip & { action: string })[] =>
     pendingActionsOf(props.order, props.manualGateways).flatMap((action) =>
-      describe(action, props.order),
+      describe(action, props.order).map((chip) => ({ ...chip, action })),
     );
 
   // The wrapper lives inside the `Show` rather than around it: the cell stacks its rows with a
@@ -38,7 +38,13 @@ export function PendingActionChips(props: {
           {(chip) => (
             /* Default size and `rounded` rather than the tags' lozenge: the same metrics as the
                order detail's pill, and a shape that tells an action from an identity at a glance. */
-            <Pill tone="warning" class="tabular-nums" title={chip.title}>
+            <Pill
+              tone="warning"
+              class="tabular-nums"
+              title={chip.title}
+              data-testid="pending-action-chip"
+              data-action={chip.action}
+            >
               {chip.text}
               <HourglassIcon class="h-3 w-3 shrink-0" />
             </Pill>
@@ -58,8 +64,8 @@ interface PendingActionChip {
  * One action's cell wording, or nothing.
  *
  * Returns a list rather than a value so an action this build has no phrasing for simply renders
- * nothing — `pendingActionsOf` narrows to the three the base install registers, and an add-on's
- * action reaching here would otherwise show as a chip labelled with its raw id.
+ * nothing — `pendingActionsOf` narrows to the four the base install registers, and an add-on's
+ * action reaching here would otherwise show as a chip labeled with its raw id.
  */
 function describe(action: string, order: DispatchOrderSummary): PendingActionChip[] {
   switch (action) {
@@ -103,6 +109,18 @@ function describe(action: string, order: DispatchOrderSummary): PendingActionChi
         {
           text: _x('Payment', 'pending-action chip: an offline payment is still to be recorded'),
           title: __('Offline payment not yet recorded'),
+        },
+      ];
+    case 'host_reopened':
+      return [
+        {
+          text: _x(
+            'Reopened',
+            'pending-action chip: a shipped order was moved back to a not-done status in WooCommerce',
+          ),
+          title: __(
+            'Shipped, but moved back to a not-done status in WooCommerce. Open the order to restore Completed or reverse the shipment.',
+          ),
         },
       ];
     default:

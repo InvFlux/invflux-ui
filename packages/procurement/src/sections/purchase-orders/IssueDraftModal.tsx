@@ -1,4 +1,4 @@
-import { __, _n, sprintf } from '@invflux/i18n';
+import { __, _n, formatMoney, sprintf } from '@invflux/i18n';
 import { Modal, ModalFooter, ModalHeader, ModalPanel } from '@invflux/ui';
 import { createMemo, For, type JSX, Show } from 'solid-js';
 import { belowMoq, nextValidQty, offCasePack } from '../../grid/qtyRules';
@@ -19,18 +19,23 @@ interface RemovedLine {
 
 export interface IssueDraftModalProps {
   lines: PoLine[];
-  /** Catalogue MOQ / case-pack lookups (the supplier-order rules the qty is validated against). */
+  /** Catalog MOQ / case-pack lookups (the supplier-order rules the qty is validated against). */
   moqFor: (subjectId: number) => number | null;
   casePackFor: (subjectId: number) => number | null;
   costDecimals: number;
   currency: string;
   supplierLabel: string;
   /** Stage qty fixes (parallel PATCH + invalidate). The modal stays open and recomputes from the reload. */
-  onFixQtys: (patches: Array<{ id: number; qty: number }>) => void;
+  onFixQtys: (patches: Array<{ subjectId: number; qty: number }>) => void;
   /** A fix round-trip is in flight — disables the Fix buttons + the confirm while it settles. */
   fixing: boolean;
   issuing: boolean;
-  onConfirm: () => void;
+  /**
+   * Confirm. `adopt` says whether the order carries products InvFlux does not manage yet — the
+   * caller sends it on, because confirming *is* the consent to adopt them. It is derived here rather
+   * than by the caller so the modal that describes the consequence is the one that reports it.
+   */
+  onConfirm: (adopt: boolean) => void;
   onCancel: () => void;
 }
 
@@ -63,6 +68,11 @@ export function IssueDraftModal(props: IssueDraftModalProps): JSX.Element {
     kept().reduce((s, l) => s + effectiveQty(l) * (effectiveCost(l) ?? 0), 0),
   );
 
+  // Products on the KEPT lines that InvFlux does not manage. A line about to be removed is not worth
+  // a decision — being made to adopt a product so the same request can drop the line carrying it is
+  // a dead end. `=== false`: null means the server did not ask, and is not "unmanaged".
+  const unmanaged = createMemo<PoLine[]>(() => kept().filter((l) => false === l.governed));
+
   // MOQ / case-pack violations among the KEPT lines (a removed 0-qty line is not "below MOQ").
   const belowMoqLines = createMemo(() =>
     kept().filter((l) => belowMoq(effectiveQty(l), props.moqFor(l.subjectId))),
@@ -90,7 +100,7 @@ export function IssueDraftModal(props: IssueDraftModalProps): JSX.Element {
   const fixAllQty = (): void =>
     props.onFixQtys(
       invalidQtyLines().map((l) => ({
-        id: l.id,
+        subjectId: l.subjectId,
         qty: nextValidQty(
           effectiveQty(l),
           props.moqFor(l.subjectId),
@@ -99,19 +109,31 @@ export function IssueDraftModal(props: IssueDraftModalProps): JSX.Element {
       })),
     );
   const fixZeroQty = (): void =>
-    props.onFixQtys(fixableZeroQty().map((l) => ({ id: l.id, qty: l.suggestedQty as number })));
+    props.onFixQtys(
+      fixableZeroQty().map((l) => ({ subjectId: l.subjectId, qty: l.suggestedQty as number })),
+    );
 
-  const money = (v: number): string => `${v.toFixed(props.costDecimals)} ${props.currency}`;
+  const money = (v: number): string => formatMoney(v, props.currency, props.costDecimals);
   const reasonLabel = (reason: RemovedLine['reason']): string =>
     'zero_qty' === reason ? __('no quantity') : __('no price');
 
-  const confirmLabel = (): string =>
-    removed().length > 0
-      ? sprintf(
-          _n('Remove %d & download', 'Remove %d & download', removed().length),
-          removed().length,
-        )
-      : __('Assign number & download');
+  // The button names what it will DO beyond numbering, the way "Remove N" always has: nothing hidden
+  // behind a label that only says "Assign number".
+  const confirmLabel = (): string => {
+    const drop = removed().length;
+    const adopt = unmanaged().length;
+    if (drop > 0 && adopt > 0) {
+      return sprintf(__('Remove %1$d, adopt %2$d & download'), drop, adopt);
+    }
+    if (drop > 0) {
+      return sprintf(_n('Remove %d & download', 'Remove %d & download', drop), drop);
+    }
+    if (adopt > 0) {
+      return sprintf(__('Adopt %d & download'), adopt);
+    }
+
+    return __('Assign number & download');
+  };
 
   const linkBtn =
     'rounded border border-primary px-2 py-1 text-xs font-medium text-primary hover:bg-primary/5 disabled:opacity-50';
@@ -187,6 +209,38 @@ export function IssueDraftModal(props: IssueDraftModalProps): JSX.Element {
             </div>
           </Show>
 
+          {/* Products on the order that InvFlux does not manage yet. Stock cannot be received against
+              one, so numbering puts them under management — said here, beforehand, with the
+              consequence stated, rather than as a refusal at the last step. Adoption is family-level:
+              a variable product is adopted together with its variations. */}
+          <Show when={unmanaged().length > 0}>
+            <div
+              class="space-y-1.5 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900"
+              data-testid="issue-unmanaged"
+            >
+              <p>
+                {sprintf(
+                  _n(
+                    '%d product on this order is not managed by InvFlux yet:',
+                    '%d products on this order are not managed by InvFlux yet:',
+                    unmanaged().length,
+                  ),
+                  unmanaged().length,
+                )}
+              </p>
+              <ul class="max-h-40 list-disc space-y-0.5 overflow-y-auto pl-5">
+                <For each={unmanaged()}>
+                  {(l) => <li>{l.productLabel || `#${l.subjectId}`}</li>}
+                </For>
+              </ul>
+              <p class="text-xs">
+                {__(
+                  'Stock cannot be received against a product InvFlux does not manage. Confirming puts these under InvFlux management: InvFlux starts managing their stock, and WooCommerce’s own stock tracking is switched on for them. A variable product is adopted together with its variations. While the order is open after it is sent, InvFlux management cannot be switched off for these products. Once the order is cancelled, closed or received in full, that restriction ends.',
+                )}
+              </p>
+            </div>
+          </Show>
+
           {/* Lines the server will drop when the order is issued (no quantity / no price). */}
           <Show when={removed().length > 0}>
             <div class="space-y-1.5 rounded border border-red-200 bg-red-50 px-3 py-2 text-red-700">
@@ -204,7 +258,7 @@ export function IssueDraftModal(props: IssueDraftModalProps): JSX.Element {
                 <For each={removed()}>
                   {(r) => (
                     <li>
-                      {r.line.productLabel || `#${r.line.id}`}{' '}
+                      {r.line.productLabel || `#${r.line.subjectId}`}{' '}
                       <span class="text-red-400">— {reasonLabel(r.reason)}</span>
                     </li>
                   )}
@@ -250,7 +304,7 @@ export function IssueDraftModal(props: IssueDraftModalProps): JSX.Element {
             type="button"
             class="rounded bg-amber-600 px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-amber-700 disabled:opacity-60"
             disabled={props.issuing || props.fixing || 0 === kept().length}
-            onClick={props.onConfirm}
+            onClick={() => props.onConfirm(unmanaged().length > 0)}
           >
             {confirmLabel()}
           </button>

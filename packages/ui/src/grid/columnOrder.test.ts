@@ -19,7 +19,7 @@ describe('mergeColumnOrder', () => {
     ]);
   });
 
-  it('inserts a new middle column beside its canonical neighbour, not at the end', () => {
+  it('inserts a new middle column beside its canonical neighbor, not at the end', () => {
     // The whole point. Appended, a column shipped into the middle of the order arrives at the far
     // right for every existing merchant, detached from the columns it belongs with.
     expect(mergeColumnOrder(['select', 'a', 'c'], ['select', 'a', 'b', 'c'])).toEqual([

@@ -49,7 +49,7 @@ describe('resolvePastedCell', () => {
     });
   });
 
-  it('honours a row-aware blank, so an inheritable variation cell returns to its parent', () => {
+  it('honors a row-aware blank, so an inheritable variation cell returns to its parent', () => {
     // The caller resolves the cleared value per ROW, so on a variation this is `inheritValue` rather
     // than an empty — pasting a blank restores "same as parent" instead of severing the inheritance.
     expect(resolvePastedCell('', clearable('__inherit__'), parseInt10)).toEqual({

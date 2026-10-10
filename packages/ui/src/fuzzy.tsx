@@ -76,12 +76,67 @@ export function fuzzyScore(needle: string, label: string): FuzzyScore | null {
 }
 
 /**
- * Render `text` with the characters that fuzzy-match `query` emphasised. Designed to read on a
+ * Match by **words**: every whitespace-separated word of the needle must appear somewhere in the
+ * label, whole, in any order. Returns the indices of every character those words cover (into the
+ * ORIGINAL label, for highlighting), or null when a word is missing. An empty needle matches with
+ * no indices.
+ *
+ * This is the rule a server-side product search applies — "paint 48" finds "Paint-Splatter Jeans -
+ * 48" — so it is the one a picker showing server results must highlight by, and the only one it may
+ * narrow those results by in the browser: a word added, or a word lengthened, can only remove rows.
+ * {@link fuzzyScore}'s subsequence rule is looser, so highlighting server results with it shows
+ * matches the server then refuses. Folded like {@link fuzzyScore}: case and accents never matter.
+ */
+export function wordMatch(needle: string, label: string): number[] | null {
+  const words = fold(needle)
+    .trim()
+    .split(/\s+/u)
+    .filter((w) => '' !== w);
+  const t = fold(label);
+  const hit = new Set<number>();
+  for (const word of words) {
+    let at = t.indexOf(word);
+    if (-1 === at) return null;
+    for (; -1 !== at; at = t.indexOf(word, at + 1)) {
+      for (let i = at; i < at + word.length; i++) hit.add(i);
+    }
+  }
+  return [...hit].sort((a, b) => a - b);
+}
+
+/**
+ * Whether every {@link wordMatch} of `next` is necessarily a match of `prev` — so an answer complete
+ * for `prev` can be filtered to `next` without asking again. True when each word of `prev` sits
+ * inside some word of `next`: typing on ("pai" → "paint"), adding a word ("paint" → "paint 48") and
+ * reordering all qualify; deleting anything does not.
+ */
+export function wordQueryNarrows(prev: string, next: string): boolean {
+  const words = (q: string): string[] =>
+    fold(q)
+      .trim()
+      .split(/\s+/u)
+      .filter((w) => '' !== w);
+  const later = words(next);
+  return words(prev).every((w) => later.some((n) => n.includes(w)));
+}
+
+/**
+ * Render `text` with the characters that match `query` emphasised — by {@link fuzzyScore}'s
+ * subsequence rule, or with `mode="words"` by {@link wordMatch}'s. Designed to read on a
  * highlighted (selected) dropdown row too: when an ancestor carries the `group` class and Kobalte's
  * `data-highlighted`, the emphasis flips from the accent colour to an underline on inherited text.
  */
-export function HighlightMatch(props: { text: string; query: string }): JSX.Element {
-  const hit = (): Set<number> => new Set(fuzzyScore(props.query, props.text)?.indices ?? []);
+export function HighlightMatch(props: {
+  text: string;
+  query: string;
+  mode?: 'fuzzy' | 'words';
+}): JSX.Element {
+  const hit = (): Set<number> =>
+    new Set(
+      'words' === props.mode
+        ? (wordMatch(props.query, props.text) ?? [])
+        : (fuzzyScore(props.query, props.text)?.indices ?? []),
+    );
   return (
     <>
       {(() => {

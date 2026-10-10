@@ -1,17 +1,13 @@
 import { __ } from '@invflux/i18n';
 import { surfaceSettingsRegistry, useSurface } from '@invflux/ui';
-import { MemoryRouter, type MemoryHistory, Route, useSearchParams } from '@solidjs/router';
+import { MemoryRouter, type MemoryHistory, Route } from '@solidjs/router';
 import {
   QueryClient,
   type QueryClient as QueryClientType,
   QueryClientProvider,
 } from '@tanstack/solid-query';
 import { createSignal, onCleanup, type ParentProps, Show } from 'solid-js';
-import {
-  DEFAULT_PER_PAGE,
-  DispatchSettingsPanel,
-  parsePerPage,
-} from './components/DispatchSettings';
+import { DispatchSettingsPanel } from './components/DispatchSettings';
 import { TagManagerModal } from './components/OrderTags';
 import { DispatchCtx } from './context';
 import { ListStoreCtx, createListStore } from './listStore';
@@ -27,7 +23,7 @@ import type { DispatchContext } from './types';
  *
  * It registers *here*, not in the queue view, because the gear belongs to the **surface**: were the
  * panel tied to the list, opening an order would unmount it and leave the Dispatch gear claiming it
- * has no settings. Everything the panel touches (`per_page`, the tag manager) is surface-wide, and
+ * has no settings. What the panel touches (the tag manager) is surface-wide, and
  * lives under this router either way.
  *
  * The shell is always there: `DispatchSection` is the only mount of this app and it always supplies
@@ -35,7 +31,6 @@ import type { DispatchContext } from './types';
  */
 function DispatchSurface(props: ParentProps) {
   const surface = useSurface();
-  const [searchParams, setSearchParams] = useSearchParams();
   const [tagManagerOpen, setTagManagerOpen] = createSignal(false);
 
   // Guarded rather than asserted: the context is optional by type, and a surface mounted outside a
@@ -49,12 +44,6 @@ function DispatchSurface(props: ParentProps) {
         label: () => __('Settings'),
         component: (panelProps) => (
           <DispatchSettingsPanel
-            perPage={parsePerPage(
-              typeof searchParams.per_page === 'string' ? searchParams.per_page : undefined,
-            )}
-            onPerPage={(n) =>
-              setSearchParams({ per_page: n === DEFAULT_PER_PAGE ? undefined : String(n) })
-            }
             onManageTags={() => {
               panelProps.onRequestClose();
               setTagManagerOpen(true);

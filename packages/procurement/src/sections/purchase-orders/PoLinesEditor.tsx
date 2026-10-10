@@ -36,7 +36,7 @@ interface EditorProps {
  * Inline-editable PO line table for a draft, with snappy interactions:
  * - "+ Add" opens a rapid-add picker that *stays open* — clicking a product adds it to the PO
  *   immediately (the row leaves the list, the filter text is kept), so you can click down a list.
- * - qty / cost edit in place (Tab/Enter advance the same column, like the catalogue editor).
+ * - qty / cost edit in place (Tab/Enter advance the same column, like the catalog editor).
  * - add / edit / remove are all **optimistic** (the cached PO detail updates before the round-trip;
  *   a failure re-syncs from the server and toasts), so there's no per-action latency.
  */
@@ -57,14 +57,14 @@ export function PoLinesEditor(props: EditorProps): JSX.Element {
   const [adding, setAdding] = createSignal(false);
 
   /**
-   * The catalogue terms for the products **on this order** — MOQ, case pack, the price an inherited
+   * The catalog terms for the products **on this order** — MOQ, case pack, the price an inherited
    * cost displays.
    *
-   * Scoped by `po_id` rather than fetched whole: the supplier's catalogue runs to thousands of
+   * Scoped by `po_id` rather than fetched whole: the supplier's catalog runs to thousands of
    * products and this needs the few dozen on the order. The server does the join, so this goes out
    * in parallel with the lines instead of waiting to learn their subject ids from them.
    */
-  const lineCatalogue = createQuery(() => ({
+  const lineCatalog = createQuery(() => ({
     queryKey: ['procurement', 'suppliers', props.supplierId, 'products', 'po', props.poId],
     queryFn: () =>
       api.get<SupplierProductsResponse>(`/procurement/suppliers/${props.supplierId}/products`, {
@@ -73,32 +73,32 @@ export function PoLinesEditor(props: EditorProps): JSX.Element {
   }));
 
   /**
-   * The **whole** catalogue, for the add-a-product pickers — they offer what is *not* on the order,
+   * The **whole** catalog, for the add-a-product pickers — they offer what is *not* on the order,
    * so no scoping helps them.
    *
    * Fetched on first use rather than with the page. Most orders are generated and never have a
    * product added by hand, so this was thousands of rows and seconds of waiting that nine times in
    * ten nobody wanted. The pickers open immediately and show that it is loading.
    */
-  const [catalogueWanted, setCatalogueWanted] = createSignal(false);
-  const fullCatalogue = createQuery(() => ({
+  const [catalogWanted, setCatalogWanted] = createSignal(false);
+  const fullCatalog = createQuery(() => ({
     queryKey: ['procurement', 'suppliers', props.supplierId, 'products'],
     queryFn: () =>
       api.get<SupplierProductsResponse>(`/procurement/suppliers/${props.supplierId}/products`),
-    enabled: catalogueWanted(),
+    enabled: catalogWanted(),
   }));
 
-  const catalogueItem = (subjectId: number): SupplierProduct | undefined =>
-    lineCatalogue.data?.products.find((p) => p.subjectId === subjectId);
-  const moqFor = (subjectId: number): number | null => catalogueItem(subjectId)?.moq ?? null;
+  const catalogItem = (subjectId: number): SupplierProduct | undefined =>
+    lineCatalog.data?.products.find((p) => p.subjectId === subjectId);
+  const moqFor = (subjectId: number): number | null => catalogItem(subjectId)?.moq ?? null;
   const casePackFor = (subjectId: number): number | null =>
-    catalogueItem(subjectId)?.casePack ?? null;
-  // Catalogue unit price — the value a null (inherited) line cost displays faded and freezes to at submit.
+    catalogItem(subjectId)?.casePack ?? null;
+  // Catalog unit price — the value a null (inherited) line cost displays faded and freezes to at submit.
   const catalogPriceFor = (subjectId: number): string | null =>
-    catalogueItem(subjectId)?.unitPrice ?? null;
+    catalogItem(subjectId)?.unitPrice ?? null;
   const addOptions = (): AddOption[] => {
     const onPo = new Set(props.lines.map((l) => l.subjectId));
-    return (fullCatalogue.data?.products ?? [])
+    return (fullCatalog.data?.products ?? [])
       .filter((p) => !onPo.has(p.subjectId))
       .map((p) => ({
         subjectId: p.subjectId,
@@ -113,20 +113,18 @@ export function PoLinesEditor(props: EditorProps): JSX.Element {
     );
   };
 
-  // Optimistic line builder, shared by the toolbar quick-add and the append-row data entry. A temp
-  // negative id is replaced by the real row on settle; stock context (available / on-order / post id)
-  // is filled by the next refetch.
-  let tempId = -1;
+  // Optimistic line builder, shared by the toolbar quick-add and the append-row data entry. The row
+  // is keyed by its product, as the saved one will be (an order carries one line per product), so the
+  // refetch on settle replaces it in place; stock context (available / on-order / post id) arrives then.
   const buildOptimisticLine = (
     subjectId: number,
     label: string,
     qty: number | null,
     unitCost: string | null,
   ): PoLine => {
-    const item = catalogueItem(subjectId);
-    const effectiveCost = unitCost ?? catalogPriceFor(subjectId); // inherit the catalogue price when unset
+    const item = catalogItem(subjectId);
+    const effectiveCost = unitCost ?? catalogPriceFor(subjectId); // inherit the catalog price when unset
     return {
-      id: tempId--,
       subjectId,
       postId: null,
       productLabel: item?.productLabel ?? label,
@@ -156,8 +154,8 @@ export function PoLinesEditor(props: EditorProps): JSX.Element {
     };
   };
 
-  // Toolbar quick-add: a clicked catalogue product appears immediately, inheriting both figures —
-  // quantity from the replenishment suggestion, cost from the catalogue price — each shown faded
+  // Toolbar quick-add: a clicked catalog product appears immediately, inheriting both figures —
+  // quantity from the replenishment suggestion, cost from the catalog price — each shown faded
   // until overridden, and both frozen at submission. A line starts as "what we would order", not 0.
   const add = createMutation(() => ({
     mutationFn: (o: AddOption) =>
@@ -179,12 +177,12 @@ export function PoLinesEditor(props: EditorProps): JSX.Element {
     onSettled: () => void queryClient.invalidateQueries({ queryKey: key() }),
   }));
 
-  // Append-row data entry (MS-Access style): the catalogue picker commits a product, the server fills a
-  // sensible quantity (replenishment, `auto_qty`); cost is left null → inherits the catalogue price.
+  // Append-row data entry (MS-Access style): the catalog picker commits a product, the server fills a
+  // sensible quantity (replenishment, `auto_qty`); cost is left null → inherits the catalog price.
   // Deliberately NOT optimistic —
   // we await the POST *and* the authoritative reload (qty + stock context) before resolving, so the grid
   // only drops into the qty editor once the row is fully settled (an optimistic insert + later reload
-  // would re-render and kick the editor back to cell-nav mode). Resolves to the new line's id.
+  // would re-render and kick the editor back to cell-nav mode). Resolves to the new line's product, which is its key.
   const addDraftLine = async (subjectId: number): Promise<number | null> => {
     try {
       const { line } = await api.post<{ line: PoLine }>(
@@ -195,7 +193,7 @@ export function PoLinesEditor(props: EditorProps): JSX.Element {
         },
       );
       await queryClient.invalidateQueries({ queryKey: key() }); // reload with qty + stock context, awaited
-      return line.id;
+      return line.subjectId;
     } catch {
       toast.error(__('Could not add the line.'));
       return null;
@@ -214,7 +212,7 @@ export function PoLinesEditor(props: EditorProps): JSX.Element {
       await queryClient.cancelQueries({ queryKey: key() });
       const prev = queryClient.getQueryData<PoLinesResponse>(key());
       const idset = new Set(ids);
-      setLines((lines) => lines.filter((l) => !idset.has(l.id)));
+      setLines((lines) => lines.filter((l) => !idset.has(l.subjectId)));
       return { prev };
     },
     onError: (_e: unknown, _ids: number[], ctx: { prev?: PoLinesResponse } | undefined) => {
@@ -226,7 +224,7 @@ export function PoLinesEditor(props: EditorProps): JSX.Element {
 
   // Apply an immediate-commit patch to a line's optimistic cache row. Mirrors the server's price rules
   // (core `LinePrice`): the typed unit cost is the price before the discount, so retyping it keeps the
-  // discount; a discount comes off that price, or the catalogue price on a line still inheriting; the
+  // discount; a discount comes off that price, or the catalog price on a line still inheriting; the
   // stored unit cost is always the net. The refetch on settle replaces this with the server's answer.
   const applyPatch = (l: PoLine, patch: DraftLinePatch): PoLine => {
     const next: PoLine = { ...l };
@@ -283,8 +281,8 @@ export function PoLinesEditor(props: EditorProps): JSX.Element {
   let rollbackTo: PoLinesResponse | undefined;
 
   const editLines = createMutation(() => ({
-    mutationFn: (edits: Array<{ id: number; patch: DraftLinePatch }>) =>
-      api.patch<{ lines: PoLine[]; rejected: Array<{ id: number; reason: string }> }>(
+    mutationFn: (edits: Array<{ subjectId: number; patch: DraftLinePatch }>) =>
+      api.patch<{ lines: PoLine[]; rejected: Array<{ subjectId: number; reason: string }> }>(
         `/procurement/purchase-orders/${props.poId}/lines`,
         { edits },
       ),
@@ -293,10 +291,10 @@ export function PoLinesEditor(props: EditorProps): JSX.Element {
       rejected,
     }: {
       lines: PoLine[];
-      rejected: Array<{ id: number; reason: string }>;
+      rejected: Array<{ subjectId: number; reason: string }>;
     }) => {
-      const settled = new Map(lines.map((l) => [l.id, l]));
-      setLines((ls) => ls.map((l) => settled.get(l.id) ?? l));
+      const settled = new Map(lines.map((l) => [l.subjectId, l]));
+      setLines((ls) => ls.map((l) => settled.get(l.subjectId) ?? l));
       rollbackTo = undefined;
       // A line the order no longer carries, or a discount the price model refuses. The rest saved,
       // so the grid is right about them; only the refused rows need re-reading from the server.
@@ -323,7 +321,7 @@ export function PoLinesEditor(props: EditorProps): JSX.Element {
     // One batch at a time: overlapping writes to the same lines could settle out of order, and the
     // later response would put the earlier value back on screen.
     if (inFlight || 0 === pending.size) return;
-    const edits = [...pending].map(([id, patch]) => ({ id, patch }));
+    const edits = [...pending].map(([subjectId, patch]) => ({ subjectId, patch }));
     pending.clear();
     inFlight = true;
     editLines.mutate(edits);
@@ -335,28 +333,30 @@ export function PoLinesEditor(props: EditorProps): JSX.Element {
   };
 
   /** Queue one or more line edits: paint once, then write once. */
-  const queueEdits = (edits: Array<{ id: number; patch: DraftLinePatch }>): void => {
+  const queueEdits = (edits: Array<{ subjectId: number; patch: DraftLinePatch }>): void => {
     const current = queryClient.getQueryData<PoLinesResponse>(key());
-    const byId = new Map((current?.lines ?? []).map((l) => [l.id, l]));
+    const bySubject = new Map((current?.lines ?? []).map((l) => [l.subjectId, l]));
 
-    const real: Array<{ id: number; patch: DraftLinePatch }> = [];
-    for (const { id, patch } of edits) {
-      const line = byId.get(id);
+    const real: Array<{ subjectId: number; patch: DraftLinePatch }> = [];
+    for (const { subjectId, patch } of edits) {
+      const line = bySubject.get(subjectId);
       const pruned = line ? prunePatch(line, patch) : patch;
       if (null === pruned) continue; // nothing to say about this cell
-      real.push({ id, patch: pruned });
+      real.push({ subjectId, patch: pruned });
     }
     if (0 === real.length) return;
 
     if (0 === pending.size && !inFlight) rollbackTo = current;
-    for (const { id, patch } of real) {
-      pending.set(id, { ...(pending.get(id) ?? {}), ...patch });
+    for (const { subjectId, patch } of real) {
+      pending.set(subjectId, { ...(pending.get(subjectId) ?? {}), ...patch });
     }
 
     // One pass over the rows for the whole gesture — a 1700-cell clear repaints the grid once.
-    const patches = new Map(real.map((e) => [e.id, e.patch]));
+    const patches = new Map(real.map((e) => [e.subjectId, e.patch]));
     setLines((ls) =>
-      ls.map((l) => (patches.has(l.id) ? applyPatch(l, patches.get(l.id) as DraftLinePatch) : l)),
+      ls.map((l) =>
+        patches.has(l.subjectId) ? applyPatch(l, patches.get(l.subjectId) as DraftLinePatch) : l,
+      ),
     );
     scheduleFlush();
   };
@@ -564,13 +564,13 @@ export function PoLinesEditor(props: EditorProps): JSX.Element {
         moqFor={moqFor}
         casePackFor={casePackFor}
         addOptions={addOptions}
-        onAddOptionsNeeded={() => setCatalogueWanted(true)}
-        addOptionsLoading={() => fullCatalogue.isPending}
+        onAddOptionsNeeded={() => setCatalogWanted(true)}
+        addOptionsLoading={() => fullCatalog.isPending}
         supplierLabel={props.supplierLabel}
         onAddLine={addDraftLine}
-        onEdit={(id, patch) => queueEdits([{ id, patch }])}
+        onEdit={(subjectId, patch) => queueEdits([{ subjectId, patch }])}
         onEditMany={(edits) => queueEdits(edits)}
-        onRemoveMany={(ids) => delMany.mutate(ids)}
+        onRemoveMany={(subjectIds) => delMany.mutate(subjectIds)}
         // Grid chrome shares the filter's row: two control groups, one line, and the rows saved
         // go to the grid. The picker's wrapper keeps `relative` — the dropdown positions against
         // it, so it travels with the button rather than against the old toolbar.
@@ -584,8 +584,8 @@ export function PoLinesEditor(props: EditorProps): JSX.Element {
                 size="sm"
                 class="text-nowrap"
                 onClick={() => {
-                  // Opening the picker is the moment the catalogue is worth fetching.
-                  setCatalogueWanted(true);
+                  // Opening the picker is the moment the catalog is worth fetching.
+                  setCatalogWanted(true);
                   setAdding((a) => !a);
                 }}
               >
@@ -594,7 +594,7 @@ export function PoLinesEditor(props: EditorProps): JSX.Element {
               <Show when={adding()}>
                 <AddPicker
                   options={addOptions()}
-                  loading={fullCatalogue.isPending}
+                  loading={fullCatalog.isPending}
                   onAdd={(o) => add.mutate(o)}
                   onClose={() => setAdding(false)}
                 />

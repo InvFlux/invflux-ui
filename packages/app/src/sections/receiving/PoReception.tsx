@@ -43,7 +43,6 @@ const HEARTBEAT_MS = 45_000;
  * order's own, and narrowing that type is a change to the buyer's screen, not this one.
  */
 const asGridLine = (line: PoReceptionLine): PoLine => ({
-  id: line.poLineId,
   subjectId: line.subjectId,
   postId: line.postId,
   productLabel: line.name,
@@ -230,7 +229,7 @@ export function PoReception(props: { poId: number }): JSX.Element {
   // against is deliberately not an event in the order's history.
   const abandon = createMutation(() => ({
     // A count with nothing counted yet never opened a reception — the first counted line is what
-    // does — so there is nothing on the server to cancel, and leaving is all cancelling means.
+    // does — so there is nothing on the server to cancel, and leaving is all canceling means.
     mutationFn: async (): Promise<void> => {
       if (!po()?.receiving) return;
       await api.del(`/receiving/purchase-orders/${props.poId}/session`);
@@ -242,7 +241,7 @@ export function PoReception(props: { poId: number }): JSX.Element {
     },
     onError: (e: unknown) => {
       // 409 means the reception is already gone — never opened, or ended by a colleague meanwhile.
-      // The count is cancelled either way, which is what was asked for.
+      // The count is canceled either way, which is what was asked for.
       if (e instanceof ApiError && 409 === e.status) {
         invalidate();
         navigate('/receiving');
@@ -326,7 +325,7 @@ export function PoReception(props: { poId: number }): JSX.Element {
                 <Show
                   when={order().receivable}
                   fallback={
-                    // Nothing left to count against — the order was finished or cancelled, possibly
+                    // Nothing left to count against — the order was finished or canceled, possibly
                     // while this screen was open. Said plainly rather than shown as a form that would
                     // be refused.
                     <p class="rounded border border-border bg-surface p-4 text-sm text-text-muted">
@@ -363,7 +362,7 @@ export function PoReception(props: { poId: number }): JSX.Element {
                 initial={(query.data?.lines ?? [])
                   .filter((l) => null !== l.staged)
                   .map((l) => ({
-                    poLineId: l.poLineId,
+                    subjectId: l.subjectId,
                     received: l.staged?.received ?? 0,
                     damaged: l.staged?.damaged ?? 0,
                   }))}

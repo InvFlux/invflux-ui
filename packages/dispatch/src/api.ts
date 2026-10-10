@@ -318,7 +318,7 @@ export interface OrderAnnotationsResponse {
  * Map the transport's `ApiError` onto this surface's typed one.
  *
  * The annotation routes answer `{ code, error }` where `error` is the **human message**, not a
- * slug — the licence proxy uses the same key for the opposite thing, which is why the shared
+ * slug — the license proxy uses the same key for the opposite thing, which is why the shared
  * transport reads only `code` and leaves this to the surface that knows its own contract.
  */
 function annotationError(fallback: string): (error: unknown) => never {
@@ -635,13 +635,50 @@ export async function capturePayment(
     });
 }
 
+/** Optional parcel details typed at Ship — stored on the shipment, never required. */
+export interface ShipDetails {
+  trackingNumber?: string;
+  carrierCode?: string;
+}
+
 export async function shipOrder(
   ctx: DispatchContext,
   orderHexId: string,
+  details: ShipDetails = {},
 ): Promise<ShipOrderResponse> {
   return api(ctx)
-    .post<ShipOrderResponse>(route(path`/orders/${orderHexId}/ship`), {})
+    .post<ShipOrderResponse>(route(path`/orders/${orderHexId}/ship`), {
+      trackingNumber: details.trackingNumber?.trim() ?? '',
+      carrierCode: details.carrierCode?.trim() ?? '',
+    })
     .catch(typedAs((c, st, m) => new ShipOrderError(c, st, m), 'Ship request failed'));
+}
+
+/**
+ * Put a shipped order WooCommerce moved back to an unfinished status back to Completed there —
+ * POST /dispatch/orders/{id}/restore-completed. Nothing moves in InvFlux; 409 when the order is not
+ * reopened.
+ */
+export async function restoreCompleted(
+  ctx: DispatchContext,
+  orderHexId: string,
+): Promise<{ restored: boolean }> {
+  return api(ctx)
+    .post<{ restored: boolean }>(route(path`/orders/${orderHexId}/restore-completed`), {})
+    .catch(typedAs((c, st, m) => new ShipOrderError(c, st, m), 'Restore request failed'));
+}
+
+/** Undo a shipment confirmed by mistake — POST /dispatch/shipments/{id}/reverse. */
+export async function reverseShipment(
+  ctx: DispatchContext,
+  shipmentHexId: string,
+  reason: string,
+): Promise<{ reversed: boolean }> {
+  return api(ctx)
+    .post<{ reversed: boolean }>(route(path`/shipments/${shipmentHexId}/reverse`), {
+      reason: reason.trim(),
+    })
+    .catch(typedAs((c, st, m) => new ShipOrderError(c, st, m), 'Reverse request failed'));
 }
 
 // ---------------------------------------------------------------------------
@@ -667,7 +704,7 @@ export async function fetchTags(ctx: DispatchContext): Promise<TagListResult> {
 /**
  * The merchant's own translations of one entity's label, plus the languages this install offers.
  *
- * Not under the dispatch namespace: one table holds every labelled entity's translations, and one
+ * Not under the dispatch namespace: one table holds every labeled entity's translations, and one
  * route pair serves them all. A tag reaches it as `tag/{id}` the same way a column header reaches
  * it as `workbench_column/{id}` — what differs per entity is only which capability may write.
  */
@@ -711,7 +748,7 @@ export async function fetchArchivedTags(ctx: DispatchContext): Promise<TagSummar
   return body.tags;
 }
 
-/** Bring a retired tag back, with its colour, settings and history. */
+/** Bring a retired tag back, with its color, settings and history. */
 export function restoreTag(ctx: DispatchContext, id: number): Promise<TagSummary> {
   return tagWriteJson(ctx, `/tags/${id}/restore`, 'POST', {});
 }
@@ -719,7 +756,7 @@ export function restoreTag(ctx: DispatchContext, id: number): Promise<TagSummary
 /**
  * Map a failed tag write onto a plain `Error` carrying the server's own sentence.
  *
- * Like the annotation routes, these answer `{ error: "<prose>" }` — the same key the licence proxy
+ * Like the annotation routes, these answer `{ error: "<prose>" }` — the same key the license proxy
  * uses for a *slug*, which is why the shared transport reads only `code` and each surface decodes
  * its own contract here.
  */

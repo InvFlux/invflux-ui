@@ -16,7 +16,7 @@ const SELECT_COLUMN = 'select';
  * position and then re-appends the column as "new" at the far end, which is the column-order-
  * doesn't-persist bug. An id that really has been removed is harmless: nothing renders for it.
  *
- * **A column the merchant has never seen is inserted beside its canonical neighbour, not appended.**
+ * **A column the merchant has never seen is inserted beside its canonical neighbor, not appended.**
  * Appending is the obvious implementation and it is wrong in a specific, quiet way: ship a new column
  * into the middle of the canonical order and every existing merchant finds it at the far right,
  * detached from the columns it belongs with, looking like a bug in the new column rather than in the

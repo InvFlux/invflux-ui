@@ -23,6 +23,8 @@ interface AppProps {
    * unified app passes one bound to its hash search (the real query string is WordPress's).
    */
   urlPort?: UrlParamsPort;
+  /** Take the operator to the goods-receiving session a review just opened. Omit where there is none. */
+  onOpenReceipt?: (sessionId: number) => void;
 }
 
 export function App(props: AppProps) {
@@ -30,7 +32,11 @@ export function App(props: AppProps) {
     <QueryClientProvider client={props.queryClient ?? standaloneQueryClient}>
       <WorkbenchCtx.Provider value={props.context}>
         <PortalCtx.Provider value={props.portalRoot}>
-          <WorkbenchGrid onDirtyChange={props.onDirtyChange} urlPort={props.urlPort} />
+          <WorkbenchGrid
+            onDirtyChange={props.onDirtyChange}
+            urlPort={props.urlPort}
+            onOpenReceipt={props.onOpenReceipt}
+          />
         </PortalCtx.Provider>
       </WorkbenchCtx.Provider>
     </QueryClientProvider>

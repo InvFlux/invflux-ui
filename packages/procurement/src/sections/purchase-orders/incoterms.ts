@@ -69,7 +69,7 @@ export const INCOTERMS: IncotermOption[] = [
   },
 ];
 
-/** `FCA — Free Carrier …` for a known code; the bare code for anything unrecognised. */
+/** `FCA — Free Carrier …` for a known code; the bare code for anything unrecognized. */
 export function incotermLabel(code: string): string {
   const found = INCOTERMS.find((t) => t.code === code);
 
@@ -80,7 +80,7 @@ export function incotermLabel(code: string): string {
  * What a code *means*, without the code — `Free Carrier — they hand over to our carrier`.
  *
  * Null for a code this revision does not know, which is the honest answer rather than a guess: the
- * three-letter values are the wire contract with core's `Incoterm` enum, so an unrecognised one is a
+ * three-letter values are the wire contract with core's `Incoterm` enum, so an unrecognized one is a
  * version skew, and inventing a gloss for it would state something the ICC did not.
  *
  * Split from {@link incotermLabel} because the two answer different questions. A *chooser* needs the

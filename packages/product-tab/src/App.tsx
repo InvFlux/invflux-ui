@@ -5,6 +5,7 @@ import {
   Button,
   ConfirmModal,
   ToastRegion,
+  toast,
   useHostNav,
   buttonClass,
   WorkbenchLinkIcon,
@@ -428,6 +429,35 @@ export function App(props: AppProps) {
             onhandCorrect: settings()!.allow_onhand_correct,
             // The product edit screen already gates on WC's edit_products capability.
             editProducts: true,
+            // Offered, not granted: the grid asks the receiving context before showing the Goods
+            // Receipt hand-off, and that route answers 403 without the inventory capability — so the
+            // server decides, and a caller without it never sees the button.
+            receiveStock: true,
+          }}
+          // The session opens in the unified app, a different admin page. Not a redirect: the
+          // merchant may be mid-edit on this product, and a tab opened after the request returns is
+          // what a popup blocker stops — so a toast carries the link, and the click opens the tab.
+          onOpenReceipt={(sessionId) => {
+            toast.success(
+              sprintf(
+                /* translators: %d: number of the goods-receiving session just opened */
+                __('Goods Receipt #%d opened with these increases.'),
+                sessionId,
+              ),
+              {
+                duration: 0,
+                action: {
+                  label: __('Open it'),
+                  onClick: () => {
+                    window.open(
+                      hostNav.routeHref(`/receiving/new/manual/${sessionId}`),
+                      '_blank',
+                      'noopener',
+                    );
+                  },
+                },
+              },
+            );
           }}
           // A grid edit to sku/gtin/threshold persists via the grid's own REST path; refetch so the
           // form's hidden WC-input sync + save payload reflect it (else WC autosave reverts to the

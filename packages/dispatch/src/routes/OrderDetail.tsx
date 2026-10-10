@@ -43,6 +43,7 @@ import {
   ModalPanel,
   ColumnPicker,
   ColumnsSettingsIcon,
+  Input,
   usePortalRootOptional,
 } from '@invflux/ui';
 import type { PillTone, StageCode } from '@invflux/ui';
@@ -53,7 +54,9 @@ import {
   fetchDispatchOrderDetail,
   correctOrderAddress,
   resolveOrderByExternalId,
+  type ShipDetails,
 } from '../api';
+import { HostReopenedBanner } from '../components/HostReopenedBanner';
 import { AddressEditModal } from '../components/AddressEditModal';
 import { CorrectionModal } from '../components/CorrectionModal';
 import { CorrectionsPanel } from '../components/CorrectionsPanel';
@@ -83,6 +86,13 @@ import {
   useShipOrderMutation,
   useStageLineMutation,
 } from '../queries';
+import {
+  correctionSides,
+  lineCorrectable,
+  orderCorrectable,
+  unshippedQty,
+  type CorrectionSide,
+} from '../correctability';
 import {
   registerDispatchOrderActions,
   type DispatchOrderDetailContext,
@@ -115,7 +125,8 @@ const moneyView = viewRegistry.resolve('decimal:money');
  * workflow are deferred to F23+B10 territory.
  */
 function lineStage(line: DispatchOrderLine): StageCode {
-  const shippable = line.qtyOrdered - line.qtyCorrected;
+  // Owed before anything shipped: a returned unit counts as shipped, so only cancellations come off.
+  const shippable = line.qtyOrdered - line.qtyCanceled;
   if (shippable <= 0) return '';
   if (line.stagedQty >= shippable) return 'M';
   return '';
@@ -215,6 +226,14 @@ export function OrderDetail() {
    * `null` (closed). The shape lets a single `<Show when>` gate both rendering and prop wiring.
    */
   const [correctionPresetLineId, setCorrectionPresetLineId] = createSignal<number | null>(null);
+  /** Which sides of shipment this order can be corrected on — see {@link correctionSides}. */
+  const correctionSidesNow = (): Record<CorrectionSide, boolean> => {
+    const order = query.data?.order;
+
+    return order === undefined
+      ? { pre: false, post: false }
+      : correctionSides(order, correctionsQuery.data?.types ?? []);
+  };
   useHeartbeat(() => hexIdForQuery());
 
   function openCorrection(lineId: number | null): void {
@@ -289,6 +308,9 @@ export function OrderDetail() {
 
       if (e.key !== 'c' && e.key !== 'C') return;
       if (!ctx.capabilities.createCorrections) return;
+      // The same rule as the button: no form for an order with nothing left to correct.
+      const lines = query.data?.lines;
+      if (lines === undefined || !orderCorrectable(lines, correctionSidesNow())) return;
       e.preventDefault();
       runWhenTypingStops(() => openCorrection(null));
     };
@@ -343,7 +365,7 @@ export function OrderDetail() {
   }
 
   function toggleStage(line: DispatchOrderLine) {
-    const shippable = Math.max(0, line.qtyOrdered - line.qtyCorrected - line.qtyShipped);
+    const shippable = unshippedQty(line);
     // Releasing a stage is legitimate even when nothing is shippable any more — see the button's
     // own note. Only a line with nothing shippable AND nothing staged has no toggle to make.
     if (shippable === 0 && line.stagedQty === 0) return;
@@ -367,7 +389,7 @@ export function OrderDetail() {
    */
   /**
    * Ship eligibility is derived from the *lines*, not the summary `status`
-   * string. `status` is a denormalised readiness projection whose `Staged`
+   * string. `status` is a denormalized readiness projection whose `Staged`
    * bucket can't distinguish "all remaining lines staged" from "some shipped,
    * some staged, some still open" (the partial-dispatch intermediate). Reading
    * the line quantities directly gives one unambiguous source of truth and
@@ -382,7 +404,7 @@ export function OrderDetail() {
     let hasUnstagedOutstanding = false;
     let hasStaged = false;
     for (const line of lines) {
-      const shippable = Math.max(0, line.qtyOrdered - line.qtyCorrected - line.qtyShipped);
+      const shippable = unshippedQty(line);
       if (shippable <= 0) continue;
       hasOutstanding = true;
       if (line.stagedQty > 0) hasStaged = true;
@@ -394,7 +416,7 @@ export function OrderDetail() {
   function isShippableStatus(order: DispatchOrderSummary): boolean {
     return (
       order.status !== 'Shipped' &&
-      order.status !== 'Cancelled' &&
+      order.status !== 'Canceled' &&
       order.workflowState === 'Active' &&
       order.unprocessedCorrections === 0
     );
@@ -425,8 +447,8 @@ export function OrderDetail() {
    */
   function stageBlockedReason(order: DispatchOrderSummary): string | undefined {
     if (order.status === 'Shipped') return __('This order has already been shipped.');
-    if (order.status === 'Cancelled') return __('Cancelled orders cannot be staged.');
-    // Closed without shipping or cancelling: completed on the host, the word the merchant knows.
+    if (order.status === 'Canceled') return __('Cancelled orders cannot be staged.');
+    // Closed without shipping or canceling: completed on the host, the word the merchant knows.
     if (order.workflowState === 'Closed') {
       return __('This order is already completed, so its lines cannot be staged.');
     }
@@ -449,7 +471,7 @@ export function OrderDetail() {
    */
   function shipBlockedReason(order: DispatchOrderSummary, lines: DispatchOrderLine[]): string {
     if (order.status === 'Shipped') return __('This order has already been shipped.');
-    if (order.status === 'Cancelled') return __('Cancelled orders cannot be shipped.');
+    if (order.status === 'Canceled') return __('Cancelled orders cannot be shipped.');
     if (order.workflowState !== 'Active') {
       return sprintf(__('Workflow is %s. Resume the order to ship.'), order.workflowState);
     }
@@ -475,9 +497,9 @@ export function OrderDetail() {
     return __('Order is not ready to ship.');
   }
 
-  function confirmShip(): void {
+  function confirmShip(details: ShipDetails): void {
     setTimelineExpanded(true);
-    shipMutation.mutate(undefined, {
+    shipMutation.mutate(details, {
       onSuccess: () => setShipModalOpen(false),
     });
   }
@@ -503,10 +525,7 @@ export function OrderDetail() {
       stagedLines: lines
         .filter((l) => l.stagedQty > 0)
         .map((l) => ({ label: l.name, qty: l.stagedQty })),
-      outstandingUnits: lines.reduce(
-        (sum, l) => sum + Math.max(0, l.qtyOrdered - l.qtyCorrected - l.qtyShipped),
-        0,
-      ),
+      outstandingUnits: lines.reduce((sum, l) => sum + unshippedQty(l), 0),
       onDone: () => {
         setTimelineExpanded(true);
         void queryClient.invalidateQueries({ queryKey: qk.dispatch.orderDetail(hexIdForQuery()) });
@@ -652,6 +671,18 @@ export function OrderDetail() {
               </div>
             </Show>
 
+            {/* A shipped order WooCommerce moved back to an unfinished status: the merchant decides
+              which side is right. */}
+            <Show when={query.data!.hostReopened}>
+              {(reopened) => (
+                <HostReopenedBanner
+                  orderHexId={routeHexId()}
+                  statusLabel={reopened().label}
+                  shipments={reopened().shipments}
+                />
+              )}
+            </Show>
+
             <Show when={stageMutation.isError}>
               <ErrorBanner
                 as="div"
@@ -693,6 +724,7 @@ export function OrderDetail() {
                   query.data!.order.workflowState === 'Closed'
                 }
                 onOpenCorrection={ctx.capabilities.createCorrections ? openCorrection : undefined}
+                correctionSides={correctionSidesNow()}
                 pendingLineId={
                   stageMutation.isPending ? (stageMutation.variables?.lineId ?? null) : null
                 }
@@ -854,6 +886,7 @@ export function OrderDetail() {
       <Show when={correctionPresetLineId() !== null && query.data && correctionsQuery.data}>
         <CorrectionModal
           orderHexId={routeHexId()}
+          order={query.data!.order}
           lines={query.data!.lines}
           types={correctionsQuery.data!.types}
           reasons={correctionsQuery.data!.reasons ?? []}
@@ -877,7 +910,7 @@ function Header(props: {
   status?: OrderStatus;
   /** The order's status in WooCommerce, shown beside the dispatch status; null when unknown. */
   wcStatus?: string | null;
-  /** The install's WooCommerce statuses, which name and colour {@link wcStatus}. */
+  /** The install's WooCommerce statuses, which name and color {@link wcStatus}. */
   nativeStatusOptions?: NativeStatusContext['options'];
   shortHex: string | null;
   viewers: import('@invflux/ui').OrderViewer[];
@@ -1062,6 +1095,8 @@ function LineTable(props: {
   stageBlockedReason?: string;
   /** A shipped or closed order: its stock concerns are history, so the column stays away. */
   hideStock?: boolean;
+  /** Which sides of shipment this order can be corrected on — gates the per-line `!`. */
+  correctionSides?: Record<CorrectionSide, boolean>;
   /**
    * D1 per-line correction affordance. The table renders the `!` icon
    * only when this callback is provided — keeps the table component
@@ -1227,7 +1262,7 @@ function LineTable(props: {
           >
             {(line) => {
               const stage = lineStage(line);
-              const shippable = Math.max(0, line.qtyOrdered - line.qtyCorrected - line.qtyShipped);
+              const shippable = unshippedQty(line);
               // `stagedQty > 0`, not `shippable > 0`: a line can hold a stage it is no longer allowed
               // to ship — stage it, then correct away the rest of the quantity, and `shippable` falls
               // to 0 while the units stay staged. Keyed on `shippable` the button flipped back to
@@ -1480,7 +1515,7 @@ function LineTable(props: {
                             count: line.stagedQty,
                             // Yellow-green, one hue short of the emerald `shipped` wears. Staged is
                             // work that is done but not final, so it reads as green-on-the-way rather
-                            // than as its own unrelated colour — the row's pills are a progression
+                            // than as its own unrelated color — the row's pills are a progression
                             // (pending → staged → shipped) and should look like one.
                             tone: 'lime' as PillTone,
                             title: packedTitle(line, 'staged', me),
@@ -1577,7 +1612,7 @@ function LineTable(props: {
                                   unprocessed,
                                 ),
                                 count: unprocessed,
-                                // Amber is this page's "a person still owes an action" colour — the
+                                // Amber is this page's "a person still owes an action" color — the
                                 // same one the corrections panel's Pending chip and the pending-action
                                 // filter use. Categorical elsewhere in this row, deliberately stateful
                                 // here.
@@ -1606,7 +1641,7 @@ function LineTable(props: {
                                   {p.text}
                                   <Show when={p.pending}>
                                     {/* The tone alone would carry this, and tone alone is what a
-                                    colour-blind operator cannot read — amber against the
+                                    color-blind operator cannot read — amber against the
                                     neighbouring danger pill is the confusable pair. Decorative to
                                     assistive tech, which reads the pill's title instead. */}
                                     <HourglassIcon class="h-3 w-3 shrink-0" />
@@ -1623,14 +1658,17 @@ function LineTable(props: {
                       hovering it. A control you cannot see is a control most operators never learn
                       exists, and it is discoverable by mouse only — a keyboard user meets it by
                       tabbing into something invisible. So it rests muted and quiet, and earns
-                      emphasis: amber on hover (the colour that means someone owes an action here),
+                      emphasis: amber on hover (the color that means someone owes an action here),
                       red and full strength when the line already has unresolved stock concerns.
                       Disabled when nothing remains to correct.
                     */}
                         <Show when={props.onOpenCorrection}>
                           {(() => {
                             const hasConcern = line.stockState !== 0;
-                            const correctable = shippable > 0;
+                            const correctable =
+                              props.correctionSides !== undefined
+                                ? lineCorrectable(line, props.correctionSides)
+                                : shippable > 0;
                             // Recessive at rest, full strength under the row's hover. Not `opacity-0`:
                             // the point is that it is always there. `disabled:` outranks this on
                             // specificity, so a line with nothing left to correct still reads as off.
@@ -1663,7 +1701,7 @@ function LineTable(props: {
                             variant="secondary"
                             size="sm"
                             // Neutral at rest — it is one control among several on a dense row, and a
-                            // row of coloured buttons ranks nothing. The colour arrives on hover, when
+                            // row of colored buttons ranks nothing. The color arrives on hover, when
                             // the pointer has already picked this button out and the only question
                             // left is which way it moves the line: lime to stage (the same "pending a
                             // good change" the staged pill wears, so the button previews the pill it
@@ -1848,15 +1886,18 @@ function ShipConfirmModal(props: {
   order: DispatchOrderSummary;
   lines: DispatchOrderLine[];
   isPending: boolean;
-  onConfirm: () => void;
+  onConfirm: (details: ShipDetails) => void;
   onCancel: () => void;
 }) {
+  // The parcel's tracking number, typed in by hand. Optional: most shops ship without one, and a
+  // label integration fills it on its own. When present it is stored on the shipment and shown in
+  // WooCommerce's fulfillment panel.
+  const [trackingNumber, setTrackingNumber] = createSignal('');
+  const [carrier, setCarrier] = createSignal('');
+  const confirm = (): void =>
+    props.onConfirm({ trackingNumber: trackingNumber(), carrierCode: carrier() });
   // Full ship dispatches every line's remaining outstanding qty, so it always completes the order.
-  const unitCount = (): number =>
-    props.lines.reduce(
-      (sum, l) => sum + Math.max(0, l.qtyOrdered - l.qtyCorrected - l.qtyShipped),
-      0,
-    );
+  const unitCount = (): number => props.lines.reduce((sum, l) => sum + unshippedQty(l), 0);
   const lineCount = (): number => props.lines.length;
 
   return (
@@ -1884,14 +1925,46 @@ function ShipConfirmModal(props: {
             <li>
               {__('The WooCommerce order will be marked completed and the customer email sent.')}
             </li>
-            <li>{__('This is irreversible without creating corrections.')}</li>
+            <li>
+              {__(
+                'If it was confirmed by mistake and nothing left, the shipment can be reversed from the order’s timeline.',
+              )}
+            </li>
           </ul>
+          <div class="grid grid-cols-[8.5rem_1fr] items-center gap-x-3 gap-y-2 text-sm">
+            <label for="ship-tracking" class="text-gray-700">
+              {_x('Tracking number', 'ship form: optional field label')}
+            </label>
+            <Input
+              id="ship-tracking"
+              data-testid="ship-tracking-number"
+              autocomplete="off"
+              maxLength={200}
+              placeholder={_x('Optional', 'placeholder: the field may be left empty')}
+              value={trackingNumber()}
+              disabled={props.isPending}
+              onInput={(e) => setTrackingNumber(e.currentTarget.value)}
+            />
+            <label for="ship-carrier" class="text-gray-700">
+              {_x('Carrier', 'ship form: optional field label, the company carrying the parcel')}
+            </label>
+            <Input
+              id="ship-carrier"
+              data-testid="ship-carrier"
+              autocomplete="off"
+              maxLength={50}
+              placeholder={_x('Optional', 'placeholder: the field may be left empty')}
+              value={carrier()}
+              disabled={props.isPending}
+              onInput={(e) => setCarrier(e.currentTarget.value)}
+            />
+          </div>
         </div>
         <ModalFooter>
           <Button variant="secondary" onClick={props.onCancel} disabled={props.isPending}>
             {__('Cancel')}
           </Button>
-          <Button variant="success" onClick={props.onConfirm} disabled={props.isPending} autofocus>
+          <Button variant="success" onClick={confirm} disabled={props.isPending} autofocus>
             <Show when={props.isPending} fallback={<>{__('Confirm ship')}</>}>
               {_x('Shipping…', 'button while busy: the order is being shipped')}
             </Show>

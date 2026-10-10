@@ -3,6 +3,7 @@ import { __, _n, _x, sprintf } from '@invflux/i18n';
 import { Button, ErrorBanner, FoldingSection } from '@invflux/ui';
 import { useDispatch } from '../context';
 import { useDeleteCorrectionMutation, useOrderCorrectionsQuery } from '../queries';
+import { correctionSides, orderCorrectable } from '../correctability';
 import type { DispatchCorrection, DispatchOrderLine, DispatchOrderSummary } from '../types';
 import { ProcessCorrectionsModal } from './ProcessCorrectionsModal';
 
@@ -51,6 +52,20 @@ export function CorrectionsPanel(props: {
     );
   }
 
+  /** Whether anything here can still be corrected — the modal's rule, so the two cannot disagree. */
+  const sides = createMemo(() => correctionSides(props.order, correctionsQuery.data?.types ?? []));
+  const canCorrect = createMemo(() => orderCorrectable(props.lines, sides()));
+  /**
+   * Why the button is off. Goods that came back after shipping are the case worth naming: where no
+   * return correction exists they are recorded by refunding in WooCommerce.
+   */
+  const notCorrectableReason = (): string =>
+    !sides().post && props.lines.some((l) => l.qtyShipped > 0)
+      ? __(
+          'Nothing left to correct here. If goods came back after shipping, refund the order in WooCommerce.',
+        )
+      : __('Nothing left to correct on this order.');
+
   const pendingCount = createMemo(() => corrections().filter((c) => c.processedAt === null).length);
 
   return (
@@ -89,11 +104,11 @@ export function CorrectionsPanel(props: {
               {/* `primary`, not `success`. Emerald is the house "this completed a workflow", and
                   this button completes nothing — the trailing ellipsis is the honest part: it opens
                   the review modal, whose OWN confirm is the emerald one. Wearing it here spends the
-                  completion colour twice on one workflow, and the first spend is a promise the
+                  completion color twice on one workflow, and the first spend is a promise the
                   click does not keep.
 
                   Primary is what it actually is: the dominant action on this surface, and the
-                  thing standing between the order and shipping. That it shares a colour with
+                  thing standing between the order and shipping. That it shares a color with
                   "Ship order" is the point rather than a collision — ship is disabled while a
                   correction is pending, so exactly one blue is live at a time and it is always
                   the next real step. */}
@@ -110,7 +125,14 @@ export function CorrectionsPanel(props: {
               </Button>
             </Show>
             <Show when={ctx.capabilities.createCorrections}>
-              <Button variant="secondary" size="sm" onClick={() => props.onOpenCorrection(null)}>
+              <Button
+                variant="secondary"
+                size="sm"
+                data-testid="add-correction"
+                disabled={!canCorrect()}
+                title={canCorrect() ? undefined : notCorrectableReason()}
+                onClick={() => props.onOpenCorrection(null)}
+              >
                 {__('+ Add correction')}
               </Button>
             </Show>

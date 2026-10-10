@@ -8,7 +8,7 @@ import { App as ProcurementApp } from '@invflux/procurement/src/App';
 import type { ProcurementContext } from '@invflux/procurement/src/types';
 // Procurement's own sub-sections (Purchase Orders, Suppliers) normally register in its main.tsx,
 // which never runs when embedded — so register them here, at chunk load. They target Procurement's
-// NAMESPACED slot, so they don't leak into the shell's own `nav.section` surface catalogue.
+// NAMESPACED slot, so they don't leak into the shell's own `nav.section` surface catalog.
 import { registerPurchaseOrdersSection } from '@invflux/procurement/src/sections/purchase-orders';
 import { registerSuppliersSection } from '@invflux/procurement/src/sections/suppliers';
 import { createQuery, useQueryClient } from '@tanstack/solid-query';

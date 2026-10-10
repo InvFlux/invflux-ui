@@ -52,7 +52,7 @@ export function PoReceiveForm(props: {
    *  and no keep-open event is recorded. The parent transitions the PO back to its pre-receive state. */
   onCancel: () => void;
   /** Keep the PO open for the next delivery: commit the staged receipt and park in partially_received.
-   *  The parent posts /receive then transitions to partially_received (base behaviour). */
+   *  The parent posts /receive then transitions to partially_received (base behavior). */
   onKeepOpen: (rows: ReceiveRow[], note: string, fxRate: string | null) => void;
   /** Governance cap: may finalize (confirm / close short) WITHOUT counting every line. Without it, the
    *  worker must address every line first (a staged value — incl. 0 — or nothing outstanding). */
@@ -69,8 +69,8 @@ export function PoReceiveForm(props: {
   const seedRecv: Record<number, number> = {};
   const seedDmg: Record<number, number> = {};
   for (const r of props.initial ?? []) {
-    seedRecv[r.poLineId] = r.received;
-    if (r.damaged > 0) seedDmg[r.poLineId] = r.damaged;
+    seedRecv[r.subjectId] = r.received;
+    if (r.damaged > 0) seedDmg[r.subjectId] = r.damaged;
   }
   const [received, setReceived] = createSignal<Record<number, number | null>>(seedRecv);
   const [damaged, setDamaged] = createSignal<Record<number, number | null>>(seedDmg);
@@ -144,20 +144,20 @@ export function PoReceiveForm(props: {
     on(
       () => props.initial,
       (incoming) => {
-        const map = new Map((incoming ?? []).map((r) => [r.poLineId, r]));
+        const map = new Map((incoming ?? []).map((r) => [r.subjectId, r]));
         setReceived((m) => {
           const next = { ...m };
           for (const l of props.lines) {
-            const r = map.get(l.id);
-            next[l.id] = r ? r.received : null;
+            const r = map.get(l.subjectId);
+            next[l.subjectId] = r ? r.received : null;
           }
           return next;
         });
         setDamaged((m) => {
           const next = { ...m };
           for (const l of props.lines) {
-            const r = map.get(l.id);
-            next[l.id] = r && r.damaged > 0 ? r.damaged : null;
+            const r = map.get(l.subjectId);
+            next[l.subjectId] = r && r.damaged > 0 ? r.damaged : null;
           }
           return next;
         });
@@ -170,11 +170,11 @@ export function PoReceiveForm(props: {
   // and a line cleared back to blank drops out — a reload restores exactly what was on screen.
   const wipRows = (): ReceiveRow[] =>
     props.lines
-      .filter((l) => null !== recvFor(l.id))
+      .filter((l) => null !== recvFor(l.subjectId))
       .map((l) => ({
-        poLineId: l.id,
-        received: recvFor(l.id) ?? 0,
-        damaged: Math.min(recvFor(l.id) ?? 0, dmgFor(l.id) ?? 0),
+        subjectId: l.subjectId,
+        received: recvFor(l.subjectId) ?? 0,
+        damaged: Math.min(recvFor(l.subjectId) ?? 0, dmgFor(l.subjectId) ?? 0),
       }));
 
   // Confirm shape: only lines that actually received units (0-count lines record no receipt line).
@@ -184,19 +184,19 @@ export function PoReceiveForm(props: {
   // Nothing entered at all — the count is untouched, so Cancel is the only thing to offer. A staged 0
   // is not nothing: it says "checked, none arrived", which is exactly what a close-short rests on, so
   // it turns the finish options on even though no receipt would be logged.
-  const anyCounted = (): boolean => props.lines.some((l) => null !== recvFor(l.id));
+  const anyCounted = (): boolean => props.lines.some((l) => null !== recvFor(l.subjectId));
   const sessionEmpty = (): boolean => !anyCounted();
   // Whether an earlier delivery already landed — what makes finishing short on nothing a real outcome.
   const hasEarlierReceipts = (): boolean => props.lines.some((l) => l.qtyReceived > 0);
   // Good qty for a line this session (what reaches stock).
   const goodThisSession = (l: PoLine): number =>
-    Math.max(0, (recvFor(l.id) ?? 0) - (dmgFor(l.id) ?? 0));
+    Math.max(0, (recvFor(l.subjectId) ?? 0) - (dmgFor(l.subjectId) ?? 0));
   // Review discipline: every line that can still receive must be explicitly counted before finalizing —
   // 0 is a valid count ("checked, none arrived"); a blank cell gates the receipt. Lines with nothing open
   // (already fully received on an earlier delivery, or a zero-qty line) need no count — they can't take
   // more. The `invflux_gr_close_short_lax` cap (props.canLax) waives the gate for trusted roles.
   const allCounted = (): boolean =>
-    props.lines.every((l) => 0 === l.qtyOpen || null !== recvFor(l.id));
+    props.lines.every((l) => 0 === l.qtyOpen || null !== recvFor(l.subjectId));
   const gateAllCounted = (): boolean => props.canLax || allCounted();
   // A line is "short" when its CUMULATIVE good (received-so-far + this session) is below the ordered qty —
   // matching the server's qty_open, so the pre-confirm hint agrees with the prompt. A line fully received
@@ -207,7 +207,7 @@ export function PoReceiveForm(props: {
 
   // The three finalize effects. Each resolves FX first (a missing required rate flags + focuses the
   // field and aborts), then calls the matching parent handler with the committed rows/note/rate.
-  // Keeping a PO open across deliveries is base behaviour — no tier gate here.
+  // Keeping a PO open across deliveries is base behavior — no tier gate here.
   const runWithFx = (
     effect: (rows: ReceiveRow[], note: string, fxRate: string | null) => void,
   ): void => {

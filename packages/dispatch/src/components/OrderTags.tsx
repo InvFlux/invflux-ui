@@ -64,7 +64,7 @@ const PRIORITY_PRESETS = (): { label: string; value: number }[] => [
   { label: _x('Backburner', 'priority preset'), value: -20 },
 ];
 
-/** Behaviour flags — what the tag *does* (§2.1). Access flags live in ACCESS below. */
+/** Behavior flags — what the tag *does* (§2.1). Access flags live in ACCESS below. */
 const BEHAVIOR_FLAG_META = (): { flag: GovernanceFlag; label: string; hint: string }[] => [
   // Translate this pair together with the "Withheld" workflow-state filter that selects the orders
   // it produces: the flag names the instruction, the filter names the resulting condition, and a
@@ -124,7 +124,7 @@ const AUTHORITY_META = (): { value: ManageAuthority; label: string; hint: string
   },
 ];
 
-/** Whether a tag carries any Pro governance behaviour (mirrors core Tag::isGovernance). */
+/** Whether a tag carries any Pro governance behavior (mirrors core Tag::isGovernance). */
 function isGovernanceTag(t: TagSummary): boolean {
   return t.governanceFlags.length > 0 || t.priority !== 0 || t.manageAuthority !== 'Anyone';
 }
@@ -133,12 +133,12 @@ function isGovernanceTag(t: TagSummary): boolean {
  * Whether the current user may hand-apply this tag (mirrors the server assign gate).
  *
  * **Two axes, and they answer different questions** — the same pair the server's writer states.
- * `governanceActive` is the *licence*: while it is false this install honours no governance field
+ * `governanceActive` is the *license*: while it is false this install honors no governance field
  * at all, so every tag is an ordinary label and this can only be true. `governTags` is the
  * *capability*, deciding who among users of an active install may apply a restricted tag, and it
  * is never relaxed by a lapse.
  *
- * Both are required parameters on purpose. They were one, and the missing licence axis is why a
+ * Both are required parameters on purpose. They were one, and the missing license axis is why a
  * deactivated Pro still demanded a note to remove a tag: the client went on enforcing what the
  * server had stopped enforcing.
  */
@@ -241,14 +241,14 @@ function AuthorityPreview(props: { value: ManageAuthority }): JSX.Element {
 
 /**
  * Inert preview of the tag-settings editor — the Essentials upsell body. It renders the same two
- * groups the working editor does — **Behaviour** (what the tag does) and **Access** (who may
+ * groups the working editor does — **Behavior** (what the tag does) and **Access** (who may
  * apply/remove it) — but every control is disabled and carries no change handler: a picture of
  * what the feature unlocks, never a flag-flip away from working. The working editor is
  * contributed by an add-on and replaces this through {@link TAG_SETTINGS_EDITOR_SLOT}.
  *
  * **Kept in visual sync by hand:** this markup deliberately mirrors the add-on's interactive
  * editor, which lives in a separate bundle (they can't share a component — the Essentials build must
- * ship no working editor). When a control is added, removed or relabelled on the editor, update
+ * ship no working editor). When a control is added, removed or relabeled on the editor, update
  * this preview to match. Minor drift is harmless (it's only a picture), but avoid it.
  */
 function TagSettingsPreview(props: {
@@ -259,10 +259,10 @@ function TagSettingsPreview(props: {
   const has = (f: GovernanceFlag): boolean => props.flags.includes(f);
   return (
     <div class="pointer-events-none select-none space-y-3 opacity-60">
-      {/* Behaviour */}
+      {/* Behavior */}
       <div class="space-y-1.5">
         <div class="text-2xs font-semibold uppercase tracking-wide text-text-muted">
-          {_x('Behaviour', 'order tag editor: section heading — what the tag does')}
+          {_x('Behavior', 'order tag editor: section heading — what the tag does')}
         </div>
         <div class="grid grid-cols-2 space-y-1.5">
           <For each={BEHAVIOR_FLAG_META()}>
@@ -381,7 +381,7 @@ function TagSettingsSection(props: {
  *
  * Asking before the request is a deliberate mirror of the server's rule, not a second policy: a
  * prompt beats a 422 the operator has to read and retry. But a mirror has to know when the rule is
- * in force — `governanceActive` is the licence, and without it this kept demanding notes on an
+ * in force — `governanceActive` is the license, and without it this kept demanding notes on an
  * install whose server had stopped requiring them.
  */
 export function tagNeedsNote(t: TagSummary, governanceActive: boolean): boolean {
@@ -472,7 +472,7 @@ export function NoteModal(props: {
 /**
  * A single tag pill — fixed-palette bg/fg, no border.
  *
- * A thin derivation of the shared `Pill` primitive at `tone="none"`: a tag's colour is *data*
+ * A thin derivation of the shared `Pill` primitive at `tone="none"`: a tag's color is *data*
  * (its palette entry), not a design choice, so it arrives through `style` while `Pill` owns the
  * shape, metrics and the dismiss affordance.
  *
@@ -514,7 +514,7 @@ export function TagPill(props: {
  * larger and richer than a tag renders as). Kept so co-edited callers keep compiling. */
 export const TagChip = TagPill;
 
-/** A small colour dot for a tag (used in the assign menus). */
+/** A small color dot for a tag (used in the assign menus). */
 function TagDot(props: { colorId: number }): JSX.Element {
   return (
     <span
@@ -549,7 +549,7 @@ export const TagChipRow = TagPillRow;
  * tag's standing usage across every order — how established this tag is. Picking one to
  * *filter by*, `counts` gives what each option would match under the filters already applied.
  * They routinely disagree by an order of magnitude, and a picker wearing the wrong one reads
- * as a bug in the filter rather than a mislabelled number.
+ * as a bug in the filter rather than a mislabeled number.
  */
 export function TagPickerPills(props: {
   tags: TagSummary[];
@@ -608,7 +608,7 @@ export const FILTER_CONTROL_TAGS = 'tags';
 /**
  * The dispatch tag-filter editor — the same {@link TagPickerPills} the right-click
  * menu uses, in multi-select mode. The tag list itself comes from the live query, which is
- * what carries colours; the host's options supply the filter-facet counts. `value` is the
+ * what carries colors; the host's options supply the filter-facet counts. `value` is the
  * selected tag-id strings; clicking a pill toggles it.
  */
 function TagFilterControl(props: FilterControlProps): JSX.Element {
@@ -659,7 +659,7 @@ filterControlRegistry.register(FILTER_CONTROL_TAGS, 'dispatch.tags', TagFilterCo
 export function OrderTagsBar(props: { orderHexId: string; tags?: TagSummary[] }): JSX.Element {
   const ctx = useDispatch();
   const governTags = (): boolean => ctx.capabilities.governTags;
-  // The licence, beside the capability: they answer different questions and both are needed.
+  // The license, beside the capability: they answer different questions and both are needed.
   const governOn = (): boolean => ctx.entitlements.governanceTags;
   const allTags = useTagsQuery();
   const mutations = useOrderTagMutations(() => props.orderHexId);
@@ -823,7 +823,7 @@ export function OrderTagsBar(props: { orderHexId: string; tags?: TagSummary[] })
   );
 }
 
-/** Create / rename / recolour / delete tag definitions. */
+/** Create / rename / recolor / delete tag definitions. */
 /**
  * Derive the slug the server will derive, so the Add button can refuse a name the API would refuse.
  *
@@ -1104,10 +1104,10 @@ export function TagManagerModal(props: { onClose: () => void }): JSX.Element {
             <PaletteSwatchPicker
               value={newColorId()}
               onPick={setNewColorId}
-              ariaLabel={__('Tag colour')}
+              ariaLabel={__('Tag color')}
             />
 
-            {/* Tag settings (Pro): behaviour + access beyond a plain label. */}
+            {/* Tag settings (Pro): behavior + access beyond a plain label. */}
             <TagSettingsSection
               flags={newFlags()}
               priority={newPriority()}
@@ -1193,7 +1193,7 @@ export function TagManagerModal(props: { onClose: () => void }): JSX.Element {
 /**
  * One archived tag: what it looked like, how many orders still carry it, and the way back.
  *
- * Read-only apart from Restore. An archived tag is out of circulation — renaming or recolouring one
+ * Read-only apart from Restore. An archived tag is out of circulation — renaming or recoloring one
  * in place would be editing something the merchant cannot see the effects of; bring it back first.
  */
 function ArchivedTagRow(props: {
@@ -1234,8 +1234,8 @@ function ArchivedTagRow(props: {
   );
 }
 
-/** One editable row in the manager: inline rename, colour swatch, delete, + a
- * collapsible Tag settings (Pro) section for behaviour flags, priority + access. */
+/** One editable row in the manager: inline rename, color swatch, delete, + a
+ * collapsible Tag settings (Pro) section for behavior flags, priority + access. */
 function TagManagerRow(props: { tag: TagSummary; query?: string }): JSX.Element {
   const ctx = useDispatch();
   const entitled = (): boolean => ctx.entitlements.governanceTags;
@@ -1274,12 +1274,12 @@ function TagManagerRow(props: { tag: TagSummary; query?: string }): JSX.Element 
           spent on the tag name than on the gaps between icons. */}
       <div class="relative flex items-center gap-1">
         {/* Render the tag exactly as it appears on an order (live preview of the
-            edited name/colour) — quicker to identify by width + colour + text.
-            Clicking it opens the colour picker. */}
+            edited name/color) — quicker to identify by width + color + text.
+            Clicking it opens the color picker. */}
         <button
           type="button"
           class="shrink-0 cursor-pointer"
-          aria-label={__('Change colour')}
+          aria-label={__('Change color')}
           onClick={() => setEditingColor((v) => !v)}
         >
           {/* While renaming, the preview shows what is being typed — the canonical name is what
@@ -1322,7 +1322,7 @@ function TagManagerRow(props: { tag: TagSummary; query?: string }): JSX.Element 
               if (e.key === 'Enter') e.currentTarget.blur();
               if (e.key === 'Escape') {
                 // Abandon the edit rather than committing whatever is half-typed, and stay in the
-                // manager: the merchant cancelled a rename, not the whole session.
+                // manager: the merchant canceled a rename, not the whole session.
                 e.stopPropagation();
                 setName(props.tag.name);
                 setEditingName(false);
@@ -1350,7 +1350,7 @@ function TagManagerRow(props: { tag: TagSummary; query?: string }): JSX.Element 
             'text-indigo-600 bg-indigo-50': isGovernanceTag(props.tag),
             'text-text-muted hover:bg-gray-50': !isGovernanceTag(props.tag),
           }}
-          title={__('Tag settings (Pro): queue behaviour, required note, dedicated button, access')}
+          title={__('Tag settings (Pro): queue behavior, required note, dedicated button, access')}
           onClick={() => setShowGov((v) => !v)}
         >
           ⚑
@@ -1380,7 +1380,7 @@ function TagManagerRow(props: { tag: TagSummary; query?: string }): JSX.Element 
         <Show when={editingColor()}>
           <div class="absolute right-2 top-full z-30 mt-1 rounded-md border border-gray-200 bg-surface p-2 shadow-lg">
             <PaletteSwatchPicker
-              ariaLabel={__('Tag colour')}
+              ariaLabel={__('Tag color')}
               value={props.tag.colorId}
               onPick={(c) => {
                 admin.update.mutate({ id: props.tag.id, colorId: c });
@@ -1396,7 +1396,7 @@ function TagManagerRow(props: { tag: TagSummary; query?: string }): JSX.Element 
           <Show when={!entitled()}>
             <div class="mb-2 flex items-center gap-1.5 text-2xs text-gray-500">
               <ProPill />
-              <span>{__('Upgrade to configure tag behaviour & access.')}</span>
+              <span>{__('Upgrade to configure tag behavior & access.')}</span>
             </div>
           </Show>
           <TagSettingsSlot
@@ -1594,7 +1594,7 @@ function TagTranslationsEditor(props: { tag: TagSummary }): JSX.Element {
 export function BulkTagAssign(props: { orderIds: string[]; onDone?: () => void }): JSX.Element {
   const ctx = useDispatch();
   const governTags = (): boolean => ctx.capabilities.governTags;
-  // The licence, beside the capability: they answer different questions and both are needed.
+  // The license, beside the capability: they answer different questions and both are needed.
   const governOn = (): boolean => ctx.entitlements.governanceTags;
   const allTags = useTagsQuery();
   const bulk = useBulkAssignTagsMutation();
@@ -1675,7 +1675,7 @@ export function RowContextMenu(props: {
 }): JSX.Element {
   const ctx = useDispatch();
   const governTags = (): boolean => ctx.capabilities.governTags;
-  // The licence, beside the capability: they answer different questions and both are needed.
+  // The license, beside the capability: they answer different questions and both are needed.
   const governOn = (): boolean => ctx.entitlements.governanceTags;
   const allTags = useTagsQuery();
   const assignedIds = createMemo(() => new Set((props.order.tags ?? []).map((t) => t.id)));

@@ -6,7 +6,7 @@ import type { GridColumnMeta } from '../types';
  * the `node` vitest environment without pulling client-only component imports into the test graph.
  */
 
-/** A native stock slot the grid renders specially (colour + on-hand cascade). */
+/** A native stock slot the grid renders specially (color + on-hand cascade). */
 export type StockSlot = 'atp' | 'res' | 'ctd' | 'total';
 
 const STOCK_SLOT_IDS = new Set<StockSlot>(['atp', 'res', 'ctd', 'total']);

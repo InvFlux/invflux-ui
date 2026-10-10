@@ -56,7 +56,7 @@ export function resolvePastedCell(
  *  - clipboard 1×1 + a multi-cell selection → fill the selection rectangle with that value;
  *  - otherwise → place the clipboard with its top-left at the anchor, expanding down/right.
  * Targets outside the grid bounds are clipped. Overflowing a smaller selection is gated by a
- * confirmation at the call site (LibreOffice Calc behaviour), so by the time we get here the overflow
+ * confirmation at the call site (LibreOffice Calc behavior), so by the time we get here the overflow
  * is intended.
  */
 export function pasteTargets(

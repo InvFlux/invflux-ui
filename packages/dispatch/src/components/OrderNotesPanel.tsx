@@ -33,7 +33,7 @@ export function OrderNotesPanel(props: {
 }): JSX.Element {
   const ctx = useDispatch();
   const governTags = (): boolean => ctx.capabilities.governTags;
-  // The licence, beside the capability — see canApplyTag.
+  // The license, beside the capability — see canApplyTag.
   const governOn = (): boolean => ctx.entitlements.governanceTags;
   // Notes are cheap and also feed the timeline interleave, so fetch eagerly (not gated on expand).
   const query = useOrderAnnotationsQuery(

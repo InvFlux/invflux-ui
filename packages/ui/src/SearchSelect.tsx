@@ -49,8 +49,12 @@ export interface SearchSelectProps {
   /** Seed the search text on mount (fuzzy mode) — e.g. the character that opened a grid cell editor;
    *  the option list filters to it and the next keystrokes append. */
   initialQuery?: string;
-  /** Message shown when no option matches (enables opening on an empty collection). */
-  emptyMessage?: string;
+  /**
+   * Message shown when no option matches (enables opening on an empty collection). A function is
+   * given the typed text, for a message that depends on it — "already added" rather than "no match"
+   * when what was typed names an option the host left out.
+   */
+  emptyMessage?: string | ((query: string) => string);
   /**
    * Portal target for the listbox. In the shadow-DOM SPA, pass the shared `portalRoot`
    * (which carries the SPA stylesheet AND is whitelisted by the host click-interceptor); without
@@ -165,7 +169,11 @@ export function SearchSelect(props: SearchSelectProps): JSX.Element {
           {/* max-height + scroll on the Listbox so Kobalte scrolls the active option into view. */}
           <Combobox.Listbox class="max-h-[210px] overflow-y-auto focus:outline-none" />
           <Show when={undefined !== props.emptyMessage && 0 === displayedOptions().length}>
-            <div class="px-3 py-2 text-sm text-text-muted">{props.emptyMessage}</div>
+            <div class="px-3 py-2 text-sm text-text-muted">
+              {'function' === typeof props.emptyMessage
+                ? props.emptyMessage(query())
+                : props.emptyMessage}
+            </div>
           </Show>
         </Combobox.Content>
       </Combobox.Portal>

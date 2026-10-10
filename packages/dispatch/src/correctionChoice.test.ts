@@ -235,7 +235,7 @@ describe('shelvedQty', () => {
   });
 
   it('gives back only what the product’s other orders do not need', () => {
-    // 10 wanted, 8 held: cancelling 3 leaves 7 wanted, so 1 goes back.
+    // 10 wanted, 8 held: canceling 3 leaves 7 wanted, so 1 goes back.
     expect(shelvedQty({ stockAtpQty: 0, stockCtdQty: 8, stockDemandQty: 10 }, 3)).toBe(1);
     expect(shelvedQty({ stockAtpQty: 0, stockCtdQty: 8, stockDemandQty: 10 }, 2)).toBe(0);
   });
@@ -249,7 +249,7 @@ describe('out of stock', () => {
   it('cancels at most what the product is short, so nothing ever goes back on sale', () => {
     expect(outOfStockCap({ stockDeficitQty: 1 }, 3)).toBe(1);
     expect(outOfStockCap({ stockDeficitQty: 5 }, 3)).toBe(3);
-    // 10 wanted, 9 held: short by 1. Cancelling that 1 puts nothing back.
+    // 10 wanted, 9 held: short by 1. Canceling that 1 puts nothing back.
     expect(shelvedQty({ stockAtpQty: 0, stockCtdQty: 9, stockDemandQty: 10 }, 1)).toBe(0);
   });
 

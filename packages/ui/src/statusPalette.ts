@@ -80,7 +80,7 @@ export const DISPATCH_STATUS_COLOR: Readonly<Record<string, number>> = {
   Started: 1, // Light blue — in flight
   Staged: 16, // Light green — ready to ship, the queue's actionable state
   Shipped: 2, // Light teal — done and cool, adjacent to Started without reading as it
-  Cancelled: 6, // Grey — terminal, nothing to act on; deliberately NOT a red
+  Canceled: 6, // Grey — terminal, nothing to act on; deliberately NOT a red
 };
 
 /**
@@ -105,7 +105,7 @@ export const STAGE_COLOR: Readonly<Record<string, number>> = {
  * partial receipt is the same event, incomplete, and reading it as a *duller* green says that
  * better than an unrelated colour would.
  *
- * `cancelled` is grey for the reason given on the dispatch map — terminal, nothing to act on — and
+ * `canceled` is grey for the reason given on the dispatch map — terminal, nothing to act on — and
  * the same grey, since it is the same word meaning the same thing to the same reader.
  */
 export const PROCUREMENT_STATUS_COLOR: Readonly<Record<string, number>> = {
@@ -116,6 +116,9 @@ export const PROCUREMENT_STATUS_COLOR: Readonly<Record<string, number>> = {
   in_prep: 15, // Draft — Cream
   submitted: 1, // Light blue
   in_transit: 2, // Light teal
+  // The same journey, finished: the stronger shade of in-transit's teal, since the goods are now
+  // here but not yet counted.
+  arrived: 8, // Teal
   in_reception: 3, // Light purple
   // The two greens carry the pending/settled split the rest of these maps use warm-vs-cool for: a
   // part-delivered order still owes stock, so it takes the yellow-leaning green that reads as work
@@ -123,7 +126,7 @@ export const PROCUREMENT_STATUS_COLOR: Readonly<Record<string, number>> = {
   // different answers look like one.
   partially_received: 16, // Light green — yellow-leaning, still owed
   received: 17, // Mint — cool, settled
-  cancelled: 6, // Grey — terminal, nothing to act on; deliberately NOT a red
+  canceled: 6, // Grey — terminal, nothing to act on; deliberately NOT a red
   archived: 21, // Dusty rose — put away, muted, but distinct from `inactive`
 };
 

@@ -26,7 +26,7 @@ export type {
   TaxonomySpaceValue,
 } from './types';
 export { Combobox } from './Combobox';
-export { fuzzyScore, HighlightMatch } from './fuzzy';
+export { fuzzyScore, HighlightMatch, wordMatch, wordQueryNarrows } from './fuzzy';
 export type { FuzzyScore } from './fuzzy';
 export { KobalteComboboxFirstFocus } from './KobalteComboboxFirstFocus';
 export { SearchSelect } from './SearchSelect';
@@ -250,6 +250,7 @@ export type {
 export { CorrectionReviewModal, onHandCorrectionMeta } from './CorrectionReviewModal';
 export type {
   CorrectionReviewModalProps,
+  ReceiptOffer,
   CorrectionReviewRow,
   CorrectionReviewGroup,
   CorrectionDispositions,

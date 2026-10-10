@@ -7,7 +7,8 @@ export type VarianceStatus = 'match' | 'open' | 'over' | 'short';
 
 /** A staged receiving-session row (persisted as WIP on the PO while a reception session is open). */
 export interface ReceivingSessionRow {
-  poLineId: number;
+  /** The line, named by its product (the order is the session's own). */
+  subjectId: number;
   /** Total units received this session. */
   received: number;
   /** Of which damaged/unfit for sale (good = received − damaged moves to stock). */
@@ -119,7 +120,11 @@ export interface PurchaseOrdersResponse {
 
 /** A PO line — shape returned by `PurchaseOrderController::presentLine()`. */
 export interface PoLine {
-  id: number;
+  /**
+   * The line's name within its order: the product. An order carries one line per product, so the
+   * pair (order, product) is the line's key, and there is no separate line id. Row keys, routes and
+   * request bodies all use this.
+   */
   subjectId: number;
   /** WC post id for the product/variation, for the "see in workbench" deep-link (null if unresolved). */
   postId: number | null;
@@ -127,6 +132,14 @@ export interface PoLine {
   sku: string | null;
   /** Supplier's own code for this product, scoped to the PO's supplier (null if none recorded). */
   supplierSku: string | null;
+  /**
+   * Whether InvFlux manages this product, so stock can land against it. **Drafts only.**
+   *
+   * Three values, and the middle one matters: `true` managed, `false` not (numbering will ask to
+   * adopt it), `null`/absent **not asked** — a sent order. Treat `null` as "no answer", never as
+   * "managed"; the check for a problem is `=== false`.
+   */
+  governed?: boolean | null;
   /** Product GTIN/EAN/UPC barcode (WC global_unique_id), null if none. Helps match physical goods at GR. */
   gtin: string | null;
   imageUrl: string | null;
@@ -146,7 +159,7 @@ export interface PoLine {
   qtyOpen: number;
   /**
    * The line's own unit cost — always the **net**, after any supplier discount; null = inherit the
-   * catalogue price ({@link catalogUnitCost}). Every total and valuation reads this figure.
+   * catalog price ({@link catalogUnitCost}). Every total and valuation reads this figure.
    */
   unitCost: string | null;
   /** The supplier's price before their line discount; null unless they stated one. */
@@ -162,8 +175,8 @@ export interface PoLine {
   unitCostInvoiced: string | null;
   /** How many units have been billed so far on this line, summed across every invoice recorded. */
   qtyInvoiced: number;
-  /** Draft-only: the catalogue unit price a null (inherited) cost displays faded + uses for its line
-   *  total. Server-provided so the grid needs no separate catalogue lookup; null when uncatalogued. */
+  /** Draft-only: the catalog unit price a null (inherited) cost displays faded + uses for its line
+   *  total. Server-provided so the grid needs no separate catalog lookup; null when uncataloged. */
   catalogUnitCost: string | null;
   lineTotal: string | null;
   /** Draft-only: signed available (atp − deficit; negative = deficit). null on non-draft / no data. */
@@ -173,7 +186,7 @@ export interface PoLine {
   /** Draft-only: the subject's low stock threshold (null when unset). */
   lowStockAmount: number | null;
   /** Draft-only: MOQ-floored replenishment suggestion the "." key fills into the Qty cell (null when
-   *  the subject isn't in the supplier's catalogue / no data). */
+   *  the subject isn't in the supplier's catalog / no data). */
   suggestedQty: number | null;
   /** Optional free-text line note → shown on the PO document; surfaced via the opt-in Notes column. */
   note: string | null;

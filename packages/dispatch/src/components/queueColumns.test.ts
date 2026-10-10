@@ -81,7 +81,7 @@ describe('orderColumns', () => {
   /**
    * The case the whole function exists for: an order saved before a column shipped says nothing
    * about where that column goes, and appending it would put a new column off the right edge of
-   * every customised queue — where it reads as missing rather than as new.
+   * every customized queue — where it reads as missing rather than as new.
    */
   it('lands a column the stored order never knew about after its default predecessor', () => {
     // `customer` follows `age` by default; a stored order from before it existed omits it.

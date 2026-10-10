@@ -9,8 +9,8 @@ type NativeStatusOptions = NativeStatusContext['options'];
  * the URL. Chosen alongside the InvFlux dispatch status this pill renders next to.
  *
  * Only the fallback: {@link nativeStatusColor} puts the merchant's own choice ahead of it. On its
- * own it returns grey for any status InvFlux has never heard of, which is exactly why the configured
- * colour has to come first: a merchant running three custom statuses would otherwise read three
+ * own it returns gray for any status InvFlux has never heard of, which is exactly why the configured
+ * color has to come first: a merchant running three custom statuses would otherwise read three
  * identical pills on a scan-first surface.
  */
 export function shippedNativeStatusColor(slug: string): number {
@@ -18,8 +18,8 @@ export function shippedNativeStatusColor(slug: string): number {
 }
 
 /**
- * Configured colour → shipped default → grey. Compared against `null`/`undefined` rather than by
- * truthiness, since colour 0 is Light grey: a real, deliberate choice.
+ * Configured color → shipped default → gray. Compared against `null`/`undefined` rather than by
+ * truthiness, since color 0 is Light gray: a real, deliberate choice.
  */
 export function nativeStatusColor(options: NativeStatusOptions, slug: string): number {
   const colorId = options.find((o) => o.value === slug)?.colorId;

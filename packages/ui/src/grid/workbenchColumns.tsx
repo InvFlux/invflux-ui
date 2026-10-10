@@ -1,13 +1,13 @@
 /**
  * The WorkbenchGrid bespoke (host-rendered) column definitions — the columns that need the typed
  * {@link WorkbenchRow} and can't be a generic datatype-view: the row checkbox, the name+link cell,
- * the image thumbnail, the catalogue/pricing scalars, the orders + ledger cells, and (built
+ * the image thumbnail, the catalog/pricing scalars, the orders + ledger cells, and (built
  * separately, see {@link buildStockColumns}) the stock slot cells. {@link DataGrid} renders each
  * opaquely via `flexRender`; any server column id NOT in these maps falls through to a generic
  * datatype-view column.
  *
  * Extracted from `@invflux/workbench`'s in-component `BASE_COLUMNS` so the Central Workbench and the
- * embedded product-inventory grid share one set. Factories take a `deps` bag so behaviour that varies
+ * embedded product-inventory grid share one set. Factories take a `deps` bag so behavior that varies
  * by build phase / surface is injected rather than hard-wired.
  *
  * **Stock-`kind` seam.** Stock cells are NOT a hard-coded
@@ -31,7 +31,7 @@ import { stockSlotOf, type StockSlot } from './stockSlot';
 import { workbenchValueFor } from './workbenchValueFor';
 import { iconButtonClass } from '../primitives';
 
-/** Behaviour the static (catalogue/pricing) column cells close over. */
+/** Behavior the static (catalog/pricing) column cells close over. */
 export interface WorkbenchColumnDeps {
   /** How to build links into other InvFlux surfaces (the ledger route in the name-cell actions menu).
    *  Host-provided so this package stays free of any platform's URL shapes. */
@@ -66,13 +66,13 @@ const emDash = (): JSX.Element => <span class="text-text-muted">—</span>;
  * A stock cell for an **unmanaged** subject: InvFlux tracks no slots, so atp/res/ctd/total have no
  * meaning here.
  *
- * Shares the "not authored here" reading with an inherited value — same secondary grey, same
+ * Shares the "not authored here" reading with an inherited value — same secondary gray, same
  * italic — because that much *is* the same statement. What differs is that an inherited value is
  * editable (typing overrides the parent) while this one is not, so it carries one extra signal:
  *
- * **A dotted underline, not a paler grey.** It is the conventional "there is an explanation on
+ * **A dotted underline, not a paler gray.** It is the conventional "there is an explanation on
  * hover" affordance, so it pairs with the title below instead of consuming a contrast level — and
- * there is no level left to consume: the secondary grey already sits at the WCAG AA floor, and the
+ * there is no level left to consume: the secondary gray already sits at the WCAG AA floor, and the
  * shade this replaced measured 2.54:1.
  */
 function unmanagedStockCell(hostQty: string | null, untracked: boolean): JSX.Element {
@@ -133,7 +133,7 @@ export function buildWorkbenchColumns(
   const isAnchorRow = (id: string): boolean => (deps.anchorRowId?.() ?? null) === id;
 
   /**
-   * Read-mode render of an editable catalogue/pricing scalar so it reflects a staged edit (amber) —
+   * Read-mode render of an editable catalog/pricing scalar so it reflects a staged edit (amber) —
    * the editor mounts at the `<td>` level; this is the display view. `format` maps the
    * staged-or-persisted value to text.
    */
@@ -284,9 +284,9 @@ export function buildWorkbenchColumns(
       /* translators: SKU = Stock Keeping Unit; keep "SKU" or use the local term (fr: UGS). */
       header: __('SKU'),
       cell: (info) => {
-        // A specified SKU reads in the default (darker) text colour; an inherited one carries no
-        // colour of its own so the grid's inherited wash (muted + italic) shows through — the two are
-        // then distinguishable by colour, not only by the italic.
+        // A specified SKU reads in the default (darker) text color; an inherited one carries no
+        // color of its own so the grid's inherited wash (muted + italic) shows through — the two are
+        // then distinguishable by color, not only by the italic.
         const inherited = info.row.original.inherited?.includes('sku') ?? false;
         return scalarCell(
           info.row.original,
@@ -396,7 +396,7 @@ export function buildWorkbenchColumns(
       // Same msgid as the server's label for this column, deliberately: the grid paints these
       // client-side headers before the response lands and the server's `meta.label` replaces them,
       // so a different string here shows as the column renaming itself on load. This one mirrors
-      // WooCommerce's own field, whose name is what a merchant recognises.
+      // WooCommerce's own field, whose name is what a merchant recognizes.
       header: __('Low stock threshold'),
       meta: { align: 'right' },
       cell: (info) =>
@@ -452,7 +452,7 @@ export function buildWorkbenchColumns(
 // re-exported here so existing callers (index.ts, tests) keep their import path.
 export { stockSlotOf, type StockSlot };
 
-/** Behaviour the stock cells close over — the on-hand-correction cascade + conflict state (v3). */
+/** Behavior the stock cells close over — the on-hand-correction cascade + conflict state (v3). */
 export interface StockColumnDeps {
   fmt: (n: number) => string;
   /** The per-slot deltas from a row's staged on-hand (`total`) correction, or null when none. */
@@ -496,7 +496,7 @@ function deltaCell(
 
 /**
  * Build the stock-slot bespoke columns from the server column list — one per column that
- * {@link stockSlotOf} recognises. The aggregate `total` cell renders the delta-first on-hand
+ * {@link stockSlotOf} recognizes. The aggregate `total` cell renders the delta-first on-hand
  * correction (its frozen delta over the live baseline) + a conflict ring; the aggregate `atp`/`res`/
  * `ctd` cells render their slice of that correction's cascade. Faceted (per-location / -channel)
  * stock columns render their base value read-only — the aggregate is the only correctable view today.
@@ -529,7 +529,7 @@ export function buildStockColumns(
           if (row.stockManaged === false) {
             // The only figure available for an unmanaged subject is the host store's own, and it
             // would otherwise sit under a header naming an InvFlux concept (ATP) that it does not
-            // measure. Labelling it is the difference between reporting another system's number and
+            // measure. Labeling it is the difference between reporting another system's number and
             // appearing to report ours; the other slots have no counterpart at all, hence the dash.
             // Only a TRULY untracked product ('none') empties its cell. For 'external' the figure
             // is another plugin's and is the operative availability, so it stays visible — hiding a

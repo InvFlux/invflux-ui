@@ -85,11 +85,11 @@ export function PoExpectedCaptureGrid(props: {
     setEdits((prev) => ({ ...prev, [id]: v }));
   };
   const expectedFor = (line: PoLine): number | null => {
-    const e = editFor(line.id);
+    const e = editFor(line.subjectId);
     return undefined === e ? line.qtyExpected : e;
   };
-  const editedLines = (): Array<{ poLineId: number; qtyExpected: number | null }> =>
-    Object.entries(edits()).map(([id, v]) => ({ poLineId: Number(id), qtyExpected: v }));
+  const editedLines = (): Array<{ subjectId: number; qtyExpected: number | null }> =>
+    Object.entries(edits()).map(([id, v]) => ({ subjectId: Number(id), qtyExpected: v }));
   const hasEdits = (): boolean => Object.keys(edits()).length > 0;
 
   // ── Bulk import off the supplier document (shared ImportWizard) ───────────────────────────────────
@@ -165,7 +165,7 @@ export function PoExpectedCaptureGrid(props: {
     },
   ];
 
-  /** Index the PO lines by the chosen key field, normalised (trim + case-insensitive), first-wins. */
+  /** Index the PO lines by the chosen key field, normalized (trim + case-insensitive), first-wins. */
   const lineIndex = (keyField: string): Map<string, PoLine> => {
     const pick = (l: PoLine): string | null =>
       'supplier_sku' === keyField ? l.supplierSku : 'gtin' === keyField ? l.gtin : l.sku;
@@ -192,7 +192,7 @@ export function PoExpectedCaptureGrid(props: {
         key: k,
         label: line.productLabel || k,
         status: 'matched',
-        data: { poLineId: line.id, qtyExpected },
+        data: { subjectId: line.subjectId, qtyExpected },
         // Current expected drives the diff; null reads as empty so a first capture shows as an addition.
         existing: { qty_expected: null === line.qtyExpected ? '' : String(line.qtyExpected) },
       };
@@ -203,9 +203,9 @@ export function PoExpectedCaptureGrid(props: {
   const commitImport = (matched: ResolvedRow[]): void => {
     let staged = 0;
     for (const m of matched) {
-      const d = m.data as { poLineId: number; qtyExpected: number | null } | undefined;
+      const d = m.data as { subjectId: number; qtyExpected: number | null } | undefined;
       if (!d) continue;
-      setEdit(d.poLineId, d.qtyExpected);
+      setEdit(d.subjectId, d.qtyExpected);
       staged++;
     }
     setImporting(false);
@@ -363,8 +363,8 @@ export function PoExpectedCaptureGrid(props: {
 
   // An edited Expected cell shows staged (yellow) until saved.
   const getStagedValue = (row: PoLine, columnId: string): StagedCell =>
-    'expected' === columnId && undefined !== editFor(row.id)
-      ? { staged: true, value: editFor(row.id) }
+    'expected' === columnId && undefined !== editFor(row.subjectId)
+      ? { staged: true, value: editFor(row.subjectId) }
       : { staged: false, value: undefined };
 
   const canEdit = (_row: PoLine, meta: GridColumnMeta): boolean => 'expected' === meta.id;
@@ -381,11 +381,11 @@ export function PoExpectedCaptureGrid(props: {
 
   const onStageEdit = (row: PoLine, columnId: string, _original: unknown, next: unknown): void => {
     if ('expected' !== columnId) return;
-    setEdit(row.id, null === next || undefined === next ? null : Number(next));
+    setEdit(row.subjectId, null === next || undefined === next ? null : Number(next));
   };
   const onClearCells = (cells: Array<{ row: PoLine; columnId: string }>): void => {
     for (const { row, columnId } of cells) {
-      if ('expected' === columnId) setEdit(row.id, null);
+      if ('expected' === columnId) setEdit(row.subjectId, null);
     }
   };
 
@@ -447,7 +447,7 @@ export function PoExpectedCaptureGrid(props: {
       <div class="flex max-h-[70vh] flex-col pt-2">
         <DataGrid<PoLine>
           rows={() => props.lines}
-          getRowId={(l) => String(l.id)}
+          getRowId={(l) => String(l.subjectId)}
           columnMetas={columnMetas}
           getValue={getValue}
           bespokeColumns={bespokeColumns}

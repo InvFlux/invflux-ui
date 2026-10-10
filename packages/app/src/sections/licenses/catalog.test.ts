@@ -42,7 +42,7 @@ const license = (skuKey: string): OwnedLicense => ({
   is_founder: false,
   paid_through: null,
   grace_until: null,
-  cancellable: false,
+  cancelable: false,
   seats: [],
 });
 
@@ -260,7 +260,7 @@ describe('shouldShowOwnedLicenses', () => {
     is_founder: false,
     paid_through: null,
     grace_until: null,
-    cancellable: false,
+    cancelable: false,
     seats: [
       { activation_id: HERE, site_url: 'https://shop.test', env_class: null, last_seen_at: null },
     ],
@@ -288,7 +288,7 @@ describe('shouldShowOwnedLicenses', () => {
   });
 
   it.each([
-    ['a subscription to cancel', { cancellable: true }],
+    ['a subscription to cancel', { cancelable: true }],
     ['a renewal date', { paid_through: '2027-01-01T00:00:00Z' }],
     ['a grace date', { grace_until: '2027-01-01T00:00:00Z' }],
   ])('shows a licence carrying %s', (_label, over) => {

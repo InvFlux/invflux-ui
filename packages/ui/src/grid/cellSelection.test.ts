@@ -149,7 +149,7 @@ describe('cellSelection', () => {
   });
 
   it('toggleCell punches a cell out of the middle of a rectangle, keeping the rest', () => {
-    // 3×3 block rows 0–2, cols 0–2; remove the centre (1,1).
+    // 3×3 block rows 0–2, cols 0–2; remove the center (1,1).
     const block = extendTo(selectCell({ row: 0, col: 0 }), { row: 2, col: 2 });
     const s = toggleCell(block, { row: 1, col: 1 });
     expect(isSelected(s, 1, 1)).toBe(false);

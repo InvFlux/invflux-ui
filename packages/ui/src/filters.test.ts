@@ -61,6 +61,53 @@ describe('resolveFilterSelection', () => {
     });
   });
 
+  // Ctrl/Cmd+click, or the keep-the-defaults switch on a touch screen: the operator is saying "keep
+  // what is marked", so the click is an ordinary toggle on the defaults instead of a replace.
+  describe('at default, additive keeps the marked defaults', () => {
+    it('ticks an unmarked option on top of the defaults', () => {
+      // "The defaults plus this one" — unreachable in one gesture under replace alone.
+      expect(
+        resolveFilterSelection(
+          ['name', 'email', 'order'],
+          ['name', 'email', 'order', 'sku'],
+          true,
+          true,
+        ),
+      ).toEqual({ kind: 'select', value: ['name', 'email', 'order', 'sku'] });
+    });
+
+    it('unticks a dotted option from the defaults instead of promoting it', () => {
+      // "The defaults except that one" — the other half, and the reverse of a plain click's reading.
+      expect(
+        resolveFilterSelection(['name', 'email', 'order'], ['name', 'order'], true, true),
+      ).toEqual({ kind: 'select', value: ['name', 'order'] });
+    });
+
+    it('still reverts rather than matching nothing when the last default is unticked', () => {
+      // A lone default, clicked additively, empties the set — which §2.2 already turns back into
+      // "default", so the dot stays and nothing visibly happened. Consistent, not a special case.
+      expect(resolveFilterSelection(['Active'], [], true, true)).toEqual({ kind: 'revert' });
+    });
+
+    it('defaults to replacing when additive is not given', () => {
+      // The pre-existing three-argument call must mean exactly what it always did.
+      expect(resolveFilterSelection(['Active'], ['Active', 'Closed'], true)).toEqual({
+        kind: 'select',
+        value: ['Closed'],
+      });
+    });
+  });
+
+  describe('additive does nothing once deliberate', () => {
+    it('adds and removes exactly as a deliberate selection already does', () => {
+      expect(resolveFilterSelection(['Closed'], ['Closed', 'Held'], false, true)).toEqual({
+        kind: 'select',
+        value: ['Closed', 'Held'],
+      });
+      expect(resolveFilterSelection(['Closed'], [], false, true)).toEqual({ kind: 'revert' });
+    });
+  });
+
   describe('once deliberate', () => {
     it('reverts to default when the last option is unchecked, never "match nothing"', () => {
       expect(resolveFilterSelection(['Closed'], [], false)).toEqual({ kind: 'revert' });

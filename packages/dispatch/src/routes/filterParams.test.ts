@@ -13,7 +13,7 @@ import source from './OrderList.tsx?raw';
  * is a constraint the operator can be *shown* and can never *state*.
  *
  * This is not hypothetical. `pending_manual_refund` reached the URL only through a bespoke toolbar
- * button; retiring that button in favour of a shipped saved view left the parameter readable and
+ * button; retiring that button in favor of a shipped saved view left the parameter readable and
  * unwritable, and because a seeded view's deletion is permanent, deleting it would have destroyed
  * the only way to ask about unsettled refunds.
  *

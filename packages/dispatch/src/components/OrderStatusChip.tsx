@@ -10,7 +10,7 @@ import type { OrderStatus } from '../types';
  * installed, so a `__()` at the top level would freeze English into the bundle.
  *
  * **`_x` with a context, not `__`.** Every one of these five is a bare English participle that
- * means something else elsewhere in this catalogue — `Shipped` already exists as a saved-view
+ * means something else elsewhere in this catalog — `Shipped` already exists as a saved-view
  * label meaning *provisioned with the plugin*, translated "Intégré". Without a context a
  * translator sees one word and has to guess which sense, and the two collapse into one entry the
  * moment they collide.
@@ -20,7 +20,7 @@ export const STATUS_LABEL: Record<OrderStatus, () => string> = {
   Started: () => _x('Started', 'dispatch readiness'),
   Staged: () => _x('Staged', 'dispatch readiness'),
   Shipped: () => _x('Shipped', 'dispatch readiness'),
-  Cancelled: () => _x('Cancelled', 'dispatch readiness'),
+  Canceled: () => _x('Cancelled', 'dispatch readiness'),
 };
 
 /**
@@ -44,15 +44,15 @@ export const STATUS_EXPLANATION: Record<OrderStatus, () => string> = {
       'Dispatch: nothing is left to send. Every line has shipped or was cleared by a correction.',
       'dispatch readiness meaning',
     ),
-  Cancelled: () =>
+  Canceled: () =>
     _x('Dispatch: the order was cancelled before it shipped.', 'dispatch readiness meaning'),
 };
 
 /**
  * The order-status pill, shared by the queue rows and the order-detail header.
  *
- * Colour comes from the shared status palette, not a local class map: this pill renders directly
- * beside the *host's* order-status pill in the queue, so the two vocabularies have to be coloured
+ * Color comes from the shared status palette, not a local class map: this pill renders directly
+ * beside the *host's* order-status pill in the queue, so the two vocabularies have to be colored
  * as one set rather than each picking its own blue.
  */
 export function OrderStatusChip(props: { status: OrderStatus }): JSX.Element {

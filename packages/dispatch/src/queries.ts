@@ -24,6 +24,7 @@ import {
   type CreateQueryResult,
   type InfiniteData,
 } from '@tanstack/solid-query';
+import { unshippedQty } from './correctability';
 import type { Accessor } from 'solid-js';
 import {
   createCorrection,
@@ -45,6 +46,9 @@ import {
   settleManualRefund,
   searchSkuFilterOptions,
   shipOrder,
+  reverseShipment,
+  restoreCompleted,
+  type ShipDetails,
   stageLine,
   type CapturePaymentResult,
   type CorrectionApiError,
@@ -667,6 +671,8 @@ function withStagingFrom(held: DispatchOrderLine, staged: DispatchOrderLine): Di
     ...held,
     qtyOrdered: staged.qtyOrdered,
     qtyCorrected: staged.qtyCorrected,
+    qtyCanceled: staged.qtyCanceled,
+    qtyReturned: staged.qtyReturned,
     qtyShipped: staged.qtyShipped,
     stagedQty: staged.stagedQty,
     stagedBy: staged.stagedBy,
@@ -693,12 +699,10 @@ function applyOptimisticStage(
     };
   });
 
-  // stagedCount = lines where qty_staged == qty_ordered - qty_corrected - qty_shipped
+  // stagedCount = lines where qty_staged == qty_outstanding (ordered − canceled − shipped)
   // (matches the backend's COUNT(*) recount; trivially counts fully-corrected
   // lines as "done" too because both sides equal zero).
-  const stagedCount = updatedLines.filter(
-    (l) => l.stagedQty === Math.max(0, l.qtyOrdered - l.qtyCorrected - l.qtyShipped),
-  ).length;
+  const stagedCount = updatedLines.filter((l) => l.stagedQty === unshippedQty(l)).length;
 
   const order = prev.order;
   const isReady =
@@ -713,8 +717,8 @@ function applyOptimisticStage(
   // disagree with the server's commit and flicker through a wrong
   // status pill on settle.
   const newStatus =
-    order.status === 'Cancelled'
-      ? 'Cancelled'
+    order.status === 'Canceled'
+      ? 'Canceled'
       : allShipped
         ? 'Shipped'
         : isReady
@@ -753,19 +757,24 @@ interface ShipOrderMutationContext {
  */
 export function useShipOrderMutation(
   orderHexId: Accessor<string>,
-): CreateMutationResult<ShipOrderResponse, ShipOrderError, void, ShipOrderMutationContext> {
+): CreateMutationResult<
+  ShipOrderResponse,
+  ShipOrderError,
+  ShipDetails | void,
+  ShipOrderMutationContext
+> {
   const ctx = useDispatch();
   const queryClient = useQueryClient();
 
   return createMutation(() => ({
-    mutationFn: () => shipOrder(ctx, orderHexId()),
+    mutationFn: (details) => shipOrder(ctx, orderHexId(), details ?? {}),
     onMutate: async (): Promise<ShipOrderMutationContext> => {
       const queryKey = qk.dispatch.orderDetail(orderHexId());
       await queryClient.cancelQueries({ queryKey });
       const previous = queryClient.getQueryData<DispatchOrderDetail>(queryKey);
       if (previous) {
         const shippedLines = previous.lines.map((line) => {
-          const outstanding = Math.max(0, line.qtyOrdered - line.qtyCorrected - line.qtyShipped);
+          const outstanding = unshippedQty(line);
           if (outstanding <= 0) return line;
           return {
             ...line,
@@ -797,6 +806,9 @@ export function useShipOrderMutation(
       // The confirmation is a toast rather than text in the ship bar, which now offers the next
       // order instead — the one thing a packer does after shipping.
       toast.success(__('Order shipped'));
+      // Stock left the shelf, and the timeline gained a shipment the operator may need to reverse.
+      for (const key of STOCK_MOVED) void queryClient.invalidateQueries({ queryKey: key });
+      void queryClient.invalidateQueries({ queryKey: qk.dispatch.orderEvents(orderHexId()) });
       const queryKey = qk.dispatch.orderDetail(orderHexId());
       queryClient.setQueryData<DispatchOrderDetail>(queryKey, (prev) => {
         if (!prev) return prev;
@@ -813,6 +825,54 @@ export function useShipOrderMutation(
           },
         };
       });
+      void queryClient.invalidateQueries({ queryKey: qk.dispatch.queue() });
+    },
+  }));
+}
+
+/**
+ * Undo a shipment confirmed by mistake. Nothing optimistic: the server decides the order's new
+ * status (and the host order's), so the detail, its timeline, the queue and every stock figure are
+ * refetched once it answers.
+ */
+export function useReverseShipmentMutation(
+  orderHexId: Accessor<string>,
+): CreateMutationResult<
+  { reversed: boolean },
+  ShipOrderError,
+  { shipmentHexId: string; reason: string }
+> {
+  const ctx = useDispatch();
+  const queryClient = useQueryClient();
+
+  return createMutation(() => ({
+    mutationFn: (vars) => reverseShipment(ctx, vars.shipmentHexId, vars.reason),
+    onSuccess: () => {
+      toast.success(__('Shipment reversed'));
+      for (const key of STOCK_MOVED) void queryClient.invalidateQueries({ queryKey: key });
+      void queryClient.invalidateQueries({ queryKey: qk.dispatch.orderDetail(orderHexId()) });
+      void queryClient.invalidateQueries({ queryKey: qk.dispatch.orderEvents(orderHexId()) });
+      void queryClient.invalidateQueries({ queryKey: qk.dispatch.queue() });
+    },
+  }));
+}
+
+/**
+ * Restore a shipped order WooCommerce reopened to Completed there. The server decides; the detail
+ * (whose `hostReopened` clears), its timeline and the queue are refetched once it answers.
+ */
+export function useRestoreCompletedMutation(
+  orderHexId: Accessor<string>,
+): CreateMutationResult<{ restored: boolean }, ShipOrderError, void> {
+  const ctx = useDispatch();
+  const queryClient = useQueryClient();
+
+  return createMutation(() => ({
+    mutationFn: () => restoreCompleted(ctx, orderHexId()),
+    onSuccess: () => {
+      toast.success(__('Order restored to Completed in WooCommerce'));
+      void queryClient.invalidateQueries({ queryKey: qk.dispatch.orderDetail(orderHexId()) });
+      void queryClient.invalidateQueries({ queryKey: qk.dispatch.orderEvents(orderHexId()) });
       void queryClient.invalidateQueries({ queryKey: qk.dispatch.queue() });
     },
   }));
@@ -1090,6 +1150,9 @@ export function useSavedFilterMutation(): CreateMutationResult<
       if (action.kind === 'color') {
         return updateSavedFilter(api, surface, action.id, { colorId: action.colorId });
       }
+      if (action.kind === 'replace') {
+        return updateSavedFilter(api, surface, action.id, { query: action.query });
+      }
 
       return deleteSavedFilter(api, surface, action.id);
     },
@@ -1108,4 +1171,5 @@ export type SavedFilterAction =
   | { kind: 'create'; name: string; query: SavedFilterQuery; colorId: number }
   | { kind: 'pin'; id: number; pinned: boolean }
   | { kind: 'color'; id: number; colorId: number }
+  | { kind: 'replace'; id: number; query: SavedFilterQuery }
   | { kind: 'delete'; id: number };

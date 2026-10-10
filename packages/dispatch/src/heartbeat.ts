@@ -45,13 +45,13 @@ export function useHeartbeat(hexId: Accessor<string>, intervalMs = 60_000): void
     on(hexId, (id) => {
       if (id === '') return;
 
-      let cancelled = false;
+      let canceled = false;
       let timer: ReturnType<typeof setInterval> | null = null;
       /** The revision the page last saw; `undefined` until the first beat. */
       let seenRevision: string | null | undefined;
 
       const tick = async () => {
-        if (cancelled) return;
+        if (canceled) return;
         if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
         // Mounted is not watched. A kept-alive order behind another tab would otherwise keep
         // announcing a viewer, and the rest of the staff would see someone working an order nobody
@@ -59,7 +59,7 @@ export function useHeartbeat(hexId: Accessor<string>, intervalMs = 60_000): void
         if (!paneActive()) return;
         try {
           const response = await postHeartbeat(ctx, id);
-          if (cancelled) return;
+          if (canceled) return;
           queryClient.setQueryData<DispatchOrderDetail>(qk.dispatch.orderDetail(id), (prev) =>
             prev ? { ...prev, viewers: response.viewers } : prev,
           );
@@ -83,7 +83,7 @@ export function useHeartbeat(hexId: Accessor<string>, intervalMs = 60_000): void
       timer = setInterval(() => void tick(), intervalMs);
 
       onCleanup(() => {
-        cancelled = true;
+        canceled = true;
         beatNow = null;
         if (timer !== null) clearInterval(timer);
       });

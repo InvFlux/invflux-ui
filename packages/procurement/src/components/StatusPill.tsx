@@ -1,4 +1,4 @@
-import { __ } from '@invflux/i18n';
+import { __, _x } from '@invflux/i18n';
 import type { JSX } from 'solid-js';
 import { PROCUREMENT_STATUS_COLOR, Pill, STATUS_FALLBACK_COLOR } from '@invflux/ui';
 
@@ -29,13 +29,15 @@ function label(status: string): string {
       return __('Submitted');
     case 'in_transit':
       return __('In transit');
+    case 'arrived':
+      return _x('Arrived', 'purchase order status: goods at the dock, not yet counted');
     case 'in_reception':
       return __('Receiving');
     case 'partially_received':
       return __('Partially received');
     case 'received':
       return __('Received');
-    case 'cancelled':
+    case 'canceled':
       return __('Cancelled');
     default:
       return status;

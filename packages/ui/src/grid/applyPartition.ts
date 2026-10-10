@@ -51,7 +51,7 @@ export interface ApplyPartition {
  * Group staged rows into the requests that will carry them.
  *
  * `isRetrySafe` answers per column id; a column the caller knows nothing about must come back
- * `false`, so that an unrecognised column is merely slower rather than silently retried.
+ * `false`, so that an unrecognized column is merely slower rather than silently retried.
  *
  * `chunkSize` is clamped to at least 1 — a zero or negative size would otherwise produce either an
  * infinite loop or a silently empty plan, and dropping a merchant's edits is worse than sending

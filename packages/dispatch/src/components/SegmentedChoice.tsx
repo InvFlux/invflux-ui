@@ -1,7 +1,7 @@
 import { For, type JSX } from 'solid-js';
 
 /**
- * A labelled row of mutually exclusive buttons — for a choice among two or three answers, where a
+ * A labeled row of mutually exclusive buttons — for a choice among two or three answers, where a
  * select would hide the alternatives the operator should see at a glance.
  *
  * A `radiogroup` of `radio` buttons for assistive technology. A disabled option stays visible: an

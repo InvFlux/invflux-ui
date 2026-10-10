@@ -47,7 +47,7 @@ const tag = (priority: number): TagSummary =>
 describe('sortQueue — the base install', () => {
   it('does NOT rank by governance-tag priority', () => {
     // The rule this whole seam exists for. An install that will not let a merchant assign a
-    // priority tag must not honour one, and the client is where the operator actually sees the
+    // priority tag must not honor one, and the client is where the operator actually sees the
     // order — it sorts the polled working set, so the server dropping the term is only half of it.
     const urgent = order({ id: 'b', tags: [tag(30)] });
 

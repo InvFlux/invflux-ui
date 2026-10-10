@@ -19,7 +19,7 @@ import {
  *   action is deliberate — an accidental keep-open just shows the PO as still-owed (a visible nag),
  *   whereas an accidental close-short silently drops the "still owed" signal.
  *
- * Keeping a PO open across deliveries is base behaviour — no tier gate here. The scope stays open as
+ * Keeping a PO open across deliveries is base behavior — no tier gate here. The scope stays open as
  * the seam a future advance-shipment-notice add-on registers its own reconcile actions into.
  */
 export interface PoReceiveActionContext extends EntityActionContext {
@@ -46,7 +46,7 @@ export interface PoReceiveActionContext extends EntityActionContext {
   anyReceived: boolean;
   /**
    * An earlier delivery already landed on this order. Without one, finishing it short on nothing is
-   * not a short delivery but an order that never came, which is cancelling it.
+   * not a short delivery but an order that never came, which is canceling it.
    */
   hasEarlierReceipts: boolean;
   /** A receive/finalize mutation is in flight — every action shows disabled to prevent a double-fire. */
@@ -102,7 +102,7 @@ export function registerPoReceiveActions(): void {
     label: () => __('Receive & keep open'),
     group: 'primary',
     // Only once something arrived: keeping the order open for "the rest" of a delivery that brought
-    // nothing is cancelling the count, which the form offers beside this.
+    // nothing is canceling the count, which the form offers beside this.
     isAvailable: (c) => c.isShort && c.anyReceived,
     promoteWhen: (c) => (c.isShort ? DEFAULT_PRIMARY_WEIGHT + 100 : false),
     disabledReason: (c) => (c.busy ? __('Working…') : undefined),

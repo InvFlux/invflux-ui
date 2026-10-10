@@ -51,7 +51,7 @@ export function AddSupplierModal(props: { onClose: () => void }): JSX.Element {
       toast.success(__('Supplier created.'));
       props.onClose();
       // Straight to the new supplier: creating one is the start of setting it up — contacts,
-      // catalogue, terms — never an end in itself.
+      // catalog, terms — never an end in itself.
       navigate(`/suppliers/${data.supplier.id}`);
     },
     onError: (err: unknown) => toast.error(err instanceof Error ? err.message : String(err)),
@@ -64,7 +64,7 @@ export function AddSupplierModal(props: { onClose: () => void }): JSX.Element {
     mutation.mutate({
       name: trimmed,
       nickname: nickname().trim() || null,
-      default_currency: currency(),
+      currency: currency(),
       payment_terms: paymentTerms().trim() || null,
       lead_time_days: '' === leadTime().trim() ? null : Number(leadTime()),
       email: email().trim() || null,

@@ -5,7 +5,7 @@ import { createEffect, createSignal, For, type JSX, onCleanup, onMount, Show } f
 const INPUT =
   'w-full rounded border border-slate-300 px-1.5 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-primary';
 
-/** One addable catalogue product (the supplier's catalogue minus products already on the PO). */
+/** One addable catalog product (the supplier's catalog minus products already on the PO). */
 export interface AddOption {
   subjectId: number;
   label: string;
@@ -13,7 +13,7 @@ export interface AddOption {
 }
 
 /**
- * Rapid-add dropdown over the supplier catalogue: auto-focuses, filters as you type, ↑/↓ + Enter to
+ * Rapid-add dropdown over the supplier catalog: auto-focuses, filters as you type, ↑/↓ + Enter to
  * pick, Escape / click-outside to close. `onAdd` fires per pick and the picker stays open (the picked
  * row leaves the list), so a buyer can click down a list. Reused by the draft editor's toolbar button
  * and its append-row product cell.
@@ -21,10 +21,10 @@ export interface AddOption {
 export function AddPicker(props: {
   options: AddOption[];
   /**
-   * The catalogue behind {@link options} is still arriving.
+   * The catalog behind {@link options} is still arriving.
    *
    * It is fetched on first use rather than on page open — most purchase orders are generated and
-   * never have a product added by hand, so the whole catalogue was being loaded for nothing. The
+   * never have a product added by hand, so the whole catalog was being loaded for nothing. The
    * picker opens straight away regardless and says it is working, because a control that waits to
    * appear reads as a click that did not register.
    */
@@ -115,8 +115,8 @@ export function AddPicker(props: {
         <Show when={0 === filtered().length}>
           <li class="flex items-center gap-2 px-3 py-2 text-text-muted">
             <Show when={props.loading} fallback={<span>{__('No products to add')}</span>}>
-              <Spinner label={__('Loading the supplier catalogue…')} />
-              <span>{__('Loading the supplier catalogue…')}</span>
+              <Spinner label={__('Loading the supplier catalog…')} />
+              <span>{__('Loading the supplier catalog…')}</span>
             </Show>
           </li>
         </Show>

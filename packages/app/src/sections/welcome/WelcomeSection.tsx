@@ -99,6 +99,9 @@ export default function WelcomeSection(props: WelcomeProps): JSX.Element {
 
   const total = (): number => status.data?.adoptable ?? 0;
   const hposOn = (): boolean => true === status.data?.hpos_enabled;
+  const stockManagementOn = (): boolean => true === status.data?.stock_management_enabled;
+  /** Both WooCommerce settings InvFlux cannot work without; adoption waits for them. */
+  const requirementsMet = (): boolean => hposOn() && stockManagementOn();
   /** Settings still wanting a decision — see the settings step. Absent while the read is in flight,
    *  which reads as "nothing outstanding" only after the data lands, never during. */
   const decisions = (): number => status.data?.settings_needing_decision ?? 0;
@@ -172,7 +175,7 @@ export default function WelcomeSection(props: WelcomeProps): JSX.Element {
           the rule instead of the current count is true in all of them. */}
       <p class="mt-2 text-sm text-slate-600">
         {__(
-          'InvFlux is installed and watching your catalogue. Nothing has changed for your customers — and for every product you hand over, InvFlux takes authority over its stock.',
+          'InvFlux is installed and watching your catalog. Nothing has changed for your customers — and for every product you hand over, InvFlux takes authority over its stock.',
         )}
       </p>
 
@@ -187,7 +190,12 @@ export default function WelcomeSection(props: WelcomeProps): JSX.Element {
       >
         <ol class="mt-6">
           {/* ── 1. HPOS ─────────────────────────────────────────────────────────────────── */}
-          <Step n={1} title={__('WooCommerce order storage')} done={hposOn()}>
+          <Step
+            n={1}
+            data-testid={`first-run-step1-${requirementsMet() ? 'met' : 'unmet'}`}
+            title={__('WooCommerce requirements')}
+            done={requirementsMet()}
+          >
             <Show
               when={hposOn()}
               fallback={
@@ -220,6 +228,40 @@ export default function WelcomeSection(props: WelcomeProps): JSX.Element {
             >
               <p>{__('High-Performance Order Storage is on. InvFlux can follow your orders.')}</p>
             </Show>
+            {/* Store-wide stock management: with it off WooCommerce checks no quantity at the cart,
+                so an order for more than is in stock is only caught after payment. */}
+            <Show
+              when={stockManagementOn()}
+              fallback={
+                <div data-testid="first-run-stock-management-off" class="space-y-3">
+                  <p>
+                    {__(
+                      'InvFlux also needs WooCommerce stock management, which is turned off. While it is off, the cart accepts any quantity and checkout holds no stock, so an order for more than you have is only caught after payment, when it is cancelled or split.',
+                    )}
+                  </p>
+                  <p class="text-slate-600">
+                    {__(
+                      'Turn on “Enable stock management” under WooCommerce → Settings → Products → Inventory, then check again.',
+                    )}
+                  </p>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <a class="text-primary underline" href={status.data?.stock_settings_url ?? '#'}>
+                      {__('Open inventory settings')}
+                    </a>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      loading={status.isFetching}
+                      onClick={() => void status.refetch()}
+                    >
+                      {__('Check again')}
+                    </Button>
+                  </div>
+                </div>
+              }
+            >
+              <p>{__('WooCommerce stock management is on.')}</p>
+            </Show>
           </Step>
 
           {/* ── 2. Adopt ────────────────────────────────────────────────────────────────── */}
@@ -232,7 +274,7 @@ export default function WelcomeSection(props: WelcomeProps): JSX.Element {
                   ? 'settled-elsewhere'
                   : phase()
             }`}
-            title={__('Hand your catalogue to InvFlux')}
+            title={__('Hand your catalog to InvFlux')}
             done={'done' === phase() || nothingToAdopt() || settledElsewhere()}
           >
             <Switch>
@@ -249,8 +291,8 @@ export default function WelcomeSection(props: WelcomeProps): JSX.Element {
                   {sprintf(
                     /* translators: %d: number of products InvFlux already manages. */
                     _n(
-                      'Your whole catalogue is already managed by InvFlux — %d product, nothing left to hand over.',
-                      'Your whole catalogue is already managed by InvFlux — %d products, nothing left to hand over.',
+                      'Your whole catalog is already managed by InvFlux — %d product, nothing left to hand over.',
+                      'Your whole catalog is already managed by InvFlux — %d products, nothing left to hand over.',
                       status.data?.managed ?? 0,
                     ),
                     status.data?.managed ?? 0,
@@ -310,7 +352,7 @@ export default function WelcomeSection(props: WelcomeProps): JSX.Element {
                 <Button
                   data-testid="first-run-adopt-remaining"
                   variant="secondary"
-                  disabled={!hposOn()}
+                  disabled={!requirementsMet()}
                   onClick={() => void adoptAll()}
                 >
                   {sprintf(
@@ -363,7 +405,7 @@ export default function WelcomeSection(props: WelcomeProps): JSX.Element {
                 <div class="flex flex-wrap items-center gap-2">
                   <Button
                     data-testid="first-run-adopt"
-                    disabled={!hposOn()}
+                    disabled={!requirementsMet()}
                     onClick={() => void adoptAll()}
                   >
                     {sprintf(
@@ -380,7 +422,7 @@ export default function WelcomeSection(props: WelcomeProps): JSX.Element {
                     {__('Not now')}
                   </Button>
                 </div>
-                <Show when={!hposOn()}>
+                <Show when={!requirementsMet()}>
                   <p class="text-slate-500">{__('Finish step 1 first.')}</p>
                 </Show>
               </Match>
@@ -430,7 +472,7 @@ export default function WelcomeSection(props: WelcomeProps): JSX.Element {
           <Step n={4} title={__('Start working')}>
             <p>
               {__(
-                'The workbench is your catalogue at a glance: what each product has on hand, what is promised to orders, and what is running low.',
+                'The workbench is your catalog at a glance: what each product has on hand, what is promised to orders, and what is running low.',
               )}
             </p>
             <Button data-testid="first-run-workbench" onClick={() => navigate('/workbench')}>

@@ -124,13 +124,32 @@ export interface InvFluxApi {
   ) => Promise<PartialResult<TApplied, TError>>;
   /** A binary endpoint (an export, a PDF), nonce-authenticated like everything else. */
   blob: (route: string, options?: RequestOptions) => Promise<Blob>;
-  /** Fetch a binary endpoint and hand the browser a download named `filename`. */
-  download: (route: string, filename: string, options?: RequestOptions) => Promise<void>;
+  /**
+   * Fetch a binary endpoint and hand the browser a download, named as the server's
+   * `Content-Disposition` says, or `fallbackName` when it names nothing.
+   */
+  download: (route: string, fallbackName: string, options?: RequestOptions) => Promise<void>;
   /** The absolute URL for a route — for a form action or an `<a href>` the browser must follow. */
   url: (route: string) => string;
 }
 
 export function createInvFluxApi(context: ApiContext): InvFluxApi {
+  // Deliberately not through `raw`, which reads the body as text to parse it — that would decode a
+  // binary export as UTF-8 and corrupt it. An *error* still comes back as JSON, so the failure path
+  // re-uses the same contract.
+  async function binary(route: string, options: RequestOptions): Promise<Response> {
+    const res = await fetch(buildUrl(context.apiRoot, route, options.params), {
+      method: 'GET',
+      headers: { 'X-WP-Nonce': context.nonce, ...options.headers },
+      signal: options.signal,
+    });
+    if (!res.ok) {
+      const payload: unknown = await res.json().catch(() => null);
+      throw new ApiError(res.status, payload);
+    }
+    return res;
+  }
+
   async function raw(
     method: string,
     route: string,
@@ -230,25 +249,16 @@ export function createInvFluxApi(context: ApiContext): InvFluxApi {
       };
     },
 
-    blob: async (route, options = {}) => {
-      // Deliberately not through `raw`, which reads the body as text to parse it — that would
-      // decode a binary export as UTF-8 and corrupt it. An *error* still comes back as JSON, so the
-      // failure path re-uses the same contract.
-      const res = await fetch(buildUrl(context.apiRoot, route, options.params), {
-        method: 'GET',
-        headers: { 'X-WP-Nonce': context.nonce, ...options.headers },
-        signal: options.signal,
-      });
-      if (!res.ok) {
-        const payload: unknown = await res.json().catch(() => null);
-        throw new ApiError(res.status, payload);
-      }
-      return res.blob();
-    },
+    blob: async (route, options = {}) => (await binary(route, options)).blob(),
 
-    download: async (route, filename, options = {}) => {
-      const blob = await createInvFluxApi(context).blob(route, options);
-      const href = URL.createObjectURL(blob);
+    download: async (route, fallbackName, options = {}) => {
+      const res = await binary(route, options);
+      // The server's name wins: it is read when the file is built, so it already carries whatever
+      // the same request just assigned (a document number). A name the caller computed before
+      // asking is stale exactly then, and `a.download` would override the header with it.
+      const filename =
+        filenameFromDisposition(res.headers.get('Content-Disposition')) ?? fallbackName;
+      const href = URL.createObjectURL(await res.blob());
       const a = document.createElement('a');
       a.href = href;
       a.download = filename;
@@ -265,6 +275,30 @@ export function createInvFluxApi(context: ApiContext): InvFluxApi {
 
     url: (route) => buildUrl(context.apiRoot, route),
   };
+}
+
+/**
+ * The filename a `Content-Disposition` header names, or null. `filename*` (RFC 5987, percent-encoded
+ * UTF-8) is preferred over plain `filename` when both are sent, as browsers do. Any directory part
+ * is dropped: the name is the server's, but the download lands on the user's disk.
+ */
+export function filenameFromDisposition(header: string | null): string | null {
+  if (header === null) return null;
+  let name: string | null = null;
+  const extended = /filename\*\s*=\s*[^']*'[^']*'([^;]+)/i.exec(header);
+  if (extended !== null) {
+    try {
+      name = decodeURIComponent(extended[1].trim());
+    } catch {
+      name = null;
+    }
+  }
+  if (name === null) {
+    const plain = /filename\s*=\s*(?:"([^"]*)"|([^;]+))/i.exec(header);
+    name = plain === null ? null : (plain[1] ?? plain[2]).trim();
+  }
+  const base = name?.split(/[/\\]/).pop() ?? '';
+  return base === '' ? null : base;
 }
 
 /** Prefix a namespace-relative route (`/workbench/products`) with the plugin's REST namespace. */

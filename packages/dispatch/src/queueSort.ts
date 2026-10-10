@@ -19,11 +19,11 @@ export interface QueueSortRule {
   order?: number;
   /**
    * Whether this rule currently applies, evaluated at **sort time** — mirroring `SlotContribution`,
-   * and mirroring the server, where the add-on's decorator asks the licence gate when the registry
+   * and mirroring the server, where the add-on's decorator asks the license gate when the registry
    * resolves rather than when the plugin boots.
    *
    * A contributing add-on's bundle loads whenever its plugin is active, which is a different
-   * question from whether its licence allows the feature right now. Read the entitlement here, via
+   * question from whether its license allows the feature right now. Read the entitlement here, via
    * {@link queueSortEntitlements}, or a lapsed install ranks by something the server has stopped
    * honouring and the two halves of the queue disagree.
    */

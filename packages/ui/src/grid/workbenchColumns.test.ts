@@ -8,7 +8,7 @@ function meta(id: string, dataType = 'number'): GridColumnMeta {
 }
 
 describe('stockSlotOf (stock-`kind` seam)', () => {
-  it('recognises the bare aggregate slot ids', () => {
+  it('recognizes the bare aggregate slot ids', () => {
     expect(stockSlotOf(meta('atp'))).toBe('atp');
     expect(stockSlotOf(meta('res'))).toBe('res');
     expect(stockSlotOf(meta('ctd'))).toBe('ctd');

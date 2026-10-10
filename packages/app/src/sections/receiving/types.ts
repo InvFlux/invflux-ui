@@ -16,7 +16,7 @@ export type ReceiptCostEntry = 'required' | 'optional' | 'none' | 'unsupported';
 export interface ReceiptReasonOption {
   value: string;
   label: string;
-  /** One line telling the near neighbours apart, and why the cost field behaves as it does. */
+  /** One line telling the near neighbors apart, and why the cost field behaves as it does. */
   hint: string;
   /** The domain's own vocabulary (`entered` / `derived` / `seed_fallback` / `free`). */
   costSource: string;
@@ -36,6 +36,17 @@ export interface ReceivingContextResponse {
   baseCurrency: string;
   /** Whether this user may say what the goods cost ({@link ReceiptCostEntry}). */
   canStateCost: boolean;
+  /** How many decimals the store shows prices with (WooCommerce's setting). Display only. */
+  costDecimals: number;
+  /** Active suppliers stock bought without a purchase order can be recorded as coming from. */
+  suppliers: SupplierOption[];
+}
+
+export interface SupplierOption {
+  id: number;
+  name: string;
+  /** The currency its catalog prices in; null when it has none set (the store's is assumed). */
+  currency: string | null;
 }
 
 /** A product stock can be received against: governed, and holding stock of its own. */
@@ -49,18 +60,8 @@ export interface ReceivableProduct {
 
 export interface ReceivableProductsResponse {
   products: ReceivableProduct[];
-}
-
-/** One row of the form. `key` is client-only, so a row keeps its identity while its product changes. */
-export interface ReceiveLineDraft {
-  key: number;
-  product: ReceivableProduct | null;
-  /** Total that arrived, damaged included — null while the row is uncounted. */
-  qty: number | null;
-  /** Of which damaged. Recorded beside the good units, never added to them. */
-  damaged: number | null;
-  /** As typed. Kept a string so "0" and "" stay distinguishable and nothing is rounded on the way. */
-  unitCost: string;
+  /** Everything the query matches, not a page of it — what lets a picker narrow it without asking. */
+  complete: boolean;
 }
 
 export interface RecordedReceipt {
@@ -87,6 +88,9 @@ export interface ReceivingSource {
 export interface OpenReceivingSession {
   id: number;
   source: ReceivingSource | null;
+  /** What a count answering no document carries in place of one. Null on a count against a document. */
+  reason: string | null;
+  reasonLabel: string | null;
   /** Lines this count has touched so far. */
   lineCount: number;
   /** Lines the document has in total, or null where this build cannot read the source. */
@@ -128,7 +132,7 @@ export interface ReceiptHistoryResponse {
  * A purchase order a delivery can be counted against, as the picker lists it.
  *
  * Carries no money at all — the picker is reached under the inventory capability, and someone
- * choosing which pallet they are holding does not need the order's value to recognise it. What
+ * choosing which pallet they are holding does not need the order's value to recognize it. What
  * identifies it is the number, the supplier and the date it was expected.
  */
 export interface ReceivablePurchaseOrder {
@@ -154,7 +158,7 @@ export interface ReceivablePurchaseOrdersResponse {
 
 /** One line to count, as the receiving surface sees it. Product identity and quantities, no cost. */
 export interface PoReceptionLine {
-  poLineId: number;
+  /** The line's name within its order — there is no separate line id. */
   subjectId: number;
   name: string;
   sku: string | null;
@@ -195,4 +199,168 @@ export interface PoReceptionResponse {
   sessionOpen: boolean;
   note: string;
   participants: { name: string; lastSeen: number }[];
+}
+
+/** One staged row of a count that answers no document, with its product named. */
+export interface StandaloneLine {
+  subjectId: number;
+  name: string;
+  sku: string;
+  onHand: number;
+  /** Units that arrived, damaged ones included. */
+  received: number;
+  /** Of `received`, how many arrived damaged. */
+  damaged: number;
+  /** Unit cost in the store base currency, resolved (`"9.5000"`); null where nothing gives one. */
+  unitCost: string | null;
+  /** The cost is inherited — from the catalog, or derived through the rate — not stated here. */
+  unitCostInherited: boolean;
+  /** Unit price in the supplier's currency, when that differs from the store's; else null. */
+  supplierPrice: string | null;
+  /** The supplier price is the catalog's, not stated here. */
+  supplierPriceInherited: boolean;
+}
+
+/**
+ * A count answering no document (`GET /receiving/sessions/{id}`). Its reason was chosen when it was
+ * opened and does not change — it decides `costEntry`, so the columns of the count follow from it.
+ */
+export interface StandaloneSessionView {
+  id: number;
+  reason: string;
+  reasonLabel: string;
+  reasonHint: string;
+  costEntry: ReceiptReasonOption['costEntry'];
+  lines: StandaloneLine[];
+  /** Who sold it — stock bought without a purchase order may name one. */
+  supplier: { id: number; name: string; currency: string | null } | null;
+  baseCurrency: string;
+  /** The supplier prices in another currency: lines carry both prices, the base one derived. */
+  crossCurrency: boolean;
+  /** Base units per one supplier-currency unit; null until entered, or when costs are hidden. */
+  costFxRate: string | null;
+  /** False for someone who may neither see nor state costs: every price is then null. */
+  showsCosts: boolean;
+  note: string | null;
+  participants: Array<{ name: string; lastSeen: number }>;
+  startedAt: string | null;
+}
+
+export interface StandaloneSessionResponse {
+  session: StandaloneSessionView;
+}
+
+/** One line of a posted receipt (`GET /receiving/receipts/{id}`). */
+export interface ReceiptDetailLine {
+  lineId: number;
+  subjectId: number;
+  name: string;
+  sku: string;
+  /** Good units, into stock. */
+  qty: number;
+  /** Damaged units, recorded beside the good ones. */
+  damaged: number;
+  /** As recorded, in the receipt's line currency. Null without a cost, or for a viewer who may not see costs. */
+  unitCost: string | null;
+  /** The same in the store base, through the receipt's rate. */
+  unitCostBase: string | null;
+  /** Good units × base unit cost. */
+  valueBase: string | null;
+  /**
+   * The product's on-hand just before and just after this receipt. Null on a receipt posted before
+   * these were recorded — never reconstructed.
+   */
+  onHandBefore: number | null;
+  onHandAfter: number | null;
+  /** The product's average cost (store base) before and after this receipt. Null without costs. */
+  costBefore: string | null;
+  costAfter: string | null;
+  /** The line as it stands after every correction; the posted figures when there is none. */
+  current: { qty: number; damaged: number; unitCost: string | null };
+}
+
+/** One line a correction changed, before → after. Costs null for a viewer who may not see them. */
+export interface ReceiptCorrectionLine {
+  lineId: number;
+  subjectId: number;
+  qtyBefore: number;
+  qtyAfter: number;
+  damagedBefore: number;
+  damagedAfter: number;
+  unitCostBefore: string | null;
+  unitCostAfter: string | null;
+  costBefore: string | null;
+  costAfter: string | null;
+}
+
+/** A correction recorded against a posted receipt. */
+export interface ReceiptCorrection {
+  id: number;
+  correctedAt: string | null;
+  correctedBy: string | null;
+  note: string | null;
+  lines: ReceiptCorrectionLine[];
+  /** Value the stock could not absorb, in the store base; null when none or not visible. */
+  variance: string | null;
+}
+
+/** A posted receipt, read-only. */
+export interface ReceiptDetail {
+  id: number;
+  receivedAt: string | null;
+  source: ReceivingSource | null;
+  reason: string | null;
+  reasonLabel: string | null;
+  supplier: { id: number; name: string } | null;
+  receivedBy: string | null;
+  note: string | null;
+  /** False for a viewer who may not see costs: every cost field is then null. */
+  showsCosts: boolean;
+  baseCurrency: string;
+  /** The currency line costs were recorded in — the supplier's, when the receipt carries a rate. */
+  lineCurrency: string;
+  /** How many decimals the supplier quotes costs with; null when no supplier is known. */
+  lineCostDecimals: number | null;
+  fxRate: string | null;
+  lines: ReceiptDetailLine[];
+  /** Corrections recorded since posting, oldest first. */
+  corrections: ReceiptCorrection[];
+  /** Null when any line carries no cost: a partial total would read as the whole. */
+  valueBase: string | null;
+}
+
+/** What a correction would do to one product (`POST …/corrections/preview`). */
+export interface CorrectionPreviewProduct {
+  subjectId: number;
+  onHandBefore: number;
+  onHandAfter: number;
+  /** Units moved: negative takes them out, positive brings them in. */
+  delta: number;
+  /** Where removed units come from, in the order they are taken. */
+  fromAvailable: number;
+  fromHeld: number;
+  fromCommitted: number;
+  costBefore: string | null;
+  costAfter: string | null;
+  /** Set when the stock cannot absorb the change: the average stays and this is recorded. */
+  variance: string | null;
+  absorbed: boolean;
+}
+
+export interface CorrectionPreview {
+  reverses: boolean;
+  products: CorrectionPreviewProduct[];
+}
+
+/** A refused correction: the code, and for `not_on_hand` the counts. */
+export interface CorrectionRefusal {
+  error: string;
+  code?: string;
+  subjectId?: number;
+  requested?: number;
+  available?: number;
+}
+
+export interface ReceiptDetailResponse {
+  receipt: ReceiptDetail;
 }

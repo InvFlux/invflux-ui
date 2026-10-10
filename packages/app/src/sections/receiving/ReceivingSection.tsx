@@ -1,8 +1,11 @@
 import { __ } from '@invflux/i18n';
 import { useLocation } from '@solidjs/router';
-import { type JSX, Match, Show, Switch } from 'solid-js';
+import { surfaceSettingsRegistry } from '@invflux/ui';
+import { type JSX, Match, onCleanup, Show, Switch } from 'solid-js';
 import { NewReception } from './NewReception';
+import { ReceiptView } from './ReceiptView';
 import { ReceivingHome } from './ReceivingHome';
+import { ReceivingSettingsPanel } from './ReceivingSettingsPanel';
 import { registerReceivingSources } from './registerSources';
 import { receivingSource } from './sources';
 
@@ -25,9 +28,20 @@ registerReceivingSources();
  *   `/receiving`             the landing lists — what is being counted, what has been received
  *   `/receiving/new`         the source chooser
  *   `/receiving/new/<id>`    that source's own flow, and anything below it
+ *   `/receiving/receipts/<id>`  one posted receipt, read-only
  */
 export default function ReceivingSection(): JSX.Element {
   const location = useLocation();
+  // Receiving's display preferences, in the shell's contextual gear while this surface is active.
+  onCleanup(
+    surfaceSettingsRegistry.register({
+      surfaceId: 'receiving',
+      id: 'display',
+      order: 10,
+      label: () => __('Display'),
+      component: () => <ReceivingSettingsPanel />,
+    }),
+  );
   const segments = (): string[] => location.pathname.split('/').filter(Boolean);
   const view = (): string => segments()[1] ?? '';
   const sourceId = (): string => segments()[2] ?? '';
@@ -36,6 +50,11 @@ export default function ReceivingSection(): JSX.Element {
 
   return (
     <Switch fallback={<ReceivingHome />}>
+      <Match when={'receipts' === view() && /^\d+$/.test(sourceId())}>
+        <div class="p-4">
+          <ReceiptView id={Number(sourceId())} />
+        </div>
+      </Match>
       <Match when={'new' === view() && '' === sourceId()}>
         <NewReception />
       </Match>

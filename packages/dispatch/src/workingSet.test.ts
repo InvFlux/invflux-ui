@@ -167,6 +167,21 @@ describe('matchesLocalFilters', () => {
     );
   });
 
+  it('reads the reopened flag the server derived, and nothing else', () => {
+    expect(
+      matchesLocalFilters(order({ id: 'a', status: 'Shipped', hostReopened: true }), {
+        pendingActions: ['host_reopened'],
+      }),
+    ).toBe(true);
+    // Shipped and back in "processing", but the server did not flag it: the client holds no status
+    // policy, so it must not second-guess the server from the slug.
+    expect(
+      matchesLocalFilters(order({ id: 'b', status: 'Shipped' }), {
+        pendingActions: ['host_reopened'],
+      }),
+    ).toBe(false);
+  });
+
   /**
    * Narrow, never widen. An add-on's action this build has never heard of must not quietly match
    * every order — a work queue reading longer than it is goes unnoticed.

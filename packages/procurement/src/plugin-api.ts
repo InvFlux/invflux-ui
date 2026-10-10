@@ -50,7 +50,7 @@ export interface ProcurementBridge {
    * the operations the rule's context hands over.
    *
    * Gate the rule on whatever gates the capability, through `enabled`. A bundle loads whenever its
-   * plugin is active, which is not the same question as whether its licence currently allows the
+   * plugin is active, which is not the same question as whether its license currently allows the
    * feature; an unconditional rule would leave a lapsed install still behaving as though paid.
    */
   registerCommitNav: (rule: CommitNavRule) => void;
@@ -89,7 +89,7 @@ export interface ProcurementBridge {
     StatusPill: typeof StatusPill;
     /** The base "On order" drill-down body — the aggregate and its upgrade prompt. An add-on that
      *  replaces that drill-down renders this whenever the server answers `locked`, so a lapsed
-     *  licence still shows what is on order rather than nothing. */
+     *  license still shows what is on order rather than nothing. */
     OnOrderSummary: typeof OnOrderDrilldown;
   };
 }

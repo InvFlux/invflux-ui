@@ -84,7 +84,7 @@ interface InstallLanguageResponse {
  * Languages a purchase order can be written in, served by the server rather than mirrored here:
  * the set depends on which WordPress language packs the site has installed, so a static copy would
  * offer languages this install cannot actually produce. Each is named by its **endonym** — the
- * language's own name for itself, which is what the person choosing recognises and needs no
+ * language's own name for itself, which is what the person choosing recognizes and needs no
  * translation of its own.
  */
 const asOptions = (map: Record<string, string>): Array<{ value: string; label: string }> =>
@@ -117,7 +117,7 @@ export function SupplierDetail(props: { id: string }): JSX.Element {
   const location = useLocation();
   const navigate = useNavigate();
   const tab = (): string => location.pathname.split('/').filter(Boolean)[2] ?? 'details';
-  // The Products tab's catalogue grid portals its Save button into this header slot (next to "Create
+  // The Products tab's catalog grid portals its Save button into this header slot (next to "Create
   // replenishment PO") while keeping its own dirty model.
   const [saveSlot, setSaveSlot] = createSignal<HTMLElement>();
 
@@ -182,7 +182,7 @@ export function SupplierDetail(props: { id: string }): JSX.Element {
                 >
                   {__('Create replenishment PO')}
                 </Button>
-                {/* Products tab's catalogue Save button portals in here (display:contents = lays out as a sibling). */}
+                {/* Products tab's catalog Save button portals in here (display:contents = lays out as a sibling). */}
                 <span ref={setSaveSlot} class="contents" />
               </div>
             </header>
@@ -547,7 +547,7 @@ function EditForm(props: { supplier: Supplier; onDone: () => void }): JSX.Elemen
       nickname: nickname().trim() || null,
       code: code().trim() || null,
       tax_number: taxNumber().trim() || null,
-      default_currency: currency(),
+      currency: currency(),
       payment_terms: paymentTerms().trim() || null,
       lead_time_days: '' === leadTime().trim() ? null : Number(leadTime()),
       cost_decimals: Number(costDecimals()),

@@ -7,7 +7,7 @@
  */
 
 /** A licence state as reported by the server's LicenseStateMachine. */
-export type LicenseState = 'active' | 'lapsed' | 'cancelled' | 'revoked' | (string & {});
+export type LicenseState = 'active' | 'lapsed' | 'canceled' | 'revoked' | (string & {});
 
 /** One live seat (a non-deactivated activation) of an owned licence. */
 export interface Seat {
@@ -36,7 +36,7 @@ export interface OwnedLicense {
   paid_through: string | null;
   grace_until: string | null;
   /** Only a MoR-backed subscription can be cancelled (free/manual licences: false). */
-  cancellable: boolean;
+  cancelable: boolean;
   /**
    * A subscription exists and its first payment has not confirmed yet.
    *

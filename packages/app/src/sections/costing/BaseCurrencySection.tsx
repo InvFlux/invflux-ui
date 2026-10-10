@@ -219,8 +219,8 @@ export default function BaseCurrencySection(): JSX.Element {
                   <p class="mt-2 text-sm text-green-900">
                     {sprintf(
                       _n(
-                        '%1$d past stock-adjustment line was labelled %2$s so its recorded value stays readable. Those are history — they keep their original amounts.',
-                        '%1$d past stock-adjustment lines were labelled %2$s so their recorded values stay readable. Those are history — they keep their original amounts.',
+                        '%1$d past stock-adjustment line was labeled %2$s so its recorded value stays readable. Those are history — they keep their original amounts.',
+                        '%1$d past stock-adjustment lines were labeled %2$s so their recorded values stay readable. Those are history — they keep their original amounts.',
                         done.grounded,
                       ),
                       done.grounded,

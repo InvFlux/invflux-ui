@@ -26,6 +26,8 @@ export interface PaletteSwatchPickerProps {
   columns?: number;
   /** Accessible name for the group of swatches. */
   ariaLabel: string;
+  /** Shows the current choice without offering another — a colour that belongs to something else. */
+  disabled?: boolean;
 }
 
 /**
@@ -64,8 +66,13 @@ export function PaletteSwatchPicker(props: PaletteSwatchPickerProps): JSX.Elemen
         {({ colorId, color: c }) => (
           <button
             type="button"
-            class="flex h-6 w-6 cursor-pointer items-center justify-center rounded-full ring-1 ring-inset ring-black/10"
-            classList={{ 'ring-2 ring-gray-800': props.value === colorId }}
+            class="flex h-6 w-6 items-center justify-center rounded-full ring-1 ring-inset ring-black/10"
+            classList={{
+              'ring-2 ring-gray-800': props.value === colorId,
+              'cursor-pointer': props.disabled !== true,
+              'opacity-40': props.disabled === true && props.value !== colorId,
+            }}
+            disabled={props.disabled}
             style={
               undefined === props.palette
                 ? paletteStyle(colorId)

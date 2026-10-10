@@ -182,6 +182,41 @@ export function formatNumber(value: number, opts?: Intl.NumberFormatOptions): st
 }
 
 /**
+ * An amount of money for display: the currency as its ISO code, placed where the host's locale puts
+ * it, and the amount grouped by that locale — `JPY 435,000` in English, `435 000 JPY` in French.
+ * `decimals` fixes the fraction digits (a supplier quotes to its own precision); omitted, the
+ * currency's own minor unit applies (two for euros, none for yen).
+ *
+ * **The code, not the symbol, on purpose.** A purchasing screen mixes currencies, and a symbol is
+ * ambiguous exactly where that matters — `¥` is the yen and the yuan, `$` a dozen currencies — so
+ * the code is shown and the *position* is left to the locale rather than fixed by hand per screen.
+ *
+ * Without a usable ISO code (none, or not three capitals) there is nothing to ground a currency
+ * format in, so the amount is shown as a plain number at `decimals` (two when unstated), followed by
+ * whatever currency text was given. `NaN` and infinities render empty, as {@link formatNumber} does.
+ */
+export function formatMoney(
+  amount: number,
+  currency: string | null | undefined,
+  decimals?: number,
+): string {
+  if (!Number.isFinite(amount)) return '';
+  const fixed =
+    decimals === undefined
+      ? {}
+      : { minimumFractionDigits: decimals, maximumFractionDigits: decimals };
+  if (currency && /^[A-Z]{3}$/.test(currency)) {
+    return formatNumber(amount, { style: 'currency', currency, currencyDisplay: 'code', ...fixed });
+  }
+  const plain = formatNumber(amount, {
+    minimumFractionDigits: decimals ?? 2,
+    maximumFractionDigits: decimals ?? 2,
+  });
+
+  return currency ? `${plain} ${currency}` : plain;
+}
+
+/**
  * A calendar day — `YYYY-MM-DD`, or the date part of any ISO string — as a LOCAL date; `null` when
  * absent or unparseable.
  *

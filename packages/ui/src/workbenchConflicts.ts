@@ -15,7 +15,7 @@ import type { WorkbenchApplyConflict } from './workbenchGridTypes';
  */
 
 /**
- * One refused edit in the operator's terms, or `null` when this build does not recognise the code —
+ * One refused edit in the operator's terms, or `null` when this build does not recognize the code —
  * the only case that earns the generic "review and retry" count.
  *
  * Each message ends on what to do next, because a refusal the operator cannot act on is
@@ -115,7 +115,7 @@ export function describeConflicts(
   if (generic > 0) {
     parts.push(
       sprintf(
-        /* translators: %d = number of edits that couldn't be saved for an unrecognised reason. */
+        /* translators: %d = number of edits that couldn't be saved for an unrecognized reason. */
         _n(
           "%d change couldn't be saved — the value changed on the server; review and retry.",
           "%d changes couldn't be saved — the values changed on the server; review and retry.",

@@ -1,4 +1,4 @@
-import { formatNumber } from '@invflux/i18n';
+import { formatMoney as formatAmount } from '@invflux/i18n';
 
 /**
  * Money on the dispatch surfaces, in integer minor units (cents) — the unit the server's own sums use.
@@ -43,10 +43,10 @@ export function convertCents(cents: number, rate: string): number {
   return Math.round(cents * Number(rate));
 }
 
-/** An amount for display — the host's locale, and the currency's own symbol and decimals. */
+/**
+ * An amount for display, from cents — the shared money format: the currency's ISO code placed by the
+ * host's locale, at the currency's own decimals. Without a usable currency, a plain two-decimal number.
+ */
 export function formatMoney(cents: number, currency: string | null | undefined): string {
-  const value = cents / 100;
-  return currency && /^[A-Z]{3}$/.test(currency)
-    ? formatNumber(value, { style: 'currency', currency })
-    : formatNumber(value, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return formatAmount(cents / 100, currency);
 }

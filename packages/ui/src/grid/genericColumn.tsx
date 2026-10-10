@@ -29,7 +29,7 @@ const RIGHT_ALIGNED = new Set([
   'total',
 ]);
 
-/** Host-supplied behaviour a generic cell closes over — the same seams DataGrid exposes as props. */
+/** Host-supplied behavior a generic cell closes over — the same seams DataGrid exposes as props. */
 export interface GenericColumnDeps<TRow> {
   getValue: (row: TRow, columnId: string) => unknown;
   getStagedValue: (row: TRow, columnId: string) => StagedCell;

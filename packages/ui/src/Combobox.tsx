@@ -18,7 +18,12 @@ export interface ComboboxOption {
 export interface ComboboxProps {
   options: ComboboxOption[];
   selected: string[];
-  onChange: (selected: string[]) => void;
+  /**
+   * `meta.additive` is set on a multi-select that is still showing its default when the operator
+   * asked to keep what is marked (Ctrl/Cmd held, or the keep-the-defaults switch). A caller with no
+   * default to keep can ignore the second argument.
+   */
+  onChange: (selected: string[], meta?: { additive: boolean }) => void;
   multiple?: boolean;
   placeholder?: string;
   disabled?: boolean;

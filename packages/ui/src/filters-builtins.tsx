@@ -31,8 +31,13 @@ import {
 // `resolveFilterSelection` decides what a click means, and `selectionIsDefault` makes the state
 // visible as a dot rather than a checkmark.
 const MultiSelectControl: FilterControl = (props) => {
-  const handleChange = (next: string[]): void => {
-    const change = resolveFilterSelection(props.value, next, props.isDefault === true);
+  const handleChange = (next: string[], meta?: { additive: boolean }): void => {
+    const change = resolveFilterSelection(
+      props.value,
+      next,
+      props.isDefault === true,
+      meta?.additive === true,
+    );
     if (change.kind === 'revert') {
       // No revert affordance wired (a host that never defaults this filter) — an empty selection is
       // already that host's default, so emitting it is the same outcome.

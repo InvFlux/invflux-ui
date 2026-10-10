@@ -17,6 +17,7 @@ import { surfaceCatalog } from './surfaceCatalog';
 import { registerDispatchSection } from './sections/dispatch';
 import { registerProcurementSection } from './sections/procurement';
 import { registerReceivingSection } from './sections/receiving';
+import { registerRoadmapSection } from './sections/roadmap';
 import { registerEssentialsWelcome } from './sections/welcome';
 import { registerWorkbenchSection } from './sections/workbench';
 import { installPluginApi as installDispatchPluginSurface } from '@invflux/dispatch/src/plugin-api';
@@ -49,6 +50,7 @@ declare global {
 registerWorkbenchSection();
 registerProcurementSection();
 registerReceivingSection();
+registerRoadmapSection();
 registerDispatchSection();
 
 // The base install's own first-run screen, registered through the `onboarding.welcome` seam an add-on

@@ -1,4 +1,4 @@
-import { __, _n, sprintf } from '@invflux/i18n';
+import { __, _n, formatMoney, sprintf } from '@invflux/i18n';
 import {
   Button,
   COMMON_ALIASES,
@@ -133,9 +133,9 @@ export function PoInvoiceCapture(props: {
     null === line.unitCostInvoiced ? line.discountPct : null;
   /** The rate this invoice will state for a line, before its discount — typed, or the standing one. */
   const effectiveRate = (line: PoLine): string | null =>
-    typedRateFor(line.id) ?? standingRate(line);
+    typedRateFor(line.subjectId) ?? standingRate(line);
   const effectiveDiscount = (line: PoLine): string | null => {
-    const typed = typedDiscountFor(line.id);
+    const typed = typedDiscountFor(line.subjectId);
     return undefined === typed ? standingDiscount(line) : typed;
   };
   /** The net a unit is billed at: the rate less the discount. What totals and the server both use. */
@@ -151,23 +151,24 @@ export function PoInvoiceCapture(props: {
    */
   const lineTotal = (line: PoLine): string | null => {
     const r = netRate(line);
-    return null === r ? null : String((qtyFor(line.id) ?? orderedQty(line)) * Number(r));
+    return null === r ? null : String((qtyFor(line.subjectId) ?? orderedQty(line)) * Number(r));
   };
   /**
    * Whether a line's total leans on something no invoice has stated: a blank Qty billed, where the
    * ordered quantity stands in, or a price neither typed here nor set by an earlier invoice.
    */
   const totalInherited = (line: PoLine): boolean =>
-    null === qtyFor(line.id) || (null === typedRateFor(line.id) && null === line.unitCostInvoiced);
+    null === qtyFor(line.subjectId) ||
+    (null === typedRateFor(line.subjectId) && null === line.unitCostInvoiced);
 
-  const billedLines = createMemo(() => props.lines.filter((l) => (qtyFor(l.id) ?? 0) > 0));
+  const billedLines = createMemo(() => props.lines.filter((l) => (qtyFor(l.subjectId) ?? 0) > 0));
   // A line billed at no price at all: nothing typed, and nothing on the order to fall back to. The
   // server drops such a line, so it is flagged here rather than silently going missing from a saved
   // invoice — the operator types a price or clears the quantity.
   const unpricedLines = createMemo(() => billedLines().filter((l) => null === effectiveRate(l)));
 
   const computedTotal = createMemo(() =>
-    billedLines().reduce((sum, l) => sum + (qtyFor(l.id) ?? 0) * Number(netRate(l) ?? 0), 0),
+    billedLines().reduce((sum, l) => sum + (qtyFor(l.subjectId) ?? 0) * Number(netRate(l) ?? 0), 0),
   );
   // The supplier's own total against ours. They are allowed to differ — shipping, a rounding, a
   // charge that is not a line — and that is exactly why the stated figure is kept verbatim rather
@@ -270,7 +271,7 @@ export function PoInvoiceCapture(props: {
     },
   ];
 
-  /** Index the PO lines by the chosen key field, normalised (trim + case-insensitive), first-wins. */
+  /** Index the PO lines by the chosen key field, normalized (trim + case-insensitive), first-wins. */
   const lineIndex = (keyField: string): Map<string, PoLine> => {
     const pick = (l: PoLine): string | null =>
       'supplier_sku' === keyField ? l.supplierSku : 'gtin' === keyField ? l.gtin : l.sku;
@@ -300,7 +301,7 @@ export function PoInvoiceCapture(props: {
         label: line.productLabel || k,
         status: 'matched',
         data: {
-          poLineId: line.id,
+          subjectId: line.subjectId,
           qty: '' === qtyCell ? null : Number(qtyCell) || 0,
           // A price column the document did not carry leaves the line at its standing rate rather
           // than at nothing, which is what "the invoice only restates the agreed price" looks like.
@@ -309,7 +310,7 @@ export function PoInvoiceCapture(props: {
           discountPct: '' === discountCell ? undefined : '-' === discountCell ? null : discountCell,
         },
         existing: {
-          qty: null === qtyFor(line.id) ? '' : String(qtyFor(line.id)),
+          qty: null === qtyFor(line.subjectId) ? '' : String(qtyFor(line.subjectId)),
           unit_cost: atSupplierPrecision(standingRate(line), props.costDecimals) ?? '',
           discount_pct: effectiveDiscount(line) ?? '',
         },
@@ -322,17 +323,17 @@ export function PoInvoiceCapture(props: {
     for (const m of matched) {
       const d = m.data as
         | {
-            poLineId: number;
+            subjectId: number;
             qty: number | null;
             unitCost: string | null;
             discountPct?: string | null;
           }
         | undefined;
       if (!d) continue;
-      if (null !== d.qty) setQty((s) => ({ ...s, [d.poLineId]: d.qty }));
-      if (null !== d.unitCost) setRate((s) => ({ ...s, [d.poLineId]: d.unitCost }));
+      if (null !== d.qty) setQty((s) => ({ ...s, [d.subjectId]: d.qty }));
+      if (null !== d.unitCost) setRate((s) => ({ ...s, [d.subjectId]: d.unitCost }));
       if (undefined !== d.discountPct)
-        setDiscount((s) => ({ ...s, [d.poLineId]: d.discountPct ?? null }));
+        setDiscount((s) => ({ ...s, [d.subjectId]: d.discountPct ?? null }));
       staged++;
     }
     setImporting(false);
@@ -358,8 +359,8 @@ export function PoInvoiceCapture(props: {
         statedTotal: statedTotal().trim() || null,
         note: note().trim() || null,
         lines: billedLines().map((l) => ({
-          poLineId: l.id,
-          qty: qtyFor(l.id) ?? 0,
+          subjectId: l.subjectId,
+          qty: qtyFor(l.subjectId) ?? 0,
           // The rate before the discount, and the discount; the server computes the net from them.
           unitCost: effectiveRate(l),
           discountPct: effectiveDiscount(l),
@@ -427,7 +428,9 @@ export function PoInvoiceCapture(props: {
         id: 'qty',
         header: () => __('Qty billed'),
         cell: (info) => (
-          <span class="block text-right tabular-nums">{qtyFor(info.row.original.id) ?? '—'}</span>
+          <span class="block text-right tabular-nums">
+            {qtyFor(info.row.original.subjectId) ?? '—'}
+          </span>
         ),
       }) as ColumnDef<PoLine, unknown>,
     ],
@@ -438,9 +441,9 @@ export function PoInvoiceCapture(props: {
         header: () => __('Unit price'),
         cell: (info) => (
           <RateCell
-            typed={typedRateFor(info.row.original.id)}
+            typed={typedRateFor(info.row.original.subjectId)}
             standing={standingRate(info.row.original)}
-            billed={(qtyFor(info.row.original.id) ?? 0) > 0}
+            billed={(qtyFor(info.row.original.subjectId) ?? 0) > 0}
             format={money}
           />
         ),
@@ -455,7 +458,7 @@ export function PoInvoiceCapture(props: {
         cell: (info) => (
           <span
             class="block text-right tabular-nums"
-            classList={{ inherited: undefined === typedDiscountFor(info.row.original.id) }}
+            classList={{ inherited: undefined === typedDiscountFor(info.row.original.subjectId) }}
           >
             {formatDiscount(effectiveDiscount(info.row.original))}
           </span>
@@ -563,7 +566,7 @@ export function PoInvoiceCapture(props: {
       dataType: 'decimal:money',
       copyable: true,
       aggregate: 'sum',
-      // Wide enough for the label itself: "Total de la ligne" and its neighbours in other locales
+      // Wide enough for the label itself: "Total de la ligne" and its neighbors in other locales
       // are half again the English, and a clipped money header reads as a broken column.
       defaultWidth: 150,
     }),
@@ -580,9 +583,11 @@ export function PoInvoiceCapture(props: {
       case 'billed_so_far':
         return row.qtyInvoiced;
       case 'qty':
-        return qtyFor(row.id);
+        return qtyFor(row.subjectId);
       case 'unit_cost':
-        return typedRateFor(row.id) ?? atSupplierPrecision(standingRate(row), props.costDecimals);
+        return (
+          typedRateFor(row.subjectId) ?? atSupplierPrecision(standingRate(row), props.costDecimals)
+        );
       case 'discount_pct':
         return effectiveDiscount(row);
       case 'line_total':
@@ -596,14 +601,14 @@ export function PoInvoiceCapture(props: {
   // Both entry cells stage (yellow) until the invoice is saved — a price shows staged only once it
   // has actually been typed, so the inherited standing rate is not dressed up as an edit.
   const getStagedValue = (row: PoLine, columnId: string): StagedCell => {
-    if ('qty' === columnId && null !== qtyFor(row.id)) {
-      return { staged: true, value: qtyFor(row.id) };
+    if ('qty' === columnId && null !== qtyFor(row.subjectId)) {
+      return { staged: true, value: qtyFor(row.subjectId) };
     }
-    if ('unit_cost' === columnId && null !== typedRateFor(row.id)) {
-      return { staged: true, value: typedRateFor(row.id) };
+    if ('unit_cost' === columnId && null !== typedRateFor(row.subjectId)) {
+      return { staged: true, value: typedRateFor(row.subjectId) };
     }
-    if ('discount_pct' === columnId && undefined !== typedDiscountFor(row.id)) {
-      return { staged: true, value: typedDiscountFor(row.id) };
+    if ('discount_pct' === columnId && undefined !== typedDiscountFor(row.subjectId)) {
+      return { staged: true, value: typedDiscountFor(row.subjectId) };
     }
 
     return { staged: false, value: undefined };
@@ -628,15 +633,15 @@ export function PoInvoiceCapture(props: {
     if ('qty' === columnId) {
       setQty((m) => ({
         ...m,
-        [row.id]: null === next || undefined === next ? null : Number(next),
+        [row.subjectId]: null === next || undefined === next ? null : Number(next),
       }));
     } else if ('unit_cost' === columnId) {
       const v = null === next || undefined === next || '' === next ? null : String(next);
-      setRate((m) => ({ ...m, [row.id]: v }));
+      setRate((m) => ({ ...m, [row.subjectId]: v }));
     } else if ('discount_pct' === columnId) {
       // Cleared is a statement too — this invoice bills the line with no discount.
       const v = null === next || undefined === next || '' === next ? null : String(next);
-      setDiscount((m) => ({ ...m, [row.id]: v }));
+      setDiscount((m) => ({ ...m, [row.subjectId]: v }));
     }
   };
   const onClearCells = (cells: Array<{ row: PoLine; columnId: string }>): void => {
@@ -731,7 +736,7 @@ export function PoInvoiceCapture(props: {
               /* translators: 1: number of lines, 2: total of those lines. */
               _n('%1$d line, %2$s', '%1$d lines, %2$s', billedLines().length),
               billedLines().length,
-              `${money(computedTotal())} ${currency()}`,
+              formatMoney(computedTotal(), currency(), props.costDecimals),
             )}
           </span>
           <Show when={statedDiffers()}>
@@ -781,7 +786,7 @@ export function PoInvoiceCapture(props: {
       <div class="flex max-h-[70vh] flex-col pt-2">
         <DataGrid<PoLine>
           rows={() => props.lines}
-          getRowId={(l) => String(l.id)}
+          getRowId={(l) => String(l.subjectId)}
           columnMetas={columnMetas}
           groupLabels={() => ({ 'invoice-capture': __('Invoice Columns') })}
           getValue={getValue}

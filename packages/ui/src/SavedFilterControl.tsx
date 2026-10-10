@@ -54,8 +54,13 @@ export interface SavedFilterControlProps {
    */
   onToggle: (query: SavedFilterQuery, on: boolean) => void;
   onCreate: (name: string, query: SavedFilterQuery, colorId: number) => Promise<unknown>;
+  /**
+   * Overwrite an existing view's query with the live one, keeping its name, color and pin. Omit it
+   * and the save dialog only creates.
+   */
+  onReplace?: (filter: SavedFilter, query: SavedFilterQuery) => Promise<unknown>;
   onSetPinned: (filter: SavedFilter, pinned: boolean) => Promise<unknown>;
-  /** Recolour a view. Identity only — a colour never says whether the view is in effect. */
+  /** Recolor a view. Identity only — a color never says whether the view is in effect. */
   onSetColor: (filter: SavedFilter, colorId: number) => Promise<unknown>;
   onDelete: (filter: SavedFilter) => Promise<unknown>;
   /**
@@ -74,8 +79,10 @@ export function SavedFilterControl(props: SavedFilterControlProps) {
   const [managingOpen, setManagingOpen] = createSignal(false);
   const [draftName, setDraftName] = createSignal('');
   const [draftColor, setDraftColor] = createSignal(0);
-  /** Which row's colour picker is open in the manage dialog — one at a time, or none. */
-  const [recolouring, setRecolouring] = createSignal<number | null>(null);
+  /** The view the save dialog will overwrite, or null for a new one. */
+  const [replaceId, setReplaceId] = createSignal<number | null>(null);
+  /** Which row's color picker is open in the manage dialog — one at a time, or none. */
+  const [recoloring, setRecoloring] = createSignal<number | null>(null);
   const [busy, setBusy] = createSignal(false);
 
   const pinned = createMemo(() => props.savedFilters().filter((f) => f.pinned));
@@ -134,9 +141,26 @@ export function SavedFilterControl(props: SavedFilterControlProps) {
     }
   }
 
+  /** The existing view chosen in "Save as", while it still exists. */
+  const replaceTarget = (): SavedFilter | undefined => {
+    const id = replaceId();
+
+    return id === null ? undefined : props.savedFilters().find((f) => f.id === id);
+  };
+
   async function save(): Promise<void> {
+    if (busy()) return;
+    const target = replaceTarget();
+    if (target !== undefined && props.onReplace !== undefined) {
+      if (await guard(props.onReplace(target, resolved()))) {
+        setReplaceId(null);
+        setSavingOpen(false);
+      }
+
+      return;
+    }
     const name = draftName().trim();
-    if (name === '' || busy()) return;
+    if (name === '') return;
     if (await guard(props.onCreate(name, resolved(), draftColor()))) {
       setDraftName('');
       setDraftColor(0);
@@ -176,8 +200,8 @@ export function SavedFilterControl(props: SavedFilterControlProps) {
   const menuItems = createMemo<DropdownMenuItem[]>(() => {
     const items: DropdownMenuItem[] = props.savedFilters().map((filter) => ({
       id: `apply-${filter.id}`,
-      // A leading mark rather than a colour, so "the one you are looking at" survives a
-      // colour-blind reader and a monochrome screenshot.
+      // A leading mark rather than a color, so "the one you are looking at" survives a
+      // color-blind reader and a monochrome screenshot.
       label: `${exact()?.id === filter.id ? '• ' : '  '}${filter.name}`,
       // What it will do, before it is applied. A name is a promise; this is the statement that
       // can be checked against it.
@@ -201,6 +225,7 @@ export function SavedFilterControl(props: SavedFilterControlProps) {
         run: () => {
           setDraftName('');
           setDraftColor(0);
+          setReplaceId(null);
           setSavingOpen(true);
         },
       });
@@ -230,7 +255,7 @@ export function SavedFilterControl(props: SavedFilterControlProps) {
             // failed in: the old refund button said "unsettled manual refund" and meant "…that is
             // also still active". Hovering says what it actually constrains.
             title={describeInline(filter)}
-            // State is the SHAPE, identity is the colour. Off draws as a dashed outline in the
+            // State is the SHAPE, identity is the color. Off draws as a dashed outline in the
             // view's ink; on fills with its palette pair and drops the outline. A reader who cannot
             // separate the hues still sees which views are in effect — and a spec can assert it
             // without a style selector, off `data-saved-filter-applied`.
@@ -272,13 +297,48 @@ export function SavedFilterControl(props: SavedFilterControlProps) {
                 {__('Saved views are shared with everyone who works this screen.')}
               </p>
 
+              <Show when={props.onReplace !== undefined && props.savedFilters().length > 0}>
+                <label class="block text-sm" for="invflux-saved-filter-target">
+                  {_x('Save as', 'saved view: create a new view or overwrite an existing one')}
+                </label>
+                <select
+                  id="invflux-saved-filter-target"
+                  data-testid="saved-filter-save-as"
+                  class="mb-3 mt-1 h-9 w-full rounded border border-border bg-surface px-2 text-sm shadow-sm"
+                  value={replaceId() === null ? '' : String(replaceId())}
+                  onChange={(e) => {
+                    const raw = e.currentTarget.value;
+                    setReplaceId(raw === '' ? null : Number(raw));
+                  }}
+                >
+                  <option value="">
+                    {_x('New view', 'saved view: the "Save as" choice that creates one')}
+                  </option>
+                  <For each={props.savedFilters()}>
+                    {(filter) => (
+                      <option value={String(filter.id)}>
+                        {filter.seeded
+                          ? sprintf(
+                              /* translators: %s: a saved view's name; the view came with the plugin */
+                              _x('%s (built-in)', 'saved view option in the "Save as" list'),
+                              filter.name,
+                            )
+                          : filter.name}
+                      </option>
+                    )}
+                  </For>
+                </select>
+              </Show>
+
               <label class="block text-sm" for="invflux-saved-filter-name">
                 {__('Name')}
               </label>
               <Input
                 id="invflux-saved-filter-name"
-                class="mt-1 w-full"
-                value={draftName()}
+                data-testid="saved-filter-name"
+                class={`mt-1 w-full ${replaceTarget() !== undefined ? 'cursor-default bg-surface-raised text-text-muted' : ''}`}
+                value={replaceTarget()?.name ?? draftName()}
+                readOnly={replaceTarget() !== undefined}
                 autofocus
                 onInput={(e) => setDraftName(e.currentTarget.value)}
                 onKeyDown={(e) => {
@@ -290,15 +350,30 @@ export function SavedFilterControl(props: SavedFilterControlProps) {
               />
 
               <div class="mt-3">
-                <span class="block text-sm">{__('Colour')}</span>
+                <span class="block text-sm">{__('Color')}</span>
                 <div class="mt-1">
                   <PaletteSwatchPicker
-                    value={draftColor()}
+                    value={replaceTarget()?.colorId ?? draftColor()}
                     onPick={setDraftColor}
-                    ariaLabel={__('Colour for this saved view')}
+                    disabled={replaceTarget() !== undefined}
+                    ariaLabel={__('Color for this saved view')}
                   />
                 </div>
               </div>
+
+              <Show when={replaceTarget()}>
+                {(target) => (
+                  <p class="mt-3 text-sm text-warning" data-testid="saved-filter-replace-warning">
+                    {sprintf(
+                      /* translators: %s: the saved view's name */
+                      __(
+                        'This replaces what “%s” shows, for everyone. Its name, color and pin stay.',
+                      ),
+                      target().name,
+                    )}
+                  </p>
+                )}
+              </Show>
 
               <p class="mt-3 text-xs text-text-muted">
                 {sprintf(
@@ -319,10 +394,16 @@ export function SavedFilterControl(props: SavedFilterControlProps) {
               <Button
                 variant="primary"
                 size="sm"
-                disabled={draftName().trim() === '' || busy()}
+                data-testid="saved-filter-save"
+                disabled={(replaceTarget() === undefined && draftName().trim() === '') || busy()}
                 onClick={() => void save()}
               >
-                {__('Save view')}
+                {replaceTarget() !== undefined
+                  ? _x(
+                      'Replace view',
+                      'saved view: overwrite the chosen view with the current filters',
+                    )
+                  : __('Save view')}
               </Button>
             </ModalFooter>
           </ModalPanel>
@@ -368,12 +449,12 @@ export function SavedFilterControl(props: SavedFilterControlProps) {
                           style={paletteStyle(filter.colorId)}
                           aria-label={sprintf(
                             /* translators: %s: the saved view's name */
-                            __('Change the colour of %s'),
+                            __('Change the color of %s'),
                             filter.name,
                           )}
-                          aria-expanded={recolouring() === filter.id ? 'true' : 'false'}
+                          aria-expanded={recoloring() === filter.id ? 'true' : 'false'}
                           onClick={() =>
-                            setRecolouring((open) => (open === filter.id ? null : filter.id))
+                            setRecoloring((open) => (open === filter.id ? null : filter.id))
                           }
                         />
                         <span class="grow truncate text-sm">{filter.name}</span>
@@ -445,12 +526,12 @@ export function SavedFilterControl(props: SavedFilterControlProps) {
                         </For>
                       </ul>
 
-                      <Show when={recolouring() === filter.id}>
+                      <Show when={recoloring() === filter.id}>
                         <div class="rounded border border-border p-2">
                           <span class="block text-xs text-text-muted">
                             {sprintf(
                               /* translators: %s: the saved view's name */
-                              __('Colour for %s'),
+                              __('Color for %s'),
                               filter.name,
                             )}
                           </span>
@@ -458,10 +539,10 @@ export function SavedFilterControl(props: SavedFilterControlProps) {
                             <PaletteSwatchPicker
                               value={filter.colorId}
                               onPick={(colorId) => {
-                                setRecolouring(null);
+                                setRecoloring(null);
                                 void guard(props.onSetColor(filter, colorId));
                               }}
-                              ariaLabel={__('Colour for this saved view')}
+                              ariaLabel={__('Color for this saved view')}
                             />
                           </div>
                         </div>

@@ -27,7 +27,7 @@ import type { ProductLink } from './productActionsMenu';
 export type ReorderStatus = 'below' | 'at' | 'above' | 'none';
 
 /**
- * One row in the workbench grid — a stock-bearing subject with its catalogue, stock, and taxonomy
+ * One row in the workbench grid — a stock-bearing subject with its catalog, stock, and taxonomy
  * columns already resolved by the server. Fields are grouped by concern; nullable fields carry
  * `null` when the underlying data is unknown or the concern doesn't apply to the row.
  *
@@ -48,7 +48,7 @@ export interface WorkbenchRow {
    *  route is appended client-side. Same `{label, url, kind}` shape as a dispatch order line. */
   links?: ProductLink[];
 
-  // ── Catalogue (some editable, some read-only depending on the surface) ──
+  // ── Catalog (some editable, some read-only depending on the surface) ──
   name: string;
   sku: string;
   /** GTIN / UPC / EAN / ISBN — WC `_global_unique_id`. Server column id `gtin`. */
@@ -147,7 +147,7 @@ export interface WorkbenchPage {
  *
  * The grid's merge policy: **staged edits win**. A field patch that lands on a cell the operator
  * has dirty is silently dropped from the visible value; the underlying `original` still updates so
- * a subsequent save-review can compare against the fresh baseline. This is MVP behaviour; a later
+ * a subsequent save-review can compare against the fresh baseline. This is MVP behavior; a later
  * pass can add a "server value changed" indicator on staged cells.
  */
 export interface RowPatch {
@@ -183,7 +183,7 @@ export interface WorkbenchApplyEdit {
   column_id: string;
   original: unknown;
   new: unknown;
-  /** Sign-aware disposition for the on-hand `total` edit (v3); null / absent for catalogue edits. */
+  /** Sign-aware disposition for the on-hand `total` edit (v3); null / absent for catalog edits. */
   disposition?: string | null;
 }
 
@@ -264,9 +264,9 @@ export interface WorkbenchHandles {
    * Indices are the wrong currency across a change to the displayed set: folding a group renumbers
    * every row beneath it, so a host that wants to preserve a selection has to name what it selected,
    * not where it was. Cells whose row is no longer displayed — or whose column is no longer visible —
-   * are dropped, which is exactly the behaviour a collapse wants and needs no special case.
+   * are dropped, which is exactly the behavior a collapse wants and needs no special case.
    *
-   * `active` is honoured when that cell survived; otherwise the cursor falls to the selection's
+   * `active` is honored when that cell survived; otherwise the cursor falls to the selection's
    * top-left.
    */
   selectCells: (cells: readonly SelectedCellRef[], active?: SelectedCellRef | null) => void;

@@ -45,7 +45,12 @@ import {
 import { Button } from './Button';
 import { TableViewIcon, RecordViewIcon, ColumnsSettingsIcon, GearIcon } from './icons';
 import { useSurface } from './surfaceCtx';
-import { createInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/solid-query';
+import {
+  createInfiniteQuery,
+  createQuery,
+  useQueryClient,
+  type InfiniteData,
+} from '@tanstack/solid-query';
 import type { SortingState, VisibilityState, RowSelectionState } from '@tanstack/solid-table';
 import { __, _n, _x, formatNumber, sprintf } from '@invflux/i18n';
 import {
@@ -73,7 +78,7 @@ import { pollingTransport, type LiveUpdatesTransport } from './liveUpdates';
 import { pendingCellKey, useDirtyCells } from './grid/useDirtyCells';
 import { mergeRefreshedRows, rowsToRefresh } from './grid/rowRefresh';
 import { cascadeAllocate, type SlotDeltas } from './onHandCascade';
-import { CorrectionReviewModal } from './CorrectionReviewModal';
+import { CorrectionReviewModal, type ReceiptOffer } from './CorrectionReviewModal';
 import type {
   CorrectionReviewGroup,
   CorrectionReviewRow,
@@ -110,12 +115,12 @@ import type { GridFilterMeta } from './filterBridge';
 // Surface configuration contract
 // ---------------------------------------------------------------------------
 
-/** Capability flags the grid honours (paste gating, drill-down writes, …). Superset-safe: a surface
+/** Capability flags the grid honors (paste gating, drill-down writes, …). Superset-safe: a surface
  *  that can't do a thing passes `false` and the corresponding affordance degrades to read-only. */
 export interface WorkbenchGridCapabilities {
   viewStock: boolean;
   onhandCorrect: boolean;
-  /** Edit WC catalogue data (e.g. grouped-product members via the Type drill-down). */
+  /** Edit WC catalog data (e.g. grouped-product members via the Type drill-down). */
   editProducts: boolean;
   /**
    * Manage store-wide settings — gates renaming a column in the picker.
@@ -125,6 +130,12 @@ export interface WorkbenchGridCapabilities {
    * they never use. Absent therefore means the pen never appears, which is the safe direction.
    */
   manageSettings?: boolean;
+  /**
+   * May open a goods-receiving session — the authority to bring stock in, which is a different effect
+   * from correcting on-hand and is checked separately (the server re-checks it on the create).
+   * Optional, absent meaning "no": without it the review modal never offers the receipt hand-off.
+   */
+  receiveStock?: boolean;
 }
 
 /** The WordPress bootstrap context every surface hands the grid: REST root + nonce + capabilities. */
@@ -143,6 +154,12 @@ export interface WorkbenchGridContext {
 export interface WorkbenchGridProps {
   /** REST root + nonce + capability flags from the host's page bootstrap. */
   ctx: WorkbenchGridContext;
+  /**
+   * Take the operator to the goods-receiving session the review just opened for a set of increases.
+   * With `ctx.capabilities.receiveStock`, this is what makes the review offer "Enter as a Goods
+   * Receipt": a surface with no receiving screen to land on omits it and never sees the offer.
+   */
+  onOpenReceipt?: (sessionId: number) => void;
   /**
    * Namespaces every localStorage key the grid persists (column visibility / order / sizing /
    * sections + the DataGrid display settings). Distinct per surface so the embedded product tab and
@@ -276,7 +293,7 @@ export interface WorkbenchGridProps {
   transformRows?: (rows: WorkbenchRow[]) => WorkbenchRow[];
   /** Per-datatype view/edit component choice, forwarded to the DataGrid (plug-in component selection). */
   componentChoiceId?: (dataType: string, role: DataGridComponentRole) => string | undefined;
-  /** Per-row `<tr>` attributes — e.g. grey/annotate brought-with context rows (`matched === false`). */
+  /** Per-row `<tr>` attributes — e.g. gray/annotate brought-with context rows (`matched === false`). */
   rowAttrs?: (row: WorkbenchRow) => RowAttrs;
   /** Host-contributed right-click context-menu items, appended after the grid's own Save/Revert (e.g. a
    *  "Bulk actions" submenu scoped to the cell selection). Items may be submenu parents (`children`). */
@@ -547,7 +564,7 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   // ── Controlled DataGrid state (persisted per surface) ──
   // Only VISIBILITY is ours. This surface seeds an exhaustive visible/hidden map from
   // `defaultVisibleColumnIds` when nothing is stored, and supersedes the grid's own
-  // `visibleByDefault` pass — behaviour the grid cannot infer, so we own the piece and pass it down.
+  // `visibleByDefault` pass — behavior the grid cannot infer, so we own the piece and pass it down.
   // Order, widths, folded sections and pins are the grid's, stored under `scope`; owning them here
   // bought nothing and was how pinning came to exist on this surface alone.
   const [columnVisibility, setColumnVisibility] = createSignal<VisibilityState>(
@@ -657,7 +674,7 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
 
   /**
    * Re-read just the rows a save touched and merge them into the loaded pages in place — never a
-   * reload of every loaded page, whose cost (the list query's catalogue-wide work, then every row
+   * reload of every loaded page, whose cost (the list query's catalog-wide work, then every row
    * again over the wire) has nothing to do with what was saved. Which rows: see `rowsToRefresh`.
    *
    * Read by id with the page's filters and the host's preset left out: a saved row that no longer
@@ -833,7 +850,7 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
    * rename is exactly `label !== defaultLabel`.
    *
    * The response carries the map the server actually stored, and the labels are recomputed from
-   * that rather than from the text that was typed. The server owns the normalisation — trimming,
+   * that rather than from the text that was typed. The server owns the normalization — trimming,
    * dropping a blank, dropping one equal to the shipped name — and re-deriving it here would be a
    * second copy of those rules, drifting the moment either side changed.
    */
@@ -1288,8 +1305,119 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
    * teardown would immediately undo a focus moved now.
    */
   function closeSaveReview(): void {
+    receiptOpenKey = undefined;
     setShowReviewModal(false);
     queueMicrotask(() => apiFocusGrid());
+  }
+
+  // ── Goods-receipt hand-off ────────────────────────────────────────────────────────────────────
+  // A positive on-hand correction cannot say whether the units were found on the shelf or arrived
+  // undocumented, and never asks what they cost. A receiving session asks both, so when a review holds
+  // an increase the modal offers to open one pre-filled with the increases, and only those staged
+  // cells go away; decreases and other columns stay staged.
+  const receiptEnabled = (): boolean =>
+    (props.ctx.capabilities.receiveStock ?? false) && props.onOpenReceipt !== undefined;
+  const [receiptPending, setReceiptPending] = createSignal(false);
+  // Minted once per hand-off and resent on every retry, so a create whose response was lost returns the
+  // session it opened instead of opening a second one. `crypto.randomUUID` is secure-context only
+  // (the dev host is plain http), so build the token from `getRandomValues`, which is not.
+  let receiptOpenKey: string | undefined;
+  const mintOpenKey = (): string => {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  };
+
+  const receiptContext = createQuery(() => ({
+    queryKey: ['receiving', 'context'] as const,
+    queryFn: () =>
+      getJson<{
+        reasons: Array<{ value: string; label: string; hint?: string; costEntry: string }>;
+        canStateCost?: boolean;
+      }>(props.ctx, '/receiving/context'),
+    enabled: receiptEnabled() && showReviewModal(),
+    staleTime: 5 * 60_000,
+  }));
+  // Every reason the server states, in its order — except that "opening balance" goes last and only
+  // appears when the first stock is what is being entered: each reviewed row has nothing on hand and no
+  // weighted-average cost, i.e. no costed history. (The row carries no ledger, so this is a proxy; the
+  // server accepts the reason either way, so this guards a slip rather than enforcing anything.) A
+  // reason the server cannot cost yet comes through `unsupported` and is shown disabled with its hint.
+  // A customer return has no entry here: it belongs on its order as a correction.
+  const noCostedHistory = (): boolean => {
+    const byId = new Map(rows().map((r) => [r.subjectId, r]));
+    const ids = [...dirty.dirtyCells().keys()];
+    return ids.length > 0 && ids.every((id) => (byId.get(id)?.total ?? 1) === 0 && byId.get(id)?.wac == null);
+  };
+  const receiptOffer = createMemo<ReceiptOffer | undefined>(() => {
+    if (!receiptEnabled() || receiptContext.isError) return undefined;
+    const served = receiptContext.data?.reasons ?? [];
+    const reasons = [
+      ...served.filter((r) => r.value !== 'opening_balance'),
+      ...(noCostedHistory() ? served.filter((r) => r.value === 'opening_balance') : []),
+    ].map((r) => {
+      // A reason that requires a cost is refused (403) for someone who may not state one, so it is shown
+      // disabled with the reason why — offering it would only fail after the operator had chosen it.
+      const lacksCostAuthority = r.costEntry === 'required' && !(receiptContext.data?.canStateCost ?? false);
+      return {
+        value: r.value,
+        label: r.label,
+        hint: lacksCostAuthority
+          ? `${r.hint ?? ''} ${__('This reason needs a cost, and you are not allowed to state one.')}`.trim()
+          : r.hint,
+        disabled: r.costEntry === 'unsupported' || lacksCostAuthority,
+      };
+    });
+    return { reasons, defaultReason: 'found_stock', onOpen: (reason) => void openAsReceipt(reason) };
+  });
+
+  async function openAsReceipt(reason: string): Promise<void> {
+    if (receiptPending()) return;
+    // The on-hand INCREASES, and only those. A decrease, and every other staged column, stays staged to
+    // be applied through a normal review. An increase already in flight blocks the hand-off: moving
+    // it would send units a request is already carrying.
+    const lines: Array<{ subjectId: number; received: number }> = [];
+    const moved: Array<{ subjectId: number; columnId: string }> = [];
+    for (const [subjectId, row] of dirty.dirtyCells()) {
+      const edit = row.cells.get('total');
+      if (edit === undefined) continue;
+      const delta =
+        typeof edit.new === 'number' && typeof edit.original === 'number'
+          ? edit.new - edit.original
+          : 0;
+      if (delta <= 0) continue;
+      if (dirty.isPending(subjectId, 'total')) {
+        setSaveError(__('Wait for the pending save to finish, then enter these as a Goods Receipt.'));
+        return;
+      }
+      lines.push({ subjectId, received: delta });
+      moved.push({ subjectId, columnId: 'total' });
+    }
+    if (lines.length === 0) return;
+
+    receiptOpenKey ??= mintOpenKey();
+    setSaveError(null);
+    setReceiptPending(true);
+    try {
+      const { session } = await postJson<{ session: { id: number } }>(
+        props.ctx,
+        '/receiving/sessions',
+        // Never `unitCost`: the cost is stated by whoever posts the receipt, on the receiving page.
+        { reason, openKey: receiptOpenKey, lines },
+      );
+      // The session now holds these units. Keeping them staged would be a second live copy that could
+      // be applied as a correction too, booking the same units twice — so exactly those cells go, in
+      // this same tick. Every other staged value stays as it was.
+      dirty.revert(moved);
+      receiptOpenKey = undefined;
+      setShowReviewModal(false);
+      props.onOpenReceipt?.(session.id);
+    } catch (error) {
+      // A failed create keeps the deltas: clearing them would lose counts that now exist nowhere.
+      setSaveError(error instanceof Error ? error.message : __('Could not open the Goods Receipt.'));
+    } finally {
+      setReceiptPending(false);
+    }
   }
 
   function discardAll(): void {
@@ -1509,7 +1637,7 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
       // sticky reject-all toast); the grid still surfaces them inline + on the Total cell ring below.
       if (conflicts.length > 0) props.onConflicts?.(conflicts);
       // Re-read the rows this save sent — plus the variations of any saved parent, which show its
-      // inherited fields — and merge them in place: the server may have normalised a value it
+      // inherited fields — and merge them in place: the server may have normalized a value it
       // accepted, and a column derived from an edited one only changes here. Stock is delta-first,
       // so the frozen delta re-bases over the refreshed live total for conflicted rows. Unanswered
       // rows are read back too: their request may have applied anyway.
@@ -1559,7 +1687,7 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   // ── Layout: horizontal grid vs transposed "record" mode (fields → rows, records → columns). ──
   // 'auto' → record mode for a small record set (the embed's one product family — a simple product,
   // or a variable parent + its handful of variations side-by-side); horizontal for many records. The
-  // toolbar toggle overrides. Record mode is a DataGrid layout, so all its cell behaviour carries over.
+  // toolbar toggle overrides. Record mode is a DataGrid layout, so all its cell behavior carries over.
   const RECORD_MODE_MAX = 12;
   const [layoutPref, setLayoutPref] = createSignal<'auto' | 'grid' | 'record'>(
     props.defaultLayout ?? 'auto',
@@ -1833,7 +1961,7 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
    * page-level setting whose effect is confined to a single column has to be found by elimination.
    * On the header it is where the operator is already looking when the names read wrong.
    *
-   * Shown whenever the column is, including on a catalogue with no variable products: it is a stored
+   * Shown whenever the column is, including on a catalog with no variable products: it is a stored
    * preference, not a command against the loaded rows, and gating it on what happens to be on screen
    * would make it appear and disappear as the operator folds a family open.
    */
@@ -1939,7 +2067,7 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   };
   props.apiRef?.(handles);
 
-  // Static bespoke (host-rendered) columns — checkbox, name+link, image, catalogue/pricing scalars.
+  // Static bespoke (host-rendered) columns — checkbox, name+link, image, catalog/pricing scalars.
   // (Orders is NOT here — it's a generic `link`-datatype server column now. The ledger link lives in
   // the name cell's product-actions menu, not a column.) Editable scalars + name render their staged
   // value in amber via the dirty store.
@@ -2002,7 +2130,7 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
       <Show when={props.showToolbar !== false}>
         {/* Left: the layout toggle + the host's toolbarExtra (the "manage product in workbench" link),
             both icon-sized so they fit inline at any width. Right cluster (ml-auto): Columns — its
-            natural neighbour is Save — then Save. flex-wrap is a safety net for an extreme-narrow embed. */}
+            natural neighbor is Save — then Save. flex-wrap is a safety net for an extreme-narrow embed. */}
         <div class="flex flex-wrap items-center gap-2 py-2">
           {/* Layout toggle — flips the horizontal table ⇄ transposed record matrix. The icon shows the
               layout you'll switch TO. Shown for a small record set, where record mode reads best. */}
@@ -2275,6 +2403,8 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
           space={stableTaxonomySpace()}
           error={saveError()}
           mount={portalRoot}
+          receipt={receiptOffer()}
+          pending={receiptPending()}
           onConfirm={(reason, dispositions) => void commitSave(reason, dispositions)}
           onCancel={closeSaveReview}
           onDiscard={discardAll}

@@ -113,7 +113,7 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
   // line that already received stock keeps showing its good total (and hence a variance) even before this
   // session's cell is touched. Blank only when there is nothing at all: no earlier receipt AND uncounted here.
   const goodFor = (row: PoLine): number | null => {
-    const s = sessionGoodFor(row.id);
+    const s = sessionGoodFor(row.subjectId);
     if (null === s && !row.qtyReceived) return null;
     return row.qtyReceived + (s ?? 0);
   };
@@ -360,7 +360,7 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
       ch.display({
         id: 'received',
         header: () => _x('Receiving', 'goods-receipt column: units arriving in this delivery'),
-        cell: (info) => <NumCell value={recvFor(info.row.original.id)} />,
+        cell: (info) => <NumCell value={recvFor(info.row.original.subjectId)} />,
       }) as ColumnDef<PoLine, unknown>,
     ],
     [
@@ -368,7 +368,7 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
       ch.display({
         id: 'damaged',
         header: () => __('Damaged'),
-        cell: (info) => <NumCell value={dmgFor(info.row.original.id)} />,
+        cell: (info) => <NumCell value={dmgFor(info.row.original.subjectId)} />,
       }) as ColumnDef<PoLine, unknown>,
     ],
     [
@@ -421,9 +421,9 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
       case 'received_so_far':
         return row.qtyReceived;
       case 'received':
-        return recvFor(row.id);
+        return recvFor(row.subjectId);
       case 'damaged':
-        return dmgFor(row.id);
+        return dmgFor(row.subjectId);
       case 'good':
         return goodFor(row);
       case 'variance':
@@ -435,11 +435,11 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
 
   // A counted Received/Damaged cell is "staged" (yellow) until the session is committed.
   const getStagedValue = (row: PoLine, columnId: string): StagedCell => {
-    if ('received' === columnId && null !== recvFor(row.id)) {
-      return { staged: true, value: recvFor(row.id) };
+    if ('received' === columnId && null !== recvFor(row.subjectId)) {
+      return { staged: true, value: recvFor(row.subjectId) };
     }
-    if ('damaged' === columnId && null !== dmgFor(row.id)) {
-      return { staged: true, value: dmgFor(row.id) };
+    if ('damaged' === columnId && null !== dmgFor(row.subjectId)) {
+      return { staged: true, value: dmgFor(row.subjectId) };
     }
     return { staged: false, value: undefined };
   };
@@ -474,7 +474,7 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
       };
     }
     if ('damaged' === meta.id) {
-      const recv = recvFor(row.id) ?? 0;
+      const recv = recvFor(row.subjectId) ?? 0;
       return { ...meta, editorConfig: { dotDefault: recv, max: recv, ariaLabel: __('Damaged') } };
     }
     return meta;
@@ -486,17 +486,17 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
       // A typed 0 STAGES (yellow) — for the GR worker it's a progress signal ("checked, none here"),
       // distinct from an unreviewed blank. System-side a staged 0 records no receipt line, same as blank;
       // the difference is purely the worker's review-progress marker.
-      props.setRecv(row.id, v);
+      props.setRecv(row.subjectId, v);
     } else if ('damaged' === columnId) {
-      props.setDmg(row.id, v);
+      props.setDmg(row.subjectId, v);
     }
   };
 
   const clearCell = (row: PoLine, columnId: string): void => {
     if ('received' === columnId) {
-      props.setRecv(row.id, null);
+      props.setRecv(row.subjectId, null);
     } else if ('damaged' === columnId) {
-      props.setDmg(row.id, null);
+      props.setDmg(row.subjectId, null);
     }
   };
   const onClearCells = (cells: Array<{ row: PoLine; columnId: string }>): void => {
@@ -573,7 +573,7 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
         gridApi?.getSelectableColumnIds() ?? [],
       );
       if (undefined !== colId) {
-        gridApi?.focusCellById(String(row.id), colId);
+        gridApi?.focusCellById(String(row.subjectId), colId);
         return;
       }
     }
@@ -590,7 +590,7 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
     resolveCommitNav({
       gridId: RECEIVE_GRID_ID,
       columnId,
-      rowId: String(row.id),
+      rowId: String(row.subjectId),
       move,
       filterText: filterText(),
       visibleCount: visibleLines().length,
@@ -598,7 +598,7 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
       // By id, not index: clearing a filter changes which row sits where, so a rule that clears it
       // first would otherwise re-anchor onto whatever row took the old index.
       selectCellByRowId: (rowId, colId) => {
-        const rowIndex = visibleLines().findIndex((l) => String(l.id) === rowId);
+        const rowIndex = visibleLines().findIndex((l) => String(l.subjectId) === rowId);
         const col = (gridApi?.getSelectableColumnIds() ?? []).indexOf(colId);
         if (rowIndex >= 0 && col >= 0) setCellSelection(selectCell({ row: rowIndex, col }));
       },
@@ -652,7 +652,7 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
       <div class="flex max-h-[70vh] flex-col pt-2">
         <DataGrid<PoLine>
           rows={visibleLines}
-          getRowId={(l) => String(l.id)}
+          getRowId={(l) => String(l.subjectId)}
           columnMetas={columnMetas}
           // This grid builds its own column metas, so it names its own group (the shared DataGrid
           // carries no group vocabulary — labels always come from whoever declares the columns).
@@ -757,7 +757,7 @@ function ExpectedCell(props: { expected: number | null; ordered: number }): JSX.
 }
 
 /**
- * GR variance cell: signed `{abs} ({pct})` of good-so-far vs the chosen baseline — coloured short (red)
+ * GR variance cell: signed `{abs} ({pct})` of good-so-far vs the chosen baseline — colored short (red)
  * / over (amber) / on-target (neutral), blank until the line is counted. Guards the percentage against a
  * 0 baseline. A per-line fallback to ordered (when "vs expected" has no expected set) is flagged with a
  * subtle tag, so a `0` never misreads as "matched what they promised".

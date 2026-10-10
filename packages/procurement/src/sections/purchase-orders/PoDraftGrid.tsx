@@ -19,7 +19,7 @@ import { createEffect, createMemo, createSignal, type JSX, Show } from 'solid-js
 import { useProcurement } from '../../context';
 import { createApi } from '../../lib/api';
 import { OnOrderDrilldown, type OnOrderResponse } from '../../components/OnOrderDrilldown';
-import { registerCataloguePickerEditor } from '../../grid/cataloguePickerEditor';
+import { registerCatalogPickerEditor } from '../../grid/catalogPickerEditor';
 import { registerReceiptEditor } from '../../grid/receiptEditor';
 import { firstEditableColumnId } from '../../grid/editableColumn';
 import { fuzzyMatches } from '../../grid/fuzzyMatch';
@@ -45,14 +45,14 @@ registerReceiptEditor();
 
 /** Sentinel id for the always-present append row (real ids are positive; optimistic temps negative). */
 const DRAFT_ID = 0;
-/** Custom editor datatype for the append-row's product cell (the catalogue search-combobox). */
-const PRODUCT_EDITOR_TYPE = 'text:catalogue-add';
+/** Custom editor datatype for the append-row's product cell (the catalog search-combobox). */
+const PRODUCT_EDITOR_TYPE = 'text:catalog-add';
 
 /** Patch a single editable field of an existing draft line (immediate, optimistic — the host owns it). */
 export interface DraftLinePatch {
   /** How many to order; `null` returns the line to the suggested replenishment quantity. */
   qty_requested?: number | null;
-  /** The price before any discount; `null` returns the line to the catalogue price. */
+  /** The price before any discount; `null` returns the line to the catalog price. */
   unit_cost?: string | null;
   /** The supplier's discount in percent, taken off `unit_cost`; `null` removes it. */
   discount_pct?: string | null;
@@ -125,13 +125,13 @@ function colMeta(
 interface PoDraftGridProps {
   lines: PoLine[];
   costDecimals: number;
-  /** Catalogue lookups (MOQ / case-pack live on the supplier product, not the PO line). */
+  /** Catalog lookups (MOQ / case-pack live on the supplier product, not the PO line). */
   moqFor: (subjectId: number) => number | null;
   casePackFor: (subjectId: number) => number | null;
-  /** Addable catalogue products (supplier catalogue minus products already on the PO) for the append row. */
+  /** Addable catalog products (supplier catalog minus products already on the PO) for the append row. */
   addOptions: () => AddOption[];
   /**
-   * Fired when the append row's picker opens. The catalogue behind {@link addOptions} is fetched on
+   * Fired when the append row's picker opens. The catalog behind {@link addOptions} is fetched on
    * first use rather than with the page — most orders are generated and never have a product added
    * by hand — so this is what asks for it.
    */
@@ -151,29 +151,29 @@ interface PoDraftGridProps {
    *  replenishment), resolving to the new line's id (null on failure) so the grid can focus its qty. */
   onAddLine: (subjectId: number) => Promise<number | null>;
   /** Immediate-commit seam: persist one changed field of a line (optimistic). */
-  onEdit: (lineId: number, patch: DraftLinePatch) => void;
+  onEdit: (subjectId: number, patch: DraftLinePatch) => void;
   /**
    * Many cells from one gesture — a cleared selection, a bulk edit. Distinct from calling
    * {@link onEdit} in a loop: the host paints the whole set once and writes it as one request,
    * where the loop repaints and writes per cell and stalls the page on a large selection.
    */
-  onEditMany: (edits: Array<{ id: number; patch: DraftLinePatch }>) => void;
+  onEditMany: (edits: Array<{ subjectId: number; patch: DraftLinePatch }>) => void;
   /** Remove the given lines (the right-click "Delete N selected rows"). */
-  onRemoveMany: (lineIds: number[]) => void;
+  onRemoveMany: (subjectIds: number[]) => void;
 }
 
 /**
  * The draft PO line editor on the shared DataGrid. Immediate-commit: every cell edit (qty / unit cost /
  * note) persists at once via {@link PoDraftGridProps.onEdit} (optimistic) — no staged dirty model, so the
  * grid reads the freshly-updated value straight back through `getValue`. Quick-filter + persisted column
- * layout mirror the reception grid; the catalogue add-picker + paste import stay around the grid as chrome.
+ * layout mirror the reception grid; the catalog add-picker + paste import stay around the grid as chrome.
  *
  * **Immediate is not the same as one-request-per-cell.** The host coalesces writes behind a short
  * debounce, so a held key or a gesture over a selection settles as one request; a gesture that spans
  * many cells hands them over together ({@link PoDraftGridProps.onEditMany}) so the grid repaints once
  * rather than once per cell. Staging was considered and rejected for this grid: a draft PO already
  * commits at numbering, so a per-cell "not saved yet" would compete with the boundary the document
- * already has. The catalogue grid stages precisely because it has no such boundary.
+ * already has. The catalog grid stages precisely because it has no such boundary.
  *
  * Stage 1: existing-line editing. Stage 2 (this file) adds the MS-Access-style append-row: a permanent
  * blank row at the bottom whose product cell is a portaled search-combobox; picking a product focuses
@@ -210,7 +210,7 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
     };
   };
 
-  // Effective cost = the line's own unit cost, or the inherited catalogue price when unset.
+  // Effective cost = the line's own unit cost, or the inherited catalog price when unset.
   const effectiveCost = (l: PoLine): string | null => l.unitCost ?? l.catalogUnitCost;
   // Effective qty, the same shape one field over: the typed quantity, or the replenishment suggestion
   // it inherits while the cell is empty. 0 only when there is no suggestion either — a product with no
@@ -232,15 +232,14 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
   );
 
   // ── Append row (MS-Access style) ────────────────────────────────────────────────────────────────
-  // A synthetic PoLine (id = DRAFT_ID) always appended last, exempt from the quick filter. It's a
+  // A synthetic PoLine (subjectId = DRAFT_ID, which no real product has) always appended last, exempt from the quick filter. It's a
   // *native* grid row: only the product cell is editable, through the grid's own editor system (the
-  // catalogue picker registered here). Picking a product persists the line — the server auto-fills the
+  // catalog picker registered here). Picking a product persists the line — the server auto-fills the
   // quantity + cost via replenishment — and focus jumps into the new line's qty editor.
-  registerCataloguePickerEditor();
+  registerCatalogPickerEditor();
 
   const draftLine = (): PoLine => ({
-    id: DRAFT_ID,
-    subjectId: 0,
+    subjectId: DRAFT_ID,
     postId: null,
     productLabel: '',
     sku: null,
@@ -267,11 +266,11 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
     catalogUnitCost: null,
     note: null,
   });
-  const isDraft = (l: PoLine): boolean => DRAFT_ID === l.id;
+  const isDraft = (l: PoLine): boolean => DRAFT_ID === l.subjectId;
   const gridRows = createMemo<PoLine[]>(() => [...visibleLines(), draftLine()]);
 
   // Persist the picked product, then drop into the new line's qty editor once it has rendered (the
-  // server filled a sensible replenishment qty + the catalogue cost; the operator tweaks the qty).
+  // server filled a sensible replenishment qty + the catalog cost; the operator tweaks the qty).
   const addAndEdit = async (subjectId: number): Promise<void> => {
     const newId = await props.onAddLine(subjectId);
     if (null === newId) return;
@@ -290,7 +289,7 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
       id: 'product',
       label: __('Product'),
       description: __(
-        'Product name. Use the blank bottom row to add another product from the supplier catalogue.',
+        'Product name. Use the blank bottom row to add another product from the supplier catalog.',
       ),
       dataType: PRODUCT_EDITOR_TYPE,
       copyable: true,
@@ -377,7 +376,7 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
       id: 'unit_cost',
       label: __('Unit cost'),
       description: __(
-        'Cost per unit, before any supplier discount. Left blank it inherits the supplier catalogue price (shown faded) and is frozen at submission.',
+        'Cost per unit, before any supplier discount. Left blank it inherits the supplier catalog price (shown faded) and is frozen at submission.',
       ),
       dataType: 'decimal:money',
       kind: 'editable',
@@ -453,7 +452,7 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
           <Show
             when={!isDraft(info.row.original)}
             fallback={
-              // Display only — the grid swaps in the catalogue-picker editor (PRODUCT_EDITOR_TYPE) on edit.
+              // Display only — the grid swaps in the catalog-picker editor (PRODUCT_EDITOR_TYPE) on edit.
               <span class="italic text-text-muted">{__('＊ Add a product ＊')}</span>
             }
           >
@@ -635,7 +634,7 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
   // ── DataGrid state ────────────────────────────────────────────────────────────────────────────
   const [sorting, setSorting] = createSignal<SortingState>([]);
   // Versioned: a saved order predating a column would show that column at the far end, away from
-  // the neighbours it belongs with. Bump the suffix when a column joins the middle of the order.
+  // the neighbors it belongs with. Bump the suffix when a column joins the middle of the order.
   const [rowSelection, setRowSelection] = createSignal<RowSelectionState>({});
   const [cellSelection, setCellSelection] = createSignal<SelectionState>(EMPTY_SELECTION);
 
@@ -685,7 +684,7 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
   // Immediate-commit: no staged dirty model — the optimistic patch updates the cache, the grid re-reads.
   const getStagedValue = (): StagedCell => ({ staged: false, value: undefined });
   const canEdit = (row: PoLine, meta: GridColumnMeta): boolean =>
-    // The append row is editable only at its product cell (the catalogue picker); real rows edit
+    // The append row is editable only at its product cell (the catalog picker); real rows edit
     // qty / cost / note.
     isDraft(row) ? 'product' === meta.id : EDITABLE_COLS.has(meta.id);
   const resolveClearedValue = (
@@ -693,7 +692,7 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
     meta: GridColumnMeta,
   ): { ok: boolean; value: unknown } =>
     // All four are nullable on a draft, and an emptied cell means the same thing in each: inherit.
-    // Qty clears to the replenishment suggestion, cost to the catalogue price.
+    // Qty clears to the replenishment suggestion, cost to the catalog price.
     'unit_cost' === meta.id ||
     'discount_pct' === meta.id ||
     'note' === meta.id ||
@@ -701,7 +700,7 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
       ? { ok: true, value: null }
       : { ok: false, value: null };
 
-  // The product cell's editor needs the live catalogue + portal target + supplier label; inject them as
+  // The product cell's editor needs the live catalog + portal target + supplier label; inject them as
   // editorConfig for the append row only (real rows have no editable product cell).
   const resolveEditorMeta = (meta: GridColumnMeta, row: PoLine): GridColumnMeta => {
     if (isDraft(row) && 'product' === meta.id) {
@@ -729,23 +728,23 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
 
   const onStageEdit = (row: PoLine, columnId: string, _original: unknown, next: unknown): void => {
     if (isDraft(row) && 'product' === columnId) {
-      // The catalogue picker committed a product → persist the line + jump into its qty.
+      // The catalog picker committed a product → persist the line + jump into its qty.
       const opt = next as SearchSelectOption | null;
       if (null !== opt) void addAndEdit(Number(opt.value));
     } else if ('qty_requested' === columnId) {
-      props.onEdit(row.id, {
+      props.onEdit(row.subjectId, {
         qty_requested: null === next || undefined === next || '' === next ? null : Number(next),
       });
     } else if ('unit_cost' === columnId) {
-      props.onEdit(row.id, {
+      props.onEdit(row.subjectId, {
         unit_cost: null === next || undefined === next || '' === next ? null : String(next),
       });
     } else if ('discount_pct' === columnId) {
-      props.onEdit(row.id, {
+      props.onEdit(row.subjectId, {
         discount_pct: null === next || undefined === next || '' === next ? null : String(next),
       });
     } else if ('note' === columnId) {
-      props.onEdit(row.id, {
+      props.onEdit(row.subjectId, {
         note: null === next || undefined === next || '' === next ? null : String(next),
       });
     }
@@ -765,16 +764,16 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
     };
 
     for (const { row, columnId } of cells) {
-      if ('unit_cost' === columnId) add(row.id, { unit_cost: null });
-      else if ('discount_pct' === columnId) add(row.id, { discount_pct: null });
-      else if ('note' === columnId) add(row.id, { note: null });
+      if ('unit_cost' === columnId) add(row.subjectId, { unit_cost: null });
+      else if ('discount_pct' === columnId) add(row.subjectId, { discount_pct: null });
+      else if ('note' === columnId) add(row.subjectId, { note: null });
       // Clearing a quantity returns it to the suggestion, the way clearing a cost returns it to the
-      // catalogue price. Emptying a cell means "I have no figure of my own here" in every column.
-      else if ('qty_requested' === columnId) add(row.id, { qty_requested: null });
+      // catalog price. Emptying a cell means "I have no figure of my own here" in every column.
+      else if ('qty_requested' === columnId) add(row.subjectId, { qty_requested: null });
     }
 
     if (patches.size > 0) {
-      props.onEditMany([...patches].map(([id, patch]) => ({ id, patch })));
+      props.onEditMany([...patches].map(([subjectId, patch]) => ({ subjectId, patch })));
     }
   };
 
@@ -824,7 +823,7 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
       out.push({
         meta: group.meta,
         targets: rows.map((row) => ({
-          key: row.id,
+          key: row.subjectId,
           row,
           value: bulkBaseValue(row, group.columnId),
         })),
@@ -848,7 +847,7 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
     }
     setBulkEditColumns(null);
     if (patches.size > 0) {
-      props.onEditMany([...patches].map(([id, patch]) => ({ id, patch })));
+      props.onEditMany([...patches].map(([subjectId, patch]) => ({ subjectId, patch })));
     }
   };
 
@@ -881,9 +880,9 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
   // Right-click "Delete N selected rows" — there's no per-row delete column; deletion is driven off the
   // cell selection (distinct rows that have at least one selected cell), excluding the append row.
   const contextMenuExtras = (): DataGridMenuItem[] => {
-    const ids = [...new Set((gridApi?.getSelectedCells() ?? []).map((c) => c.row.id))].filter(
-      (id) => DRAFT_ID !== id,
-    );
+    const ids = [
+      ...new Set((gridApi?.getSelectedCells() ?? []).map((c) => c.row.subjectId)),
+    ].filter((id) => DRAFT_ID !== id);
     if (0 === ids.length) return [];
     return [
       {
@@ -950,7 +949,7 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
         gridApi?.getSelectableColumnIds() ?? [],
       );
       if (undefined !== colId) {
-        gridApi?.focusCellById(String(row.id), colId);
+        gridApi?.focusCellById(String(row.subjectId), colId);
         return;
       }
     }
@@ -994,7 +993,7 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
       >
         <DataGrid<PoLine>
           rows={gridRows}
-          getRowId={(l) => String(l.id)}
+          getRowId={(l) => String(l.subjectId)}
           rowAttrs={(l) => (isDraft(l) ? { class: 'bg-primary/5' } : {})}
           columnMetas={columnMetas}
           getValue={getValue}
@@ -1023,7 +1022,7 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
           setCellSelection={(updater) => setCellSelection(updater)}
           fallback={
             <div class="px-3 py-6 text-sm text-slate-500">
-              {__('No lines yet — use + Add to pick from the supplier catalogue.')}
+              {__('No lines yet — use + Add to pick from the supplier catalog.')}
             </div>
           }
         />
@@ -1051,6 +1050,22 @@ function ProductCell(props: { line: PoLine }): JSX.Element {
   return (
     <div class="font-medium" classList={{ 'text-text-muted italic': !props.line.exists }}>
       {props.line.productLabel}
+      {/* `=== false`, not falsy: null means the server did not ask, which is not "unmanaged". The
+          draft may hold this product — that is the adoption funnel — but numbering will offer to
+          adopt it, so say so here rather than at the last step. */}
+      <Show when={false === props.line.governed}>
+        <span
+          class="ml-2 rounded-sm bg-amber-100 px-1.5 py-0.5 align-middle text-xs font-medium text-amber-800"
+          title={__(
+            'InvFlux does not manage this product yet, so stock cannot be received against it. Numbering this order will offer to put it under management.',
+          )}
+        >
+          {_x(
+            'Not managed',
+            'badge on a purchase order line: InvFlux does not manage this product',
+          )}
+        </span>
+      </Show>
     </div>
   );
 }
@@ -1072,8 +1087,8 @@ function NumCell(props: { value: number | null }): JSX.Element {
  *  turn it red + bold with a native tooltip, one line per broken rule (blank / 0 is never a
  *  violation, and a suggestion is floored and rounded server-side so it cannot break either rule).
  *
- *  A faded quantity is not a faded price, though they look alike: a catalogue price moves when someone
- *  edits the catalogue, while this figure is recomputed from live stock, so it can differ between two
+ *  A faded quantity is not a faded price, though they look alike: a catalog price moves when someone
+ *  edits the catalog, while this figure is recomputed from live stock, so it can differ between two
  *  visits to the same draft. The tooltip says so rather than leaving the merchant to notice. */
 function QtyCell(props: {
   own: number | null;
@@ -1168,8 +1183,8 @@ function OnOrderCell(props: { value: number | null }): JSX.Element {
   );
 }
 
-/** Unit cost: the line's own override in normal text; when unset, the inherited catalogue price shown
- *  faded (italic) — or "—" when the catalogue has no price either. Frozen to the catalogue at submit. */
+/** Unit cost: the line's own override in normal text; when unset, the inherited catalog price shown
+ *  faded (italic) — or "—" when the catalog has no price either. Frozen to the catalog at submit. */
 function UnitCostCell(props: {
   own: string | null;
   inherited: string | null;
@@ -1181,7 +1196,7 @@ function UnitCostCell(props: {
       fallback={
         <span
           class="block text-right italic tabular-nums text-text-muted"
-          title={__('Inherited from the supplier catalogue')}
+          title={__('Inherited from the supplier catalog')}
         >
           {props.fmt(props.inherited)}
         </span>

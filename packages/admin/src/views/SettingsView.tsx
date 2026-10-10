@@ -2,7 +2,7 @@ import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show }
 import { Dynamic } from 'solid-js/web';
 import { createStore, reconcile } from 'solid-js/store';
 import { createQuery, useQueryClient } from '@tanstack/solid-query';
-import { __, _n, _x, sprintf } from '@invflux/i18n';
+import { __, _n, _x, formatDateTime, sprintf } from '@invflux/i18n';
 import {
   ErrorBanner,
   Button,
@@ -652,7 +652,7 @@ export function SettingsView(props: SettingsViewProps) {
                 <h2 class="mb-1 text-lg font-semibold">{osSectionLabel()}</h2>
                 <p class="mb-4 text-sm text-text-muted">
                   {__(
-                    'Map WooCommerce order statuses to InvFlux stock and dispatch semantics. Stock and dispatch meaning is fixed for WooCommerce’s own statuses and set by you for custom ones; the colour is yours on every status.',
+                    'Map WooCommerce order statuses to InvFlux stock and dispatch semantics. Stock and dispatch meaning is fixed for WooCommerce’s own statuses and set by you for custom ones; the color is yours on every status.',
                   )}
                 </p>
                 <OrderStatusSection />
@@ -730,9 +730,9 @@ export function SettingsView(props: SettingsViewProps) {
               if (v.color_id !== r.color_id) {
                 parts.push(
                   null === v.color_id
-                    ? __('colour: default')
+                    ? __('color: default')
                     : sprintf(
-                        __('colour: %s'),
+                        __('color: %s'),
                         TAG_PALETTE[v.color_id]?.name ?? String(v.color_id),
                       ),
                 );
@@ -828,7 +828,7 @@ export function SettingsView(props: SettingsViewProps) {
             <tr>
               <th class="px-3 py-2 font-medium">{__('Status')}</th>
               <th class="px-3 py-2 font-medium">{__('Slug')}</th>
-              <th class="px-3 py-2 font-medium">{__('Colour')}</th>
+              <th class="px-3 py-2 font-medium">{__('Color')}</th>
               {/* "Stock effect", not "Stock bucket": the column says what entering the status
                   does to the order's stock, and a bucket is InvFlux's own vocabulary. */}
               <th class="px-3 py-2 font-medium">
@@ -861,7 +861,7 @@ export function SettingsView(props: SettingsViewProps) {
                         type="button"
                         class="cursor-pointer rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                         aria-expanded={colorOpenFor() === r.status_slug}
-                        aria-label={sprintf(__('Colour for %s'), r.label)}
+                        aria-label={sprintf(__('Color for %s'), r.label)}
                         onClick={() =>
                           setColorOpenFor(colorOpenFor() === r.status_slug ? null : r.status_slug)
                         }
@@ -913,7 +913,7 @@ export function SettingsView(props: SettingsViewProps) {
                       <td class="px-3 pb-3" colSpan={5}>
                         <div class="flex flex-wrap items-start gap-4">
                           <PaletteSwatchPicker
-                            ariaLabel={sprintf(__('Colour for %s'), r.label)}
+                            ariaLabel={sprintf(__('Color for %s'), r.label)}
                             value={osValue(r).color_id}
                             onPick={(id) => setColor(r, id)}
                           />
@@ -929,7 +929,7 @@ export function SettingsView(props: SettingsViewProps) {
                         <Show when={null === osValue(r).color_id}>
                           <p class="mt-2 text-2xs text-text-muted">
                             {__(
-                              'No colour set — this status follows the shipped default, and will keep following it if that default changes.',
+                              'No color set — this status follows the shipped default, and will keep following it if that default changes.',
                             )}
                           </p>
                         </Show>
@@ -1178,7 +1178,9 @@ export function SettingsView(props: SettingsViewProps) {
                         onChange={(e) => setAck(r, e.currentTarget.checked)}
                       />
                     </td>
-                    <td class="px-3 py-2 text-text-muted">{r.last_seen_at ?? __('Never')}</td>
+                    <td class="px-3 py-2 text-text-muted">
+                      {formatDateTime(r.last_seen_at, __('Never'))}
+                    </td>
                   </tr>
                 )}
               </For>

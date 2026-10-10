@@ -5,7 +5,7 @@ import type { OrderAddress } from './types';
  *
  * **This question is answered twice, and the two answers must agree.** The card asks it to decide
  * what to render and what to offer; `CorrectOrderAddress::addressesAgree()` asks it again, from
- * WooCommerce's live order, before honouring a mirrored correction. The server's answer is the one
+ * WooCommerce's live order, before honoring a mirrored correction. The server's answer is the one
  * that binds — it is reading the current document, where the card is reading a page that may be
  * minutes old — so a client that answered more loosely would offer a mirror the server always
  * declines, and one that answered more strictly would hide an affordance that would have worked.

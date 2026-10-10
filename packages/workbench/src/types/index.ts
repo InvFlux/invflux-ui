@@ -166,7 +166,7 @@ export interface WorkbenchApplyResponse {
 export interface WorkbenchCapabilities {
   viewStock: boolean;
   onhandCorrect: boolean;
-  /** Edit WC catalogue data (e.g. grouped product members via the Type drill-down). */
+  /** Edit WC catalog data (e.g. grouped product members via the Type drill-down). */
   editProducts: boolean;
   /**
    * Manage store-wide settings — gates renaming a column in the picker.
@@ -175,6 +175,8 @@ export interface WorkbenchCapabilities {
    * control beside it, so it answers to the settings capability rather than the workbench's own.
    */
   manageSettings?: boolean;
+  /** May open a goods-receiving session (the inventory capability, not the correction one). Absent ⇒ no. */
+  receiveStock?: boolean;
 }
 
 /** Role a registered component plays for a datatype (§5.4). Codecs are not merchant-choosable. */
@@ -185,7 +187,7 @@ export interface WorkbenchContext {
   nonce: string;
   currentUser: { id: number; name: string };
   capabilities: WorkbenchCapabilities;
-  /** Tier-gated UI affordances (greyed-out + upgrade tooltip). The REST layer re-checks server-side. */
+  /** Tier-gated UI affordances (grayed-out + upgrade tooltip). The REST layer re-checks server-side. */
   entitlements?: WorkbenchEntitlements;
   /** Per-datatype merchant choice of component, `{ dataType: { role: componentId } }` (§5.5). */
   componentChoices?: Record<string, Partial<Record<ComponentRole, string>>>;

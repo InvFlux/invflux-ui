@@ -24,6 +24,7 @@ import { useProcurement } from '../../context';
 import { createApi } from '../../lib/api';
 import { daysUntilDate } from '../../lib/dates';
 import type { ProductSearchResponse } from '../suppliers/types';
+import { formatPoTotal } from './poTotal';
 import type { PurchaseOrder, PurchaseOrdersResponse } from './types';
 
 const columnHelper = createColumnHelper<PurchaseOrder>();
@@ -46,7 +47,7 @@ type StatusGroup = 'draft' | 'open' | 'closed' | 'archived';
 /** The two *bounded* ends of the stage axis. Everything between them is open — see {@link inGroup}. */
 const GROUP_STAGES: Record<'draft' | 'closed', string[]> = {
   draft: ['in_prep', 'in_review', 'approved'],
-  closed: ['received', 'cancelled'],
+  closed: ['received', 'canceled'],
 };
 
 /**
@@ -174,7 +175,7 @@ const columns = [
     header: () => __('Value'),
     cell: (info) => {
       const row = info.row.original;
-      return null === info.getValue() ? '—' : `${row.currency} ${info.getValue()}`;
+      return formatPoTotal(info.getValue(), row.currency, row.costDecimals);
     },
   }),
 ];

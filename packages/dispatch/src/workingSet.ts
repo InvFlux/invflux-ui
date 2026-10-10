@@ -126,7 +126,10 @@ function carriesTag(order: DispatchOrderSummary): boolean {
   return (order.tags?.length ?? 0) > 0;
 }
 
-/** Does this order carry an unsettled manual refund / unresolved corrections / an unrecorded payment? */
+/**
+ * Does this order carry an unsettled manual refund / unresolved corrections / an unrecorded payment,
+ * or has the host moved it back to "not done" after it shipped?
+ */
 function matchesPendingAction(
   order: DispatchOrderSummary,
   action: string,
@@ -143,6 +146,10 @@ function matchesPendingAction(
         order.paymentMethod !== null &&
         manualGateways.includes(order.paymentMethod)
       );
+    case 'host_reopened':
+      // Decided server-side: which host statuses mean "not done" is the merchant's status policy,
+      // which this build does not hold.
+      return order.hostReopened === true;
     default:
       // An action this build cannot evaluate matches nothing rather than everything — the same
       // direction the server takes, and the safe one: a work queue that answers an unknown filter
@@ -155,14 +162,14 @@ function matchesPendingAction(
  * Which pending actions this order is waiting on — the value list a facet counts by, and the
  * client-side twin of the server's registered predicates.
  *
- * Only the three the base install registers can be evaluated here. An add-on's action is invisible
+ * Only the four the base install registers can be evaluated here. An add-on's action is invisible
  * to this build, which is why it counts as *no* match rather than a match: narrow, never widen.
  */
 export function pendingActionsOf(
   order: DispatchOrderSummary,
   manualGateways: readonly string[] = [],
 ): string[] {
-  return ['manual_refund', 'corrections', 'payment_entry'].filter((action) =>
+  return ['manual_refund', 'corrections', 'payment_entry', 'host_reopened'].filter((action) =>
     matchesPendingAction(order, action, manualGateways),
   );
 }

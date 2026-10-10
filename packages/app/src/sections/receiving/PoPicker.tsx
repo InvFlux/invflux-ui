@@ -26,6 +26,8 @@ const stageLabel = (stage: string): string => {
       return __('Acknowledged');
     case 'in_transit':
       return __('On its way');
+    case 'arrived':
+      return __('Arrived, not counted yet');
     case 'in_reception':
       return __('Being counted');
     case 'partially_received':

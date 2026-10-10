@@ -83,7 +83,7 @@ export interface SupplierProduct {
   supplierId: number;
   /** The product, and — with the supplier — the row's identity: what a PATCH or DELETE addresses. */
   subjectId: number;
-  /** WC post id (null if unresolved) — lets the catalogue picker skip products already linked. */
+  /** WC post id (null if unresolved) — lets the catalog picker skip products already linked. */
   postId: number | null;
   name: string | null;
   sku: string | null;
@@ -107,8 +107,12 @@ export interface SupplierProductsResponse {
   products: SupplierProduct[];
 }
 
-/** One hit from `GET /procurement/products/search` (host post ids, not subjects). */
+/**
+ * One hit from `GET /procurement/products/search`. `subjectId` is present only when the search was
+ * asked for purchasable units (`units=1`).
+ */
 export interface ProductSearchHit {
+  subjectId?: number;
   postId: number;
   name: string | null;
   sku: string | null;

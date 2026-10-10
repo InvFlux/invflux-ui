@@ -27,16 +27,24 @@ import { Portal } from 'solid-js/web';
 import { useProcurement } from '../../context';
 import { firstEditableColumnId } from '../../grid/editableColumn';
 import { fuzzyMatches } from '../../grid/fuzzyMatch';
-import { registerProductSearchEditor } from '../../grid/productSearchEditor';
+import {
+  type ProductSearchAnswer,
+  registerProductSearchEditor,
+} from '../../grid/productSearchEditor';
 import { isTypingInField, QuickFilter } from '../../grid/QuickFilter';
 import { createApi } from '../../lib/api';
 import { usePortalRoot } from '../../portal';
-import type { ProductSearchResponse, SupplierProduct, SupplierProductsResponse } from './types';
+import type {
+  ProductSearchHit,
+  ProductSearchResponse,
+  SupplierProduct,
+  SupplierProductsResponse,
+} from './types';
 
 /**
  * Sentinel subject id for the always-present append row (real subject ids are positive).
  *
- * A catalogue row *is* the pair (supplier, product), and the supplier is fixed for this screen — so
+ * A catalog row *is* the pair (supplier, product), and the supplier is fixed for this screen — so
  * the product's subject id identifies the row here: for the grid, for the staged edits, and in the
  * REST calls that write one.
  */
@@ -44,7 +52,7 @@ const DRAFT_SUBJECT_ID = 0;
 /** Custom editor datatype for the append-row's product cell (the async product search). */
 const PRODUCT_EDITOR_TYPE = 'text:product-search';
 
-/** Staged edits to one catalogue link (column id → value), merged onto the row's current terms on Save. */
+/** Staged edits to one catalog link (column id → value), merged onto the row's current terms on Save. */
 interface DirtyPatch {
   supplier_sku?: string | null;
   unit_price?: string | null;
@@ -80,7 +88,7 @@ interface Defaults {
   leadTime: number | null;
 }
 
-/** GridColumnMeta with catalogue-grid defaults filled in; all columns share the one group. */
+/** GridColumnMeta with catalog-grid defaults filled in; all columns share the one group. */
 function colMeta(
   over: Partial<GridColumnMeta> & { id: string; label: string; dataType: string },
 ): GridColumnMeta {
@@ -104,7 +112,7 @@ function colMeta(
 }
 
 /**
- * A supplier's product catalogue on the shared DataGrid (Workbench-style: edits stage into a dirty
+ * A supplier's product catalog on the shared DataGrid (Workbench-style: edits stage into a dirty
  * model, tinted green, and persist together on **Save**). The product is immutable on existing rows —
  * only the supplier terms (SKU / unit price / MOQ / case pack / lead time) edit, with blank terms
  * inheriting the supplier/global defaults (shown lighter, an override in bold). Row selection drives
@@ -233,7 +241,7 @@ export function SupplierProducts(props: {
 
   // ── Append row (Essentials new-product entry) ─────────────────────────────────────────────────────────
   // A synthetic link (subjectId = DRAFT_SUBJECT_ID) always appended last; only its product cell is editable, through
-  // the grid's own editor (the async product-search picker). Picking a product creates the catalogue
+  // the grid's own editor (the async product-search picker). Picking a product creates the catalog
   // link and drops focus into the new row's first editable term.
   const draftLine = (): SupplierProduct => ({
     supplierId: props.supplierId,
@@ -258,31 +266,35 @@ export function SupplierProducts(props: {
   const isDraft = (l: SupplierProduct): boolean => DRAFT_SUBJECT_ID === l.subjectId;
   const gridRows = createMemo<SupplierProduct[]>(() => [...visibleProducts(), draftLine()]);
 
-  // Server product search for the picker (all WC products; the server owns matching + ranking).
-  // Products already in this supplier's catalogue are filtered out so they can't be re-added (422).
-  const productSearch = async (q: string): Promise<SearchSelectOption[]> => {
-    const res = await api.get<ProductSearchResponse>('/procurement/products/search', { q });
-    const inCatalogue = new Set(
-      products()
-        .map((p) => p.postId)
-        .filter((id): id is number => null !== id),
-    );
-    return res.products
-      .filter((p) => !inCatalogue.has(p.postId))
+  // Server product search for the picker, in purchasable units: simple products and variations,
+  // never a variable parent (the server owns matching, ranking and the expansion). Products already
+  // in this supplier's catalog are filtered out so they can't be re-added (422). WooCommerce's
+  // search also matches descriptions and caps its page without saying so, so no answer is complete:
+  // every keystroke asks again.
+  const productSearch = async (q: string): Promise<ProductSearchAnswer> => {
+    const res = await api.get<ProductSearchResponse>('/procurement/products/search', {
+      q,
+      units: '1',
+    });
+    const inCatalog = new Set(products().map((p) => p.subjectId));
+    const options = res.products
+      .filter((p): p is ProductSearchHit & { subjectId: number } => undefined !== p.subjectId)
+      .filter((p) => !inCatalog.has(p.subjectId))
       .map((p) => ({
-        value: String(p.postId),
+        value: String(p.subjectId),
         label:
           null === p.sku ? (p.name ?? `#${p.postId}`) : `${p.name ?? `#${p.postId}`} · ${p.sku}`,
       }));
+    return { options, complete: false };
   };
 
-  // Pick → create the catalogue link (blank terms inherit defaults), reload, then drop into the new
+  // Pick → create the catalog link (blank terms inherit defaults), reload, then drop into the new
   // row's first editable term. Awaited (not optimistic) so focus lands on a settled, real row.
-  const addProduct = async (postId: number): Promise<void> => {
+  const addProduct = async (subjectId: number): Promise<void> => {
     try {
       const { product } = await api.post<{ product: SupplierProduct }>(
         `/procurement/suppliers/${props.supplierId}/products`,
-        { woo_post_id: postId },
+        { subject_id: subjectId },
       );
       await queryClient.invalidateQueries({ queryKey: key() });
       queueMicrotask(() => {
@@ -788,7 +800,7 @@ export function SupplierProducts(props: {
 
   // ── Bulk paste import (shared ImportWizard) ───────────────────────────────────────────────────────
   // A bulk version of grid entry: paste a supplier price list, match each row to a product (by our SKU,
-  // the supplier's own SKU, or barcode), and upsert the catalogue terms. Bulk supplier-SKU *capture* is
+  // the supplier's own SKU, or barcode), and upsert the catalog terms. Bulk supplier-SKU *capture* is
   // Pro (the field is match-only at Essentials — `keyOnly: !isPro` — so a pasted code matches but is never
   // written); bulk price/MOQ/pack/lead-time upsert is Essentials, as is manual SKU entry in the grid. The
   // product key alone is a valid row (adds the link with defaults), so no value column is required.
@@ -815,7 +827,7 @@ export function SupplierProducts(props: {
     // product but aren't written back. The supplier's own SKU is a key candidate always; at Pro it is
     // also a capture target (non-key → its value is written onto the product), at Essentials it stays
     // match-only (`keyOnly`), so a pasted code matches a row but is never written in bulk.
-    // Built-in aliases: shared concepts from COMMON_ALIASES + catalogue-specific extras (MOQ / pack /
+    // Built-in aliases: shared concepts from COMMON_ALIASES + catalog-specific extras (MOQ / pack /
     // lead time). Raw literals, not translated — see COMMON_ALIASES.
     {
       key: 'sku',
@@ -878,7 +890,7 @@ export function SupplierProducts(props: {
 
   /**
    * Resolve pasted rows to products by the chosen key (our SKU / supplier SKU / barcode) via the shared
-   * batch endpoint, then mark each as a new catalogue link or an update of an existing one (carrying the
+   * batch endpoint, then mark each as a new catalog link or an update of an existing one (carrying the
    * current terms for the diff). Per cell: empty leaves a value as-is, '-' clears it, a value sets it.
    */
   const resolveImport = async (rows: MappedRow[], keyField: string): Promise<ResolvedRow[]> => {
@@ -924,8 +936,8 @@ export function SupplierProducts(props: {
           : undefined;
       if (undefined !== supSku && '' !== supSku) data.supplier_sku = '-' === supSku ? '' : supSku;
 
-      // An existing catalogue link supplies the current per-field values for the diff (raw; the wizard
-      // formats). Only set when the product is already in this supplier's catalogue, so a brand-new link
+      // An existing catalog link supplies the current per-field values for the diff (raw; the wizard
+      // formats). Only set when the product is already in this supplier's catalog, so a brand-new link
       // reads as an add, not an update.
       const link = null !== hit.subjectId ? linkBySubject.get(hit.subjectId) : undefined;
       const result: ResolvedRow = { key: k, label: hit.name || k, status: 'matched', data };
@@ -1005,7 +1017,7 @@ export function SupplierProducts(props: {
         return true;
       }
       // Backspace → revert (un-stage) dirty cells in selection; always consumed to prevent
-      // browser back-navigation. No-op when nothing is dirty (mirrors Workbench behaviour).
+      // browser back-navigation. No-op when nothing is dirty (mirrors Workbench behavior).
       if ('Backspace' === e.key) {
         e.preventDefault();
         revertSelection();
@@ -1129,7 +1141,7 @@ export function SupplierProducts(props: {
             onLearnAlias={learnAlias}
             onClose={() => setImporting(false)}
             requireValueColumn={false}
-            importColumnTitle={__('Written to the supplier catalogue')}
+            importColumnTitle={__('Written to the supplier catalog')}
           />
         </Show>
 
@@ -1163,7 +1175,7 @@ export function SupplierProducts(props: {
             setCellSelection={(updater) => setCellSelection(updater)}
             fallback={
               <div class="px-3 py-6 text-sm text-slate-500">
-                {__('No products in this catalogue yet.')}
+                {__('No products in this catalog yet.')}
               </div>
             }
           />
@@ -1173,7 +1185,7 @@ export function SupplierProducts(props: {
   );
 }
 
-/** Product label (the product is immutable in the catalogue; SKU is its own column). */
+/** Product label (the product is immutable in the catalog; SKU is its own column). */
 function ProductCell(props: { link: SupplierProduct }): JSX.Element {
   return (
     <div class="font-medium" classList={{ 'text-text-muted italic': !props.link.exists }}>

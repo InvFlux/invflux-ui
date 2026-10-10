@@ -1,4 +1,4 @@
-import { __ } from '@invflux/i18n';
+import { __, formatMoney } from '@invflux/i18n';
 import {
   Button,
   Combobox,
@@ -31,7 +31,7 @@ const FIELD_INPUT =
   'h-9 w-full rounded border border-border bg-surface px-2 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-primary';
 const FIELD = 'block text-sm text-slate-700';
 
-/** A draft PO line. `subjectId` null until a catalogue product is picked. */
+/** A draft PO line. `subjectId` null until a catalog product is picked. */
 interface Line {
   key: number;
   subjectId: number | null;
@@ -43,7 +43,7 @@ interface Line {
 /**
  * The universal "reviewable draft" PO surface (#/purchase-orders/new) — built manual-first but
  * designed to accept seed lines (the Workbench "Generate PO" replenishment/deficit paths feed the
- * same form later). Line entry is catalogue-first: pick from the chosen supplier's catalogue, with
+ * same form later). Line entry is catalog-first: pick from the chosen supplier's catalog, with
  * unit cost pre-filled and formatted to the supplier's cost precision.
  */
 export function PoCreate(): JSX.Element {
@@ -68,21 +68,21 @@ export function PoCreate(): JSX.Element {
   const supplier = (): Supplier | undefined =>
     suppliers.data?.suppliers.find((s) => s.id === supplierId());
 
-  const catalogue = createQuery(() => ({
+  const catalog = createQuery(() => ({
     queryKey: ['procurement', 'suppliers', supplierId(), 'products'],
     queryFn: () =>
       api.get<SupplierProductsResponse>(`/procurement/suppliers/${supplierId()}/products`),
     enabled: null !== supplierId(),
   }));
-  const catalogueItem = (subjectId: number): SupplierProduct | undefined =>
-    catalogue.data?.products.find((p) => p.subjectId === subjectId);
+  const catalogItem = (subjectId: number): SupplierProduct | undefined =>
+    catalog.data?.products.find((p) => p.subjectId === subjectId);
 
   const costDecimals = (): number => supplier()?.costDecimals ?? 2;
 
   const supplierOptions = (): ComboboxOption[] =>
     (suppliers.data?.suppliers ?? []).map((s) => ({ value: String(s.id), label: s.displayName }));
   const productOptions = (): ComboboxOption[] =>
-    (catalogue.data?.products ?? []).map((p) => ({
+    (catalog.data?.products ?? []).map((p) => ({
       value: String(p.subjectId),
       label: null === p.sku ? p.productLabel : `${p.productLabel} · ${p.sku}`,
     }));
@@ -90,7 +90,7 @@ export function PoCreate(): JSX.Element {
   const onSupplier = (sel: string[]): void => {
     const id = undefined === sel[0] ? null : Number(sel[0]);
     setSupplierId(id);
-    setLines([]); // catalogue changes → previous lines are no longer valid
+    setLines([]); // catalog changes → previous lines are no longer valid
     const s = suppliers.data?.suppliers.find((x) => x.id === id);
     if (s?.currency) setCurrency(s.currency);
     setTaxRate(s?.defaultTaxRate ?? ''); // pre-fill the applied rate from the supplier default
@@ -106,9 +106,9 @@ export function PoCreate(): JSX.Element {
     const id = undefined === sel[0] ? null : Number(sel[0]);
     setLines(idx, 'subjectId', id);
     if (null !== id) {
-      const item = catalogueItem(id);
+      const item = catalogItem(id);
       setLines(idx, 'label', item?.productLabel ?? '');
-      // Pre-fill the catalogue cost (formatted to the supplier's precision) when blank.
+      // Pre-fill the catalog cost (formatted to the supplier's precision) when blank.
       if ('' === lines[idx].unitCost && item?.unitPrice != null) {
         setLines(idx, 'unitCost', Number(item.unitPrice).toFixed(costDecimals()));
       }
@@ -241,10 +241,8 @@ export function PoCreate(): JSX.Element {
                       selected={null === line.subjectId ? [] : [String(line.subjectId)]}
                       onChange={(sel) => pickProduct(idx(), sel)}
                       multiple={false}
-                      placeholder={__('Search the catalogue…')}
-                      emptyMessage={
-                        catalogue.isFetching ? __('Loading…') : __('No catalogue products')
-                      }
+                      placeholder={__('Search the catalog…')}
+                      emptyMessage={catalog.isFetching ? __('Loading…') : __('No catalog products')}
                     />
                   </td>
                   <td class="border-b border-slate-100 px-3 py-1.5">
@@ -298,7 +296,7 @@ export function PoCreate(): JSX.Element {
             {__('+ Add line')}
           </Button>
           <div class="text-sm font-semibold tabular-nums">
-            {__('Total')}: {total().toFixed(costDecimals())} {currency()}
+            {__('Total')}: {formatMoney(total(), currency(), costDecimals())}
           </div>
         </div>
       </Show>

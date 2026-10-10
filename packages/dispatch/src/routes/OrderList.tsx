@@ -75,7 +75,6 @@ import {
   saveColumnOrder,
   saveHiddenColumns,
 } from '../components/queueColumns';
-import { parsePerPage } from '../components/DispatchSettings';
 import { OrderStatusChip, STATUS_LABEL } from '../components/OrderStatusChip';
 import {
   nativeStatusExplanation,
@@ -164,10 +163,17 @@ const NO_FILTER_SENTINEL = '_';
  */
 const ANY_PENDING_ACTION = '_any';
 
+/**
+ * Rows per fetch when the queue reads from the server (a filter reaching past the open orders). Not
+ * a setting: the list scrolls and fetches the next batch as it nears the end, so the batch size
+ * only decides how often that happens — the same 500 the open-order set replicates in.
+ */
+const SERVER_PAGE_SIZE = 500;
+
 function parseStatusList(raw: string | undefined): OrderStatus[] | undefined {
   if (raw === undefined) return undefined;
   if (raw === '' || raw === NO_FILTER_SENTINEL) return [];
-  const known = new Set<OrderStatus>(['Untouched', 'Started', 'Staged', 'Shipped', 'Cancelled']);
+  const known = new Set<OrderStatus>(['Untouched', 'Started', 'Staged', 'Shipped', 'Canceled']);
   return raw
     .split(',')
     .map((s) => s.trim())
@@ -180,7 +186,7 @@ function parseStatusList(raw: string | undefined): OrderStatus[] | undefined {
  * add-on's state is as real as the adapter's, and the SPA has no basis for
  * ranking them.
  *
- * Unrecognised values are dropped rather than passed through, which keeps a
+ * Unrecognized values are dropped rather than passed through, which keeps a
  * stale link from rendering a checkbox for a state the install cannot answer
  * for. Dropping every value leaves `[]`, i.e. no filter — matching the backend,
  * which falls back to its default instead of widening to everything.
@@ -237,19 +243,13 @@ export function OrderList() {
     has_notes?: string;
     pending_action?: string;
     search?: string;
-    per_page?: string;
   }>();
 
   const [searchDraft, setSearchDraft] = createSignal(searchParams.search ?? '');
 
   /**
-   * Every URL parameter that is part of *what the queue is showing*, and none that is part of how
-   * it is shown.
-   *
-   * A saved view records the first and not the second: `per_page` is a reading preference that
-   * belongs to whoever is reading, and baking one operator's choice into shared chrome would
-   * re-paginate the queue for everyone who applied it. Search is genuinely filter state — a view
-   * of one customer's orders is a legitimate thing to keep.
+   * Every URL parameter that is part of *what the queue is showing*. Search is genuinely filter
+   * state — a view of one customer's orders is a legitimate thing to keep.
    *
    * This list is also the erase-set when a saved view is applied: anything named here is cleared
    * first, so applying a view lands on exactly what it stored rather than on it merged with
@@ -473,7 +473,7 @@ export function OrderList() {
   /**
    * The kinds of waiting work currently filtered to, as wire values.
    *
-   * Unrecognised values are kept rather than dropped: which actions exist is an install-level
+   * Unrecognized values are kept rather than dropped: which actions exist is an install-level
    * question, the server resolves them against what it registered, and a value dropped here would
    * *widen* the union — a work queue silently showing more than was asked for is the failure mode
    * that matters, since a longer backlog looks like a busy day.
@@ -520,7 +520,7 @@ export function OrderList() {
     worksheetIds: parseGenericList(searchParams.worksheet_id),
     skus: parseGenericList(searchParams.sku),
     // Domain-key filter set by the workbench "Orders" link (dash-joined to keep the URL free of
-    // encoded commas). Normalise dashes to the shared comma parser; the server accepts both.
+    // encoded commas). Normalize dashes to the shared comma parser; the server accepts both.
     subjectIds: parseGenericList(searchParams.subject_ids?.replace(/-/g, ',')),
     paymentMethods: parseGenericList(searchParams.payment_method),
     shippingClasses: parseGenericList(searchParams.shipping_class),
@@ -532,7 +532,7 @@ export function OrderList() {
     hasNotes: parseGenericList(searchParams.has_notes),
     pendingActions: pendingActions(),
     search: searchParams.search?.trim() || undefined,
-    perPage: parsePerPage(searchParams.per_page),
+    perPage: SERVER_PAGE_SIZE,
   }));
 
   // Worksheet options preload (small + stable enough to fetch once per session).
@@ -596,7 +596,7 @@ export function OrderList() {
    * the change that just arrived.
    */
   // Hand the queue's sort seam this install's entitlements, so a contributed ranking rule can gate
-  // itself on the licence the way the server's fragment does. Read through a getter rather than
+  // itself on the license the way the server's fragment does. Read through a getter rather than
   // copied, because the context is fetched lazily and a snapshot taken here would freeze the
   // pre-fetch defaults.
   publishQueueSortEntitlements(() => ctx.entitlements as unknown as Record<string, boolean>);
@@ -767,11 +767,11 @@ export function OrderList() {
   });
 
   /**
-   * Slug → the colour the merchant configured, read straight from the bootstrap context.
+   * Slug → the color the merchant configured, read straight from the bootstrap context.
    *
    * Not from `nativeStatusOptions()`: that memo is typed as combobox options and drops the field on
    * the way through, and it also synthesises entries for statuses seen only on a loaded order —
-   * which by definition have no policy row and so no colour to carry.
+   * which by definition have no policy row and so no color to carry.
    */
   const nativeStatusColorIds = createMemo(() => {
     const m = new Map<string, number>();
@@ -781,8 +781,8 @@ export function OrderList() {
     return m;
   });
 
-  /** Configured colour → shipped default → grey. `.get()` result used with `??`, since colour 0 is
-   *  Light grey: a real, deliberate choice that a truthiness check would silently discard. */
+  /** Configured color → shipped default → gray. `.get()` result used with `??`, since color 0 is
+   *  Light gray: a real, deliberate choice that a truthiness check would silently discard. */
   function nativeStatusColor(value: string): number {
     return nativeStatusColorIds().get(value) ?? shippedNativeStatusColor(value);
   }
@@ -1098,7 +1098,7 @@ export function OrderList() {
   });
 
   /**
-   * Shipping-method options, keyed on the method id and labelled with what customers were shown.
+   * Shipping-method options, keyed on the method id and labeled with what customers were shown.
    *
    * Same two sources as the classes above, for the same reason. A row names only its first
    * package's title, so an id seen only as a second package — or only in the facet counts — falls
@@ -1564,7 +1564,7 @@ export function OrderList() {
               }
             : line;
         },
-        // Custom control: the same pill picker the right-click menu uses (colours +
+        // Custom control: the same pill picker the right-click menu uses (colors +
         // usage counts), instead of the plain multiselect dropdown.
         type: FILTER_CONTROL_TAGS,
         active: selected.length > 0,
@@ -1798,7 +1798,7 @@ export function OrderList() {
 
   /**
    * Keep the focused row in view as the user arrows through. Uses
-   * the virtualizer's own scroll API so off-screen rows materialise
+   * the virtualizer's own scroll API so off-screen rows materialize
    * before scrollIntoView can see them. Skips the scroll for mouse-
    * driven hovers — forcibly scrolling on hover would fight the
    * user's scroll input.
@@ -2034,6 +2034,9 @@ export function OrderList() {
             onCreate={(name, query, colorId) =>
               savedFilterMutation.mutateAsync({ kind: 'create', name, query, colorId })
             }
+            onReplace={(filter, query) =>
+              savedFilterMutation.mutateAsync({ kind: 'replace', id: filter.id, query })
+            }
             onSetPinned={(filter, pinned) =>
               savedFilterMutation.mutateAsync({ kind: 'pin', id: filter.id, pinned })
             }
@@ -2080,7 +2083,7 @@ export function OrderList() {
             }}
           >
             {/* Refetches the currently filtered view, so its home is beside the filters. Icon-only;
-              while a query is in flight it takes a grey background and the icon spins — which is
+              while a query is in flight it takes a gray background and the icon spins — which is
               also where "Refreshing…" now lives, rather than in the footer. */}
             <Button
               variant="secondary"
@@ -2231,7 +2234,7 @@ export function OrderList() {
           hidden={hiddenColumns()}
           onToggle={toggleColumn}
           // Passing `onMove` is what turns reordering on: the queue renders its columns from this
-          // same ordered list, so a stored order is honoured and the handles are not decorative.
+          // same ordered list, so a stored order is honored and the handles are not decorative.
           onMove={reorderColumn}
           onReset={resetColumns}
           onClose={() => setColumnPickerOpen(false)}
@@ -2714,7 +2717,7 @@ function OrderTable(props: {
                         'cursor-pointer transition-colors',
                         // Row striping is conditional so the focused row's
                         // highlight reads cleanly even on an odd row. Hover/
-                        // keyboard focus are both modelled by `focusedIndex`
+                        // keyboard focus are both modeled by `focusedIndex`
                         // — no `hover:` Tailwind class — so the visible
                         // selection follows the mouse OR the arrow keys with
                         // identical paint.

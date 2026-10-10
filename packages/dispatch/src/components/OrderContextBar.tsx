@@ -36,7 +36,7 @@ import { differenceReasonLabel, paymentSourceLabel } from '../paymentLabels';
  * shape regardless of which card they target.
  */
 
-/** One labelled address, or a note that the host captured none. */
+/** One labeled address, or a note that the host captured none. */
 function AddressBlock(props: {
   label: string;
   address: OrderAddress | null;
@@ -407,7 +407,7 @@ export function OrderContextBar(props: {
         // operator needs is not the part that should be truncated away.
         actions: () => (
           <>
-            {/* No "Awaiting payment" pill beside this: a labelled button that says *record the
+            {/* No "Awaiting payment" pill beside this: a labeled button that says *record the
                 payment* already carries both halves of what the pill said, and the card is not wide
                 enough to show the gateway, a pill and a button without one of them being cut. The
                 pill's amber is what would have been lost, so the button takes it — same "a person

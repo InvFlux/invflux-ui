@@ -76,6 +76,9 @@ export default function WorkbenchSection(): JSX.Element {
       // Renaming a column changes what the whole store reads, so it answers to the settings
       // capability rather than the workbench's own — see WorkbenchColumnLabels server-side.
       manageSettings: app.capabilities.manageSettings ?? false,
+      // Opening a receiving session is its own effect — the inventory capability, checked again by the
+      // route — so a correction-only role does not see the receipt hand-off in the review.
+      receiveStock: app.capabilities.manageInventory ?? false,
     },
     entitlements: {
       exportStructured: app.entitlements?.exportStructured ?? false,
@@ -88,6 +91,7 @@ export default function WorkbenchSection(): JSX.Element {
       context={context}
       portalRoot={portalRoot as HTMLElement}
       onDirtyChange={(d) => setSectionDirty('workbench', d)}
+      onOpenReceipt={(sessionId) => navigate(`/receiving/new/manual/${sessionId}`)}
       queryClient={queryClient}
       urlPort={urlPort}
     />

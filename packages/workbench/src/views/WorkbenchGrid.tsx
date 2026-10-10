@@ -152,6 +152,25 @@ type QueryState = {
  *  filters. (`tax_filters[name][]` uses a bracketed-name shape the registry reader already skips.) */
 const RESERVED_FILTER_PARAMS: string[] = [];
 
+/**
+ * The filters a cross-surface deep link carries as a dash-joined id list (`?subject_ids=1-2-3`).
+ *
+ * Their encoding depends on the filter's type, and the type arrives only with the first products
+ * response — so a deep link read at mount, before any response, lost these filters and the grid
+ * fired an UNFILTERED first query (the whole catalog at the full load size, seconds on a large store)
+ * before the metadata let it re-read the URL and ask again. Naming the two ids here lets the first
+ * query carry them. Not the source of truth: the server registry owns the filters, the one-shot
+ * re-read below still decodes anything else, and an id missing here only costs that extra fetch.
+ */
+const DEEP_LINK_ID_FILTERS: GridFilterMeta[] = ['post_ids', 'subject_ids'].map((id) => ({
+  id,
+  label: id,
+  type: 'numeric_ids',
+  optionsSource: 'none',
+  options: [],
+  priority: 0,
+}));
+
 async function postJson<T>(
   ctx: { apiRoot: string; nonce: string },
   path: string,
@@ -243,7 +262,7 @@ function reorderStatusFor(atp: number, threshold: number | null): ReorderStatus 
 
 type SupplierOption = { id: number; displayName: string };
 
-/** Bulk "Add to supplier": pick a supplier; selected subjects are added to its catalogue. */
+/** Bulk "Add to supplier": pick a supplier; selected subjects are added to its catalog. */
 function SupplierAssignModal(props: {
   ctx: { apiRoot: string; nonce: string };
   subjectIds: number[];
@@ -314,7 +333,7 @@ function SupplierAssignModal(props: {
             <p>
               {sprintf(
                 /* translators: %d: number of selected products */
-                __("Add %d selected product(s) to a supplier's catalogue."),
+                __("Add %d selected product(s) to a supplier's catalog."),
                 props.subjectIds.length,
               )}
             </p>
@@ -414,11 +433,11 @@ function GeneratePoModal(props: {
         { supplier_id: props.supplierId, subject_ids: props.subjectIds, explicit: props.explicit },
       );
       if (res.purchaseOrder === null) {
-        // Explicit selection → the only null case is "none are in this supplier's catalogue".
+        // Explicit selection → the only null case is "none are in this supplier's catalog".
         // Sweep → nothing in view currently needs reordering.
         toast.info(
           props.explicit
-            ? __("None of the selected products are in this supplier's catalogue.")
+            ? __("None of the selected products are in this supplier's catalog.")
             : __('Nothing to replenish — nothing in view needs reordering right now.'),
         );
         props.onClose();
@@ -1042,6 +1061,8 @@ export function WorkbenchGrid(
      * the unified app passes a port bound to its hash search instead.
      */
     urlPort?: UrlParamsPort;
+    /** Where a review's "Enter as a Goods Receipt" lands; see the shared grid's `onOpenReceipt`. */
+    onOpenReceipt?: (sessionId: number) => void;
   } = {},
 ) {
   const urlPort = (): UrlParamsPort => props.urlPort ?? windowUrlPort;
@@ -1157,7 +1178,11 @@ export function WorkbenchGrid(
     bringParents: true,
     hideBroughtChildren: false,
   });
-  const initialQuery = readQueryFromUrl(baseDefaults(loadLoadSize()), [], urlPort());
+  const initialQuery = readQueryFromUrl(
+    baseDefaults(loadLoadSize()),
+    DEEP_LINK_ID_FILTERS,
+    urlPort(),
+  );
   const [searchInput, setSearchInput] = createSignal(initialQuery.search);
   let searchRef: HTMLInputElement | undefined;
 
@@ -1185,6 +1210,11 @@ export function WorkbenchGrid(
   // relies on that one fetch and runs no products query of its own. Kept stable (last non-empty) so
   // a background refetch never blanks the filter bar / columns mid-render.
   const [stableFilters, setStableFilters] = createSignal<GridFilterMeta[]>([]);
+  // The metas to ENCODE and DECODE filter values with. Before the first response there are none, and
+  // the deep-link id filters would then be written in the array form the server ignores — so until the
+  // real ones arrive, the known deep-link filters stand in (see DEEP_LINK_ID_FILTERS).
+  const encodingMetas = (): GridFilterMeta[] =>
+    stableFilters().length > 0 ? stableFilters() : DEEP_LINK_ID_FILTERS;
   const [stableTaxonomySpace, setStableTaxonomySpace] = createSignal<TaxonomySpace>();
   const [stableColumns, setStableColumns] = createSignal<WorkbenchColumnMeta[]>([]);
   const [totalCount, setTotalCount] = createSignal(0);
@@ -1261,7 +1291,7 @@ export function WorkbenchGrid(
     // and clobber the incoming URL back to empty before the watch effect below can apply it. So the
     // read+write run untracked: this effect is one-directional, query → URL.
     const q = query();
-    const metas = stableFilters();
+    const metas = encodingMetas();
     const port = urlPort();
     untrack(() =>
       syncQueryToUrl(q, metas, {
@@ -1309,7 +1339,7 @@ export function WorkbenchGrid(
           // PRESERVE those (merge) instead of clearing them. An external nav is a full replace — the
           // incoming URL is the whole intended state — so absent fields must reset to base. (Registry
           // filters already replace, being read fresh from the URL with no defaults fallback.)
-          const next = readQueryFromUrl(baseDefaults(query().loadSize), stableFilters(), {
+          const next = readQueryFromUrl(baseDefaults(query().loadSize), encodingMetas(), {
             read: () => new URLSearchParams(incoming),
             replace: () => {},
           });
@@ -1388,7 +1418,7 @@ export function WorkbenchGrid(
     const q = query();
     const params: Record<string, string | string[]> = {};
     const tmp = new URLSearchParams();
-    writeFilterValuesToParams(tmp, q.filterValues, stableFilters());
+    writeFilterValuesToParams(tmp, q.filterValues, encodingMetas());
     for (const key of new Set(tmp.keys())) {
       const all = tmp.getAll(key);
       params[key] = all.length > 1 ? all : (all[0] ?? '');
@@ -1402,7 +1432,7 @@ export function WorkbenchGrid(
       // selection means any/all/none. With no values there is nothing to qualify: the server skips
       // a filter that sent none before it ever looks at the modifiers. Sending them anyway changes
       // the query key, so picking a scope on a stock-level chip with both bounds empty costs a full
-      // refetch of the catalogue to arrive at exactly the rows already on screen.
+      // refetch of the catalog to arrive at exactly the rows already on screen.
       if ((q.filterValues[id]?.length ?? 0) === 0) continue;
       for (const [key, value] of Object.entries(mods)) params[`fmod[${id}][${key}]`] = value;
     }
@@ -1693,7 +1723,7 @@ export function WorkbenchGrid(
     if (!state.bringParents) url.searchParams.set('bring_parents', '0');
     if (state.hideBroughtParents) url.searchParams.set('hide_parents', '1');
     if (state.hideBroughtChildren) url.searchParams.set('hide_children', '1');
-    writeFilterValuesToParams(url.searchParams, state.filterValues, stableFilters());
+    writeFilterValuesToParams(url.searchParams, state.filterValues, encodingMetas());
     for (const [id, mods] of Object.entries(state.filterModifiers)) {
       for (const [key, value] of Object.entries(mods))
         url.searchParams.append(`fmod[${id}][${key}]`, value);
@@ -1981,7 +2011,7 @@ export function WorkbenchGrid(
   );
 
   // ── Sticky conflict toast (from the grid's onConflicts) ──
-  // The grid owns the dirty model + retry, so this is a host-level heads-up: a sticky toast summarising
+  // The grid owns the dirty model + retry, so this is a host-level heads-up: a sticky toast summarizing
   // how many rows need review. (Dropping the staged edits is the grid's own concern; there's no
   // host API into its dirty model, so the action just dismisses the toast.)
   let conflictToastId: number | null = null;
@@ -2065,7 +2095,7 @@ export function WorkbenchGrid(
         )}
       </Show>
 
-      {/* ── Add selected products to a supplier's catalogue ── */}
+      {/* ── Add selected products to a supplier's catalog ── */}
       <Show when={supplierAssignModal()}>
         {(modal) => (
           <SupplierAssignModal
@@ -2151,7 +2181,7 @@ export function WorkbenchGrid(
           {/* One-step "undo the hand-off": restore the filter a cross-surface deep-link overwrote. */}
           <Show when={priorFilter()}>
             <div class="inline-flex items-center gap-1 self-center rounded-full border border-amber-300 bg-amber-50 py-1 pl-2.5 pr-1 text-sm text-amber-800">
-              {/* Inherits the amber chip's colour rather than committing to a variant, so it stays
+              {/* Inherits the amber chip's color rather than committing to a variant, so it stays
                 a raw button — it only ever owed the cursor rule. */}
               <button
                 type="button"
@@ -2234,7 +2264,7 @@ export function WorkbenchGrid(
             </Show>
           </div>
           {/* Refresh refetches the currently filtered view — its natural home is beside the filters.
-              Icon-only; while a (re-)query is in flight it takes a grey background and the icon
+              Icon-only; while a (re-)query is in flight it takes a gray background and the icon
               spins. */}
           <Button
             variant="secondary"
@@ -2288,7 +2318,7 @@ export function WorkbenchGrid(
         </Button>
         {/* Right cluster — plug-in toolbar slot, then the grid's own table controls (layout toggle,
               Columns, Save). Record-view toggle + Save were already moved off the grid's (hidden)
-              toolbar onto this bar; Columns joins them here (its natural neighbour is Save). */}
+              toolbar onto this bar; Columns joins them here (its natural neighbor is Save). */}
         <div class="flex-1" />
         {/* Plug-in toolbar slot (arch-ui-principles §3.4): the shell renders registered
               contributions, ordered by `order` and gated by their `enabled` predicate. */}
@@ -2343,6 +2373,7 @@ export function WorkbenchGrid(
       <div class="flex min-h-0 flex-1 flex-col">
         <WorkbenchGridBase
           ctx={ctx}
+          onOpenReceipt={props.onOpenReceipt}
           storageKeyPrefix="central-workbench"
           loadSize={query().loadSize}
           showRowSelection={true}

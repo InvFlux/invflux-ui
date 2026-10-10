@@ -17,6 +17,10 @@ export interface OnboardingStatus {
   hpos_enabled: boolean;
   /** Deep link to WooCommerce → Settings → Advanced → Features, where HPOS is turned on. */
   hpos_settings_url: string;
+  /** Whether WooCommerce's store-wide stock management is on — required, like HPOS. */
+  stock_management_enabled: boolean;
+  /** Deep link to WooCommerce → Settings → Products → Inventory, where it is turned on. */
+  stock_settings_url: string;
   /**
    * Settings whose current value is the host's rather than this merchant's, or one InvFlux has a
    * specific objection to. Counted, not listed — the screen sends the merchant to the filtered

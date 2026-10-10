@@ -13,7 +13,7 @@ import type { PickableColumn } from '@invflux/ui';
  * wants only operational information on screen, never access control. Shipping class matters to
  * some floors and not others, even on a store that uses several.
  *
- * No `onMove`: the table renders from a fixed template, so a stored order could not be honoured and
+ * No `onMove`: the table renders from a fixed template, so a stored order could not be honored and
  * drag handles would be a control that does nothing.
  */
 export type OrderLineColumnId =

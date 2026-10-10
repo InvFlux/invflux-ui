@@ -60,10 +60,26 @@ const when = (iso: string | null): string =>
 const documentHref = (source: ReceivingSource | null): string | null =>
   null !== source && 'purchase_order' === source.type ? purchaseOrderHref(source.id) : null;
 
-const sessionHref = (source: ReceivingSource | null): string | null =>
-  null !== source && 'purchase_order' === source.type
-    ? `/receiving/new/purchase-order/${source.id}`
+const sessionHref = (session: OpenReceivingSession): string | null => {
+  if (null === session.source) return `/receiving/new/manual/${session.id}`;
+  return 'purchase_order' === session.source.type
+    ? `/receiving/new/purchase-order/${session.source.id}`
     : null;
+};
+
+/**
+ * How a count names itself in the list: its document, or — answering none — its own id and the
+ * reason it carries instead.
+ */
+const sessionLabel = (session: OpenReceivingSession): string =>
+  null === session.source
+    ? sprintf(
+        /* translators: 1: a receiving session's internal id; 2: why the stock is arriving, e.g. "Opening balance". */
+        __('Standalone session #%1$d — %2$s'),
+        session.id,
+        session.reasonLabel ?? '',
+      )
+    : sourceLabel(session.source);
 
 /**
  * The Receiving landing page: what is being counted right now, and what has been received.
@@ -143,12 +159,12 @@ export function ReceivingHome(): JSX.Element {
                   <tr class="border-b border-border/60">
                     <td class={TD}>
                       <Show
-                        when={sessionHref(session.source)}
-                        fallback={<span>{sourceLabel(session.source)}</span>}
+                        when={sessionHref(session)}
+                        fallback={<span>{sessionLabel(session)}</span>}
                       >
                         {(href) => (
                           <A href={href()} class="text-primary hover:underline">
-                            {sourceLabel(session.source)}
+                            {sessionLabel(session)}
                           </A>
                         )}
                       </Show>
@@ -224,9 +240,18 @@ export function ReceivingHome(): JSX.Element {
                       <Show
                         when={documentHref(receipt.source)}
                         fallback={
-                          null !== receipt.source
-                            ? sourceLabel(receipt.source)
-                            : (receipt.reasonLabel ?? __('No document'))
+                          null !== receipt.source ? (
+                            sourceLabel(receipt.source)
+                          ) : (
+                            // No document to open, so the receipt itself is the page.
+                            <A
+                              href={`/receiving/receipts/${receipt.id}`}
+                              data-testid="receipt-link"
+                              class="text-primary hover:underline"
+                            >
+                              {receipt.reasonLabel ?? __('No document')}
+                            </A>
+                          )
                         }
                       >
                         {(href) => (

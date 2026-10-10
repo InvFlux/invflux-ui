@@ -22,7 +22,7 @@ export interface Crumb {
  * destination instead — the landing page, the order in Procurement, the supplier.
  *
  * **The first crumb is muted, the rest are not.** Where you are is the heading; where you came from
- * is context. Links are underlined on hover rather than coloured, because a heading tinted primary
+ * is context. Links are underlined on hover rather than colored, because a heading tinted primary
  * across half its width reads as a call to action rather than a title.
  *
  * Carries no bottom margin: some of these screens follow the heading with a subtitle and some go

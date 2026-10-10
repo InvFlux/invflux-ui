@@ -54,7 +54,7 @@ describe('rowsToRefresh', () => {
     expect(rowsToRefresh([11, 10], loaded)).toEqual([10, 11]);
   });
 
-  it('recognises parents and variations by type when the server sends no role', () => {
+  it('recognizes parents and variations by type when the server sends no role', () => {
     const loaded: RefreshableRow[] = [
       { subjectId: 10, productType: 'variable', wcProductId: 500, wcVariationId: null },
       { subjectId: 11, productType: 'variation', wcProductId: 500, wcVariationId: 501 },

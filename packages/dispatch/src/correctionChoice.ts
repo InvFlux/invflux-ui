@@ -6,7 +6,7 @@ import type { CorrectionReason, CorrectionType, DispatchOrderLine } from './type
  * of the component so it can be read and tested as a table.
  *
  * The type still decides what the engine does (stock movement, refund); the reason still records
- * whose fault it was. Neither is asked for directly: the type's names mix the two ("cancelled by
+ * whose fault it was. Neither is asked for directly: the type's names mix the two ("canceled by
  * customer"), and an operator asked to pick one had to translate their answer into it.
  *
  * Before shipment a correction does one of two things. A **cancellation** lowers the order's demand
@@ -118,7 +118,7 @@ export function stockFor(
 }
 
 /**
- * How many of `qty` cancelled units go back on the shelf before shipment. The product's other orders
+ * How many of `qty` canceled units go back on the shelf before shipment. The product's other orders
  * come first: while it is short, a cancellation gives back only what they do not need, or nothing.
  * The server's own rule, on the page's cached figures — so it can trail by one refresh. A product
  * whose figures are not known is assumed to give everything back.
@@ -137,7 +137,7 @@ export function shelvedQty(
 
 /**
  * The most units "out of stock" can cancel on this line: the product's shortfall. Stock is pooled per
- * product, so cancelling more would put the rest back on sale — units that exist, which "out of stock"
+ * product, so canceling more would put the rest back on sale — units that exist, which "out of stock"
  * cannot explain. Capped this way, the reason never puts anything back. The server's figure on the
  * read, else the cached deficit; the server checks the live one. Neither known → the line's own
  * limit, and the server decides.

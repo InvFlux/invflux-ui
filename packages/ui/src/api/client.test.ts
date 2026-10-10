@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { createInvFluxApi, path, ns } from './client';
+import { createInvFluxApi, path, ns, filenameFromDisposition } from './client';
 import { ApiError, isRetryable } from './errors';
 
 /**
@@ -207,5 +207,57 @@ describe('partial results', () => {
     const result = await createInvFluxApi(CTX).partial('PUT', '/settings', { changes: [] });
     expect(result.ok).toBe(false);
     expect(result.applied).toEqual([]);
+  });
+});
+
+describe('download names', () => {
+  it('reads the plain and the RFC 5987 forms, preferring the encoded one', () => {
+    expect(filenameFromDisposition('attachment; filename="IFX-PO-00522.xlsx"')).toBe(
+      'IFX-PO-00522.xlsx',
+    );
+    expect(filenameFromDisposition('attachment; filename=draft-121.xlsx')).toBe('draft-121.xlsx');
+    expect(
+      filenameFromDisposition(
+        'attachment; filename="commande.xlsx"; filename*=UTF-8\'\'commande-%C3%A9t%C3%A9.xlsx',
+      ),
+    ).toBe('commande-été.xlsx');
+  });
+
+  it('names nothing when the header names nothing, and never a path', () => {
+    expect(filenameFromDisposition(null)).toBeNull();
+    expect(filenameFromDisposition('attachment')).toBeNull();
+    expect(filenameFromDisposition('attachment; filename=""')).toBeNull();
+    expect(filenameFromDisposition('attachment; filename="../../etc/passwd"')).toBe('passwd');
+  });
+
+  // The order is numbered by the same request that downloads it, so a name the caller computed
+  // before asking still says "purchase-order". The server's name is the one that knows.
+  function captureDownloadName(): { name: () => string } {
+    const anchor = { href: '', download: '', click: vi.fn(), remove: vi.fn() };
+    vi.stubGlobal('document', {
+      createElement: () => anchor,
+      body: { appendChild: vi.fn() },
+    });
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:x');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    return { name: () => anchor.download };
+  }
+
+  it('saves under the name the server sends, over the caller’s guess', async () => {
+    const saved = captureDownloadName();
+    mockFetch(
+      new Response('bytes', {
+        headers: { 'Content-Disposition': 'attachment; filename="IFX-PO-00522.xlsx"' },
+      }),
+    );
+    await createInvFluxApi(CTX).download('/po/121/export', 'purchase-order.xlsx');
+    expect(saved.name()).toBe('IFX-PO-00522.xlsx');
+  });
+
+  it('falls back to the caller’s name when the server sends none', async () => {
+    const saved = captureDownloadName();
+    mockFetch(new Response('bytes'));
+    await createInvFluxApi(CTX).download('/po/121/export', 'purchase-order.xlsx');
+    expect(saved.name()).toBe('purchase-order.xlsx');
   });
 });

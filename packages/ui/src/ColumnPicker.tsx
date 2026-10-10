@@ -27,7 +27,7 @@ export interface PickableColumn<Id extends string = string> {
  * unhideable says nothing about where it belongs.
  *
  * **Reordering is opt-in, and it is the presence of `onMove` that turns it on.** A table whose
- * columns render from a hard-coded template cannot honour an order, so offering drag handles there
+ * columns render from a hard-coded template cannot honor an order, so offering drag handles there
  * would be a control that silently does nothing. Omit the callback and the handles, the hint and the
  * drag wiring all go with it.
  *
@@ -65,9 +65,9 @@ export function ColumnPicker<Id extends string = string>(props: {
   let listEl: HTMLUListElement | undefined;
 
   /**
-   * Alt+↑/↓ — move this column past its neighbour.
+   * Alt+↑/↓ — move this column past its neighbor.
    *
-   * Expressed as a swap with the neighbour rather than as an index write, so it goes through the
+   * Expressed as a swap with the neighbor rather than as an index write, so it goes through the
    * same `onMove` the drag does and there is only one definition of what a move means.
    *
    * **The re-focus is not a nicety.** Reordering re-inserts the row, and re-inserting a focused
@@ -78,9 +78,9 @@ export function ColumnPicker<Id extends string = string>(props: {
    */
   const nudge = (id: Id, delta: -1 | 1): void => {
     const at = props.columns.findIndex((c) => c.id === id);
-    const neighbour = props.columns[at + delta];
-    if (undefined === neighbour) return;
-    props.onMove?.(id, neighbour.id);
+    const neighbor = props.columns[at + delta];
+    if (undefined === neighbor) return;
+    props.onMove?.(id, neighbor.id);
     queueMicrotask(() =>
       listEl?.querySelector<HTMLInputElement>(`input[data-column-id="${id}"]`)?.focus(),
     );

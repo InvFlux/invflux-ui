@@ -45,7 +45,7 @@ export function SettleManualRefundModal(props: {
     const events: TimelineEvent[] = eventsQuery.data?.events ?? [];
     const settled = new Set<string>();
     for (const e of events) {
-      if (e.type !== 'correction.refund_confirmed' && e.type !== 'refund.cancelled') continue;
+      if (e.type !== 'correction.refund_confirmed' && e.type !== 'refund.canceled') continue;
       const p = e.payload as {
         scheduled_event_id?: string;
         extras?: { scheduled_event_id?: string };

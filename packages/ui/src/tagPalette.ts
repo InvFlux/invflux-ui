@@ -26,13 +26,13 @@ export interface TagColor {
 }
 
 export const TAG_PALETTE: readonly TagColor[] = [
-  { bg: 'rgb(231,231,231)', fg: 'rgb(70,70,70)', name: 'Light grey' },
+  { bg: 'rgb(231,231,231)', fg: 'rgb(70,70,70)', name: 'Light gray' },
   { bg: 'rgb(182,207,245)', fg: 'rgb(13,52,114)', name: 'Light blue' },
   { bg: 'rgb(152,215,228)', fg: 'rgb(13,59,68)', name: 'Light teal' },
   { bg: 'rgb(227,215,255)', fg: 'rgb(61,24,142)', name: 'Light purple' },
   { bg: 'rgb(251,211,224)', fg: 'rgb(113,26,54)', name: 'Light pink' },
   { bg: 'rgb(242,178,168)', fg: 'rgb(138,28,10)', name: 'Light coral' },
-  { bg: 'rgb(117,117,117)', fg: 'rgb(255,255,255)', name: 'Grey' },
+  { bg: 'rgb(117,117,117)', fg: 'rgb(255,255,255)', name: 'Gray' },
   { bg: 'rgb(30,83,184)', fg: 'rgb(255,255,255)', name: 'Blue' },
   { bg: 'rgb(0,114,134)', fg: 'rgb(255,255,255)', name: 'Teal' },
   { bg: 'rgb(120,88,195)', fg: 'rgb(255,255,255)', name: 'Purple' },

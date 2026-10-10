@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal, type JSX } from 'solid-js';
+import { For, Show, createContext, createMemo, createSignal, useContext, type JSX } from 'solid-js';
 import { Dynamic } from 'solid-js/web';
 import { __, _n, _x, sprintf } from '@invflux/i18n';
 import {
@@ -19,6 +19,8 @@ import { useOrderAnnotationsQuery, useOrderEventsQuery, useTagsQuery } from '../
 import type { CorrectionType, DispatchCorrection, DispatchOrderLine } from '../types';
 import { differenceReasonLabel, paymentSourceLabel } from '../paymentLabels';
 import { formatMoney, toCents } from '../money';
+import { useDispatch } from '../context';
+import { ReverseShipmentModal } from './ReverseShipmentModal';
 
 /** Resolved once at module load, like every other consumer of the shared datatype views. */
 const moneyView = viewRegistry.resolve('decimal:money');
@@ -33,8 +35,14 @@ const moneyView = viewRegistry.resolve('decimal:money');
  * Dispatch-specific event-type renderers register themselves
  * once on module import (see the bottom of this file). Each
  * narrows its own payload shape; the fallback in `@invflux/ui`
- * handles types we don't recognise.
+ * handles types we don't recognize.
  */
+/**
+ * The order the timeline belongs to, for the rows that act on it. A row renderer receives only its
+ * event — the registry's contract — so the order travels by context instead.
+ */
+const TimelineOrderContext = createContext<string>('');
+
 export function TimelinePanel(props: {
   orderHexId: string;
   /**
@@ -50,11 +58,11 @@ export function TimelinePanel(props: {
   lines?: DispatchOrderLine[];
   corrections?: DispatchCorrection[];
   /**
-   * The correction-type catalogue, as a second way to name a type.
+   * The correction-type catalog, as a second way to name a type.
    *
    * A correction can be deleted while the event recording its creation remains — the event is the
    * durable record, the correction is not — so resolving the name through the correction alone
-   * leaves exactly those entries showing a raw code. The catalogue answers by code and outlives
+   * leaves exactly those entries showing a raw code. The catalog answers by code and outlives
    * any individual correction.
    */
   correctionTypes?: CorrectionType[];
@@ -117,7 +125,7 @@ export function TimelinePanel(props: {
    * Correction id → the type's human name.
    *
    * Older entries recorded only the type *code*, so the row would read `cancel_customer` where the
-   * corrections panel two sections above reads "Cancelled by customer" — the same fact, named two
+   * corrections panel two sections above reads "Canceled by customer" — the same fact, named two
    * ways on one screen. The name is looked up rather than back-filled into the event, because the
    * event is the record and the name is presentation.
    */
@@ -131,7 +139,7 @@ export function TimelinePanel(props: {
   /** Type code → its display name, for entries whose correction is gone. */
   const typeNameByCode = createMemo(() => {
     const m = new Map<string, string>();
-    // Corrections first, then the catalogue: a correction carries the name as it was recorded
+    // Corrections first, then the catalog: a correction carries the name as it was recorded
     // against that order, which is the more specific answer where both exist.
     for (const t of props.correctionTypes ?? []) if (t.name !== '') m.set(t.code, t.name);
     for (const c of props.corrections ?? []) if (c.typeName !== '') m.set(c.typeCode, c.typeName);
@@ -257,7 +265,9 @@ export function TimelinePanel(props: {
             </ErrorBanner>
           }
         >
-          <Timeline events={events()} />
+          <TimelineOrderContext.Provider value={props.orderHexId}>
+            <Timeline events={events()} />
+          </TimelineOrderContext.Provider>
         </Show>
       </Show>
     </FoldingSection>
@@ -274,7 +284,7 @@ export function TimelinePanel(props: {
 // ---------------------------------------------------------------------------
 
 /** Map an annotation thread to a synthetic timeline event (rendered by AnnotationTimelineRow).
- * `resolveTag` lets the row render tag-delta annotations (tag apply/remove) as coloured chips. */
+ * `resolveTag` lets the row render tag-delta annotations (tag apply/remove) as colored chips. */
 function threadToEvent(thread: AnnotationThread, resolveTag: TagChipResolver): TimelineEvent {
   const live = latestLiveVersion(thread) ?? thread.versions[thread.versions.length - 1];
   return {
@@ -304,7 +314,7 @@ const ITEMS_SHOWN = 3;
 
 /**
  * @param separator Printed before the list. Empty where the caller has already placed the item in a
- *                  sentence ("1 × 'SKU' Cancelled by customer"); ` · ` where it is appended to one.
+ *                  sentence ("1 × 'SKU' Canceled by customer"); ` · ` where it is appended to one.
  */
 function ItemList(props: { items?: string[]; separator?: string }): JSX.Element {
   const shown = (): string[] => (props.items ?? []).slice(0, ITEMS_SHOWN);
@@ -312,7 +322,7 @@ function ItemList(props: { items?: string[]; separator?: string }): JSX.Element 
   return (
     <Show when={(props.items?.length ?? 0) > 0}>
       {props.separator ?? ' · '}
-      {/* Quoted, because a SKU sits inside a sentence here and `PACK-TRAIL-18 Cancelled by
+      {/* Quoted, because a SKU sits inside a sentence here and `PACK-TRAIL-18 Canceled by
           customer` reads as one run-on phrase without something to close the name. */}
       <span class="text-gray-500">
         {shown()
@@ -360,7 +370,7 @@ function Money(props: { value?: string | null; currency?: string | null }): JSX.
 
 interface RowShellProps {
   icon: JSX.Element;
-  /** Tier-colour ring around the icon. Lifecycle = blue, Decision = violet, Execution = emerald, Ancillary = gray. */
+  /** Tier-color ring around the icon. Lifecycle = blue, Decision = violet, Execution = emerald, Ancillary = gray. */
   tone: 'lifecycle' | 'decision' | 'execution' | 'ancillary';
   label: string;
   detail?: JSX.Element;
@@ -653,7 +663,7 @@ interface AddressDiffGroup {
  * The ordinary order is billed and shipped to one place, so both entries record the same move —
  * and printing that twice inside one entry would only relocate the duplication the single event
  * exists to remove. Where they genuinely differ (an operator conforming one address to the other),
- * the groups separate and each is labelled with its own addresses.
+ * the groups separate and each is labeled with its own addresses.
  */
 function groupAddressDiffs(addresses: Record<string, AddressChange>): AddressDiffGroup[] {
   const groups = new Map<string, AddressDiffGroup>();
@@ -785,40 +795,175 @@ interface ShipmentLine {
 }
 
 function ShipmentSentRow(props: TimelineRowProps): JSX.Element {
-  const p = props.event.payload as { lines?: ShipmentLine[]; final?: boolean } | null;
+  const p = props.event.payload as {
+    lines?: ShipmentLine[];
+    final?: boolean;
+    source_system?: string;
+    tracking_number?: string | null;
+  } | null;
   const lines = (): ShipmentLine[] => (Array.isArray(p?.lines) ? p!.lines : []);
+  const fromWoo = (): boolean => p?.source_system === 'woo_fulfillment';
   // A partial shipment leaves the order open; the final one closes it. Older events (emitted before
-  // the `final` flag) carry no flag, so they fall back to the generic label.
-  const label = (): string =>
-    p?.final === true
+  // the `final` flag) carry no flag, so they fall back to the generic label. One recorded from a
+  // WooCommerce fulfillment says so, rather than implying someone shipped it from this screen.
+  const label = (): string => {
+    if (fromWoo()) {
+      return p?.final === false
+        ? __('Partly fulfilled in WooCommerce')
+        : __('Fulfilled in WooCommerce');
+    }
+    return p?.final === true
       ? __('Final shipment sent')
       : p?.final === false
         ? __('Partial shipment sent')
         : __('Shipment sent');
+  };
   // SKU is the primary label; fall back to the product name, then the subject id
   // (older shipment events emitted before the sku/name snapshot landed).
   const lineLabel = (l: ShipmentLine): string =>
     l.sku || l.name || (l.subject_id != null ? `#${l.subject_id}` : '—');
+
+  // Reversal — offered only on a shipment that is still processed, and only to someone holding the
+  // capability the route checks. The status is the shipment's current one, not the event's.
+  const ctx = useDispatch();
+  const orderHexId = useContext(TimelineOrderContext);
+  const [reversing, setReversing] = createSignal(false);
+  const reversible = (): boolean =>
+    ctx.capabilities.reverseShipments === true &&
+    props.event.ref?.type === 'shipment' &&
+    props.event.ref.status === 'processed' &&
+    orderHexId !== '';
+  const reversed = (): boolean =>
+    props.event.ref?.type === 'shipment' && props.event.ref.status === 'reversed';
+
+  return (
+    <>
+      <RowShell
+        event={props.event}
+        tone="lifecycle"
+        icon={<>✓</>}
+        label={label()}
+        detail={
+          <span class="inline-flex flex-wrap items-baseline gap-x-2">
+            <Show when={lines().length > 0}>
+              <ul class="mt-0.5 space-y-0.5">
+                <For each={lines()}>
+                  {(l) => (
+                    <li class="flex items-baseline gap-1.5 tabular-nums">
+                      <span class="font-mono text-2xs text-gray-700">{lineLabel(l)}</span>
+                      <span class="text-text-muted">×</span>
+                      <span class="text-gray-700">{l.qty_shipped ?? 0}</span>
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </Show>
+            <Show when={p?.tracking_number}>
+              {(tracking) => (
+                <span class="font-mono text-2xs text-gray-600" data-testid="shipment-tracking">
+                  {tracking()}
+                </span>
+              )}
+            </Show>
+            <Show when={reversed()}>
+              <span class="text-2xs text-amber-700">
+                {_x('reversed', 'timeline: a shipment that was undone')}
+              </span>
+            </Show>
+            <Show when={reversible()}>
+              <button
+                type="button"
+                class="text-2xs text-primary hover:underline"
+                data-testid="reverse-shipment"
+                onClick={() => setReversing(true)}
+              >
+                {__('Reverse…')}
+              </button>
+            </Show>
+          </span>
+        }
+      />
+      <Show when={reversing() && props.event.ref}>
+        {(ref) => (
+          <ReverseShipmentModal
+            orderHexId={orderHexId}
+            shipmentHexId={ref().id}
+            onClose={() => setReversing(false)}
+          />
+        )}
+      </Show>
+    </>
+  );
+}
+
+function ShipmentReversedRow(props: TimelineRowProps): JSX.Element {
+  const p = props.event.payload as { lines?: Array<{ qty?: number }>; reason?: string } | null;
+  const units = (): number =>
+    (Array.isArray(p?.lines) ? p!.lines : []).reduce((sum, l) => sum + (l.qty ?? 0), 0);
   return (
     <RowShell
       event={props.event}
       tone="lifecycle"
-      icon={<>✓</>}
-      label={label()}
+      icon={<>↺</>}
+      label={__('Shipment reversed')}
       detail={
-        <Show when={lines().length > 0}>
-          <ul class="mt-0.5 space-y-0.5">
-            <For each={lines()}>
-              {(l) => (
-                <li class="flex items-baseline gap-1.5 tabular-nums">
-                  <span class="font-mono text-2xs text-gray-700">{lineLabel(l)}</span>
-                  <span class="text-text-muted">×</span>
-                  <span class="text-gray-700">{l.qty_shipped ?? 0}</span>
-                </li>
+        <span>
+          {sprintf(
+            _n('%d unit held for the order again', '%d units held for the order again', units()),
+            units(),
+          )}
+          <Show when={p?.reason}>{(reason) => <>{` · ${reason()}`}</>}</Show>
+        </span>
+      }
+    />
+  );
+}
+
+/** What changed on the host's fulfillment record after it was fulfilled — and was not followed. */
+function divergenceLabel(change: string | undefined, excess: number | undefined): string {
+  switch (change) {
+    case 'deleted':
+      return __('The fulfillment was deleted in WooCommerce');
+    case 'unfulfilled':
+      return __('The fulfillment was marked unfulfilled in WooCommerce');
+    case 'items':
+      return __('The fulfilled items were changed in WooCommerce');
+    case 'reopened':
+      return __('The shipped order was moved back to an unfinished status in WooCommerce');
+    case 'excess':
+      return sprintf(
+        _n(
+          'The fulfillment named %d unit more than the order still owed',
+          'The fulfillment named %d units more than the order still owed',
+          excess ?? 0,
+        ),
+        excess ?? 0,
+      );
+    default:
+      return __('The fulfillment changed in WooCommerce');
+  }
+}
+
+function ShipmentHostDivergedRow(props: TimelineRowProps): JSX.Element {
+  const p = props.event.payload as { change?: string; excess?: number } | null;
+  return (
+    <RowShell
+      event={props.event}
+      tone="ancillary"
+      icon={<>!</>}
+      label={__('Needs attention')}
+      detail={
+        <span>
+          {divergenceLabel(p?.change, p?.excess)}
+          {' · '}
+          {p?.change === 'reopened'
+            ? __(
+                'InvFlux did not change its records. Restore Completed if that was a mistake, or reverse the shipment if the goods never left.',
+              )
+            : __(
+                'InvFlux did not change its records. If the goods never left, reverse the shipment; if they came back, record a return.',
               )}
-            </For>
-          </ul>
-        </Show>
+        </span>
       }
     />
   );
@@ -1062,7 +1207,7 @@ function RefundFailedRow(props: TimelineRowProps): JSX.Element {
   );
 }
 
-function RefundCancelledRow(props: TimelineRowProps): JSX.Element {
+function RefundCanceledRow(props: TimelineRowProps): JSX.Element {
   return (
     <RowShell event={props.event} tone="execution" icon={<>⊘</>} label={__('Refund cancelled')} />
   );
@@ -1131,6 +1276,8 @@ const REGISTRATIONS: Array<[string, string, (p: TimelineRowProps) => JSX.Element
     AddressChangedExternallyRow,
   ],
   ['shipment.sent', 'dispatch.shipment.sent', ShipmentSentRow],
+  ['shipment.reversed', 'dispatch.shipment.reversed', ShipmentReversedRow],
+  ['shipment.host_diverged', 'dispatch.shipment.host_diverged', ShipmentHostDivergedRow],
   ['correction.created', 'dispatch.correction.created', CorrectionCreatedRow],
   ['correction.edited', 'dispatch.correction.edited', CorrectionEditedRow],
   ['correction.deleted', 'dispatch.correction.deleted', CorrectionDeletedRow],
@@ -1141,7 +1288,7 @@ const REGISTRATIONS: Array<[string, string, (p: TimelineRowProps) => JSX.Element
   ['correction.refund_confirmed', 'dispatch.refund.confirmed', RefundConfirmedRow],
   ['refund.external', 'dispatch.refund.external', RefundExternalRow],
   ['refund.failed', 'dispatch.refund.failed', RefundFailedRow],
-  ['refund.cancelled', 'dispatch.refund.cancelled', RefundCancelledRow],
+  ['refund.canceled', 'dispatch.refund.canceled', RefundCanceledRow],
   ['payment.recorded', 'dispatch.payment.recorded', PaymentRecordedRow],
 ];
 

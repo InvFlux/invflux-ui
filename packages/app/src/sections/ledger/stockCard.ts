@@ -73,15 +73,22 @@ export function slotParts(slot: string): { location: string; state: string } {
 }
 
 /**
- * Order slots as stock flows: by location along the flow, then by state. Values this table does not
- * know — an add-on's location or state — sort after the known ones, alphabetically, so the order is
- * always total and stable.
+ * Order slots as stock flows: along the flow by location, each location's own states together, then
+ * by state. Values this table does not know — an add-on's location or state — sort after the known
+ * ones, alphabetically, so the order is always total and stable.
+ *
+ * **A location's columns are contiguous, which is a layout guarantee, not a tidiness one.** The card
+ * heads its columns in two rows, a location spanning its states, and a `colspan` can only span
+ * neighbours. Ranking alone does not give that: `oh` and `oh/main` share a rank, so ordering by rank
+ * then state interleaves them (`oh/main.atp`, `oh.ctd`, `oh/main.ctd`) and the span breaks apart the
+ * moment the on-hand root grows leaves.
  */
 export function compareSlots(a: string, b: string): number {
   const pa = slotParts(a);
   const pb = slotParts(b);
   return (
     locationRank(pa.location) - locationRank(pb.location) ||
+    pa.location.localeCompare(pb.location) ||
     (STATE_RANK[pa.state] ?? 99) - (STATE_RANK[pb.state] ?? 99) ||
     a.localeCompare(b)
   );

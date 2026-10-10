@@ -190,7 +190,7 @@ export function BringInControl(props: BringInControlProps): JSX.Element {
             type="button"
             data-bring-in-add
             data-fb-cycle
-            // Muted at rest like the neighbouring "Add filter" pill — the two are the same kind of
+            // Muted at rest like the neighboring "Add filter" pill — the two are the same kind of
             // affordance — but it hovers to the family violet rather than the generic primary,
             // so the hue that marks variable/variation is what previews on the way in.
             class="inline-flex h-8 cursor-pointer items-center gap-1 rounded-full border border-dashed border-border bg-surface px-3 py-5 text-sm text-text-muted hover:border-violet-500 hover:text-violet-500"

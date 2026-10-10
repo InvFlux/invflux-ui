@@ -161,7 +161,7 @@ export function shouldShowOwnedLicenses(
   // Bought, and its own thing.
   if (only.kind === 'addon') return true;
   // Money and dates — nothing else on the page carries them.
-  if (only.cancellable || only.paid_through !== null || only.grace_until !== null) return true;
+  if (only.cancelable || only.paid_through !== null || only.grace_until !== null) return true;
 
   // A seat that is not the one this install is using — another site, or this one under a different
   // activation (which happens the moment a site activates a key belonging to another account, and

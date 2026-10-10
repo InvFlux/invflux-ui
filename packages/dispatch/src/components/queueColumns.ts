@@ -20,7 +20,7 @@ export interface QueueColumn {
   required?: boolean;
   /**
    * Starts hidden, and stays hidden until an operator shows it — for a column most stores would
-   * read as noise. Honoured for operators who saved a column choice before it existed, too: see
+   * read as noise. Honored for operators who saved a column choice before it existed, too: see
    * {@link loadHiddenColumns}.
    */
   defaultHidden?: boolean;
@@ -185,9 +185,9 @@ export function saveColumnOrder(order: QueueColumnId[]): void {
  * then every remaining column is inserted **after the neighbour it follows by default**, which puts
  * a new column where its author meant it to be rather than at whichever end is convenient. Landing
  * new columns at the end would be the quiet failure here: they would appear off the right edge of a
- * customised queue and read as missing.
+ * customized queue and read as missing.
  *
- * A stored order that is empty (never customised, or unreadable) yields the defaults unchanged.
+ * A stored order that is empty (never customized, or unreadable) yields the defaults unchanged.
  */
 export function orderColumns(order: readonly QueueColumnId[]): QueueColumn[] {
   const byId = new Map(QUEUE_COLUMNS.map((c) => [c.id, c]));

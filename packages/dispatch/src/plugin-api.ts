@@ -75,7 +75,7 @@ export interface DispatchBridge {
    * `order` number, or the two disagree the moment a delta arrives.
    *
    * Gate the registration on whatever gates the capability. The add-on's bundle loads whenever its
-   * plugin is active, which is not the same question as whether its licence currently allows the
+   * plugin is active, which is not the same question as whether its license currently allows the
    * feature; registering unconditionally would leave a lapsed install sorting by something the
    * server has stopped honouring.
    */

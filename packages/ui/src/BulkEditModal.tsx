@@ -21,7 +21,7 @@
  * inherits — a draft PO line showing a suggested quantity it has not overridden — stores null and
  * shows the inherited number, and an operator has to start from what the operator sees: against the
  * stored null "add 100%" has no base and skips the row silently, changing nothing and reporting
- * nothing. The host resolves the fallback chain (`override ?? inherited ?? catalogue`) before handing
+ * nothing. The host resolves the fallback chain (`override ?? inherited ?? catalog`) before handing
  * targets over. This modal cannot: it does not know what a row inherits from.
  *
  * A single-value control that is *touched but left empty* applies as an empty value, which for an
@@ -214,10 +214,17 @@ export function BulkEditModal<TRow = WorkbenchRow>(props: BulkEditModalProps<TRo
   const [state, setState] = createStore<Record<string, ColState>>(initial);
 
   // Auto-focus the first edit control on open (skip the "Modify" checkbox; a Combobox's focusable
-  // element is its inner <input>).
+  // element is its inner <input>). A numeric field leads with its operator <select>, but the value
+  // is what gets typed — "Set to" is already the default — so when the control found first is a
+  // select sharing a row with a value input, the input takes focus instead.
   let bodyRef: HTMLDivElement | undefined;
   createEffect(() => {
-    bodyRef?.querySelector<HTMLElement>('input:not([type="checkbox"]), select')?.focus();
+    const first = bodyRef?.querySelector<HTMLElement>('input:not([type="checkbox"]), select');
+    const value =
+      first instanceof HTMLSelectElement
+        ? first.parentElement?.querySelector<HTMLElement>('input:not([type="checkbox"])')
+        : null;
+    (value ?? first)?.focus();
   });
 
   // Single-value field change: typing a non-empty value (or, when uniform, anything differing from the

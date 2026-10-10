@@ -45,6 +45,12 @@ export interface TimelineEvent {
   };
   /** Event-type-specific. Each registered renderer narrows its own shape. */
   payload: unknown;
+  /**
+   * The record the event is about, when it names one — `{type: 'shipment', id, status}`. `status`
+   * is the record's *current* status where the host reports one (a shipment's), so a renderer can
+   * offer an action only while it still applies. Absent on events that name nothing.
+   */
+  ref?: { type: string; id: string; status: string | null } | null;
   note: string | null;
   correlationId: string | null;
 }

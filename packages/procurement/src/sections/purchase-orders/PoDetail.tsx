@@ -5,7 +5,7 @@ import {
   formatDate,
   formatDateOnly,
   formatDateTime,
-  formatNumber,
+  formatMoney,
   sprintf,
 } from '@invflux/i18n';
 import {
@@ -15,7 +15,6 @@ import {
   DropdownMenu,
   ErrorBanner,
   ConfirmModal,
-  createViewportFill,
   FoldingSection,
   type PickableColumn,
   SegmentedControl,
@@ -28,6 +27,7 @@ import {
   Hint,
 } from '@invflux/ui';
 import { type PoDetailActionContext, registerPoDetailActions } from './poDetailActions';
+import { type ReadColumn, ReadLinesTable } from '../../grid/ReadLinesTable';
 import { A, useLocation, useNavigate } from '@solidjs/router';
 
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
@@ -70,23 +70,46 @@ import type {
 
 /** A draft line the server would drop at submission (no quantity, or no price even after inheriting). */
 interface PrunePreview {
-  lineId: number;
+  /** The line, named by its product (its key within the order). */
+  subjectId: number;
   reason: string; // 'zero_qty' | 'no_price'
 }
+
+/** A product the server would put under management before it will issue the order. */
+interface AdoptPreview {
+  subjectId: number;
+  label: string;
+}
+
+/**
+ * What numbering and marking-sent answer: done, or one of two things that need a person's yes first.
+ * The two arrive in a fixed order — removed lines, then adoption — so a merchant who confirms the
+ * first can be asked the second.
+ */
+interface NumberingResponse {
+  requiresConfirmation?: boolean;
+  prune?: PrunePreview[];
+  requiresAdoption?: boolean;
+  adopt?: AdoptPreview[];
+}
+
+/** The two consents a numbering request can carry. Both default to no: nothing happens unasked. */
+interface NumberingRequest {
+  confirm: boolean;
+  adopt: boolean;
+}
+
+const numberingBody = (r: NumberingRequest): Record<string, true> => ({
+  ...(r.confirm ? { confirm: true as const } : {}),
+  ...(r.adopt ? { adopt: true as const } : {}),
+});
 
 /** How often this page re-reads an order a delivery is being counted against (ms). */
 const POLL_MS = 8_000;
 
-const TH = 'border-b border-slate-200 px-3 py-2 text-right font-semibold text-slate-600';
-/** The same header, for the text columns — a name and a code read from the left, a figure doesn't. */
-const TH_LEFT = 'border-b border-slate-200 px-3 py-2 text-left font-semibold text-slate-600';
-
 /** The supplier-document entry control, worn by both the menu trigger and the single-kind button. */
 const CAPTURE_BTN =
   'rounded border border-slate-300 bg-surface px-3 py-1 text-sm text-slate-600 hover:bg-slate-50';
-const TD = 'border-b border-slate-100 px-3 py-1.5 text-right tabular-nums';
-/** Body cell for a machine-readable code: monospaced so digits align down the column. */
-const TD_CODE = 'border-b border-slate-100 px-3 py-1.5 font-mono text-xs text-slate-500';
 const fmtDate = (iso: string | null): string => formatDate(iso);
 
 // Transition targets are the server's **stage slugs** — the same vocabulary the PO's `stage` field
@@ -95,7 +118,18 @@ const fmtDate = (iso: string | null): string => formatDate(iso);
 // drifting when the PoStatus enum is renumbered.
 const STAGE_IN_RECEPTION = 'in_reception';
 const STAGE_RECEIVED = 'received';
-const STAGE_CANCELLED = 'cancelled';
+const STAGE_CANCELED = 'canceled';
+const STAGE_ARRIVED = 'arrived';
+const STAGE_IN_TRANSIT = 'in_transit';
+const STAGE_PARTIALLY_RECEIVED = 'partially_received';
+
+/** Today in the `YYYY-MM-DD` form `<input type="date">` reads and writes, in the browser's day. */
+function todayIso(): string {
+  const now = new Date();
+  const pad = (n: number): string => String(n).padStart(2, '0');
+
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
 
 // Register the core po.detail title-bar actions once (idempotent). Add-ons contribute more via the
 // same shared entity-action registry.
@@ -129,7 +163,21 @@ export function PoDetail(props: { id: string }): JSX.Element {
   // Which gate raised the prune confirmation — both settle the lines, so both can surface one, and the
   // re-post has to go back to the endpoint that asked.
   const [pruneGate, setPruneGate] = createSignal<'assign-number' | 'mark-sent'>('assign-number');
-  const [cancelling, setCancelling] = createSignal(false);
+  // The same two-endpoint shape for adoption. The review modal asks up front, so this is the
+  // backstop: the server refused because what the page held was stale (a line added, a product
+  // un-adopted since it loaded) or because "Mark as sent" — which has no review — raised it.
+  // `adoptCarry` is whether the removed-lines confirmation was already given, so agreeing to adopt
+  // does not put the merchant back at the first question.
+  const [adoptPreview, setAdoptPreview] = createSignal<AdoptPreview[] | null>(null);
+  const [adoptGate, setAdoptGate] = createSignal<'assign-number' | 'mark-sent'>('assign-number');
+  const [adoptCarry, setAdoptCarry] = createSignal(false);
+  const [canceling, setCanceling] = createSignal(false);
+  // The arrival date being confirmed (null = dialog closed), and the refused delivery's outcome.
+  const [arrivalDate, setArrivalDate] = createSignal<string | null>(null);
+  const [refusing, setRefusing] = createSignal<'resend' | 'end' | null>(null);
+  // Set while a refusal is on its way back to partially received, to open the close-short prompt
+  // once it lands: ending an order that took goods in is a close-short, with its own reason.
+  let closeShortAfterRefusal = false;
   const [archiving, setArchiving] = createSignal(false);
   // Finishing a partially-received order on what has arrived — the reason prompt's state.
   const [closingShort, setClosingShort] = createSignal(false);
@@ -211,22 +259,32 @@ export function PoDetail(props: { id: string }): JSX.Element {
   // Give the draft its document number, then hand the operator the file to send. This is the
   // "becomes a real document" step: the number is permanent and gapless, so the server mints it once
   // and re-uses it on any later click. The lines are settled first (inherited costs frozen to the
-  // catalogue, unorderable lines dropped) — and rather than drop them silently, the server returns the
+  // catalog, unorderable lines dropped) — and rather than drop them silently, the server returns the
   // doomed lines for confirmation and we re-post with `confirm: true`.
   const assignNumber = createMutation(() => ({
-    mutationFn: (confirm: boolean) =>
-      api.post<{ requiresConfirmation?: boolean; prune?: PrunePreview[] }>(
+    mutationFn: (req: NumberingRequest) =>
+      api.post<NumberingResponse>(
         `/procurement/purchase-orders/${props.id}/assign-number`,
-        confirm ? { confirm: true } : {},
+        numberingBody(req),
       ),
-    onSuccess: (data) => {
+    onSuccess: (data, req) => {
       if (data.requiresConfirmation && data.prune) {
         setConfirming(false);
         setPruneGate('assign-number');
         setPrunePreview(data.prune); // open the "these lines will be removed" confirmation
         return;
       }
+      if (data.requiresAdoption && data.adopt) {
+        setConfirming(false);
+        setPrunePreview(null);
+        setAdoptGate('assign-number');
+        setAdoptCarry(req.confirm);
+        setAdoptPreview(data.adopt);
+        invalidate(); // what the page held was stale — refresh it so the flags catch up
+        return;
+      }
       setPrunePreview(null);
+      setAdoptPreview(null);
       invalidate();
       setConfirming(false);
       // The number is only useful in the operator's hands — download straight away, which is what
@@ -236,6 +294,7 @@ export function PoDetail(props: { id: string }): JSX.Element {
     onError: (e: unknown) => {
       setConfirming(false);
       setPrunePreview(null);
+      setAdoptPreview(null);
       toast.error(
         e instanceof Error ? e.message : __('Could not assign a number to the purchase order.'),
       );
@@ -247,19 +306,29 @@ export function PoDetail(props: { id: string }): JSX.Element {
   // operator's job (the .xlsx download is the hand-off). Lines are re-settled here too, so one added
   // between numbering and sending still gets its inherited cost frozen.
   const markSent = createMutation(() => ({
-    mutationFn: (confirm: boolean) =>
-      api.post<{ requiresConfirmation?: boolean; prune?: PrunePreview[] }>(
+    mutationFn: (req: NumberingRequest) =>
+      api.post<NumberingResponse>(
         `/procurement/purchase-orders/${props.id}/mark-sent`,
-        confirm ? { confirm: true } : {},
+        numberingBody(req),
       ),
-    onSuccess: (data) => {
+    onSuccess: (data, req) => {
       if (data.requiresConfirmation && data.prune) {
         setConfirming(false);
         setPruneGate('mark-sent');
         setPrunePreview(data.prune);
         return;
       }
+      if (data.requiresAdoption && data.adopt) {
+        setConfirming(false);
+        setPrunePreview(null);
+        setAdoptGate('mark-sent');
+        setAdoptCarry(req.confirm);
+        setAdoptPreview(data.adopt);
+        invalidate();
+        return;
+      }
       setPrunePreview(null);
+      setAdoptPreview(null);
       invalidate();
       toast.success(__('Purchase order marked as sent.'));
       setConfirming(false);
@@ -267,6 +336,7 @@ export function PoDetail(props: { id: string }): JSX.Element {
     onError: (e: unknown) => {
       setConfirming(false);
       setPrunePreview(null);
+      setAdoptPreview(null);
       toast.error(
         e instanceof Error ? e.message : __('Could not mark the purchase order as sent.'),
       );
@@ -314,12 +384,31 @@ export function PoDetail(props: { id: string }): JSX.Element {
   // Generic forward lifecycle move (mark in transit, start receiving, close). The edge is validated
   // server-side; we just name the target status.
   const transition = createMutation(() => ({
-    mutationFn: (to: string) =>
-      api.post(`/procurement/purchase-orders/${props.id}/transition`, { to }),
-    onSuccess: (_d, to) => {
+    // A bare target status, or the target with what the move needs besides (the arrival date).
+    mutationFn: (move: string | { to: string; arrived_at: string }) =>
+      api.post(
+        `/procurement/purchase-orders/${props.id}/transition`,
+        'string' === typeof move ? { to: move } : move,
+      ),
+    onSuccess: (_d, move) => {
+      const to = 'string' === typeof move ? move : move.to;
       invalidate();
-      setCancelling(false);
+      setCanceling(false);
+      setArrivalDate(null);
+      setRefusing(null);
+      if (closeShortAfterRefusal) {
+        closeShortAfterRefusal = false;
+        setClosingShort(true);
+        return;
+      }
       if (STAGE_RECEIVED === to) toast.success(__('Purchase order received.'));
+      else if (STAGE_ARRIVED === to)
+        toast.success(__('Marked as arrived. Count it when you are ready.'));
+      else if (
+        (STAGE_IN_TRANSIT === to || STAGE_PARTIALLY_RECEIVED === to) &&
+        STAGE_ARRIVED === po()?.stage
+      )
+        toast.success(__('Delivery refused. The order waits for the supplier to send it again.'));
       else if (STAGE_IN_RECEPTION === to) {
         toast.success(__('Receiving session opened.'));
         // Opening a reception is a move to the dock, not a status edit: the operator pressed it
@@ -332,13 +421,15 @@ export function PoDetail(props: { id: string }): JSX.Element {
         // against the wrong root. `receivingHref()` is resolved by the host binding, so it stays
         // correct whether surfaces are hash routes in one page or separate admin pages.
         window.location.href = receivingHref();
-      } else if (STAGE_CANCELLED === to) {
+      } else if (STAGE_CANCELED === to) {
         toast.success(__('Purchase order cancelled.'));
-        navigate(-1); // cancelled = done with it; return to wherever we came from
+        navigate(-1); // canceled = done with it; return to wherever we came from
       }
     },
     onError: (e: unknown) => {
-      setCancelling(false);
+      setCanceling(false);
+      setRefusing(null);
+      closeShortAfterRefusal = false;
       toast.error(e instanceof Error ? e.message : __('That status change is not allowed.'));
     },
   }));
@@ -392,9 +483,9 @@ export function PoDetail(props: { id: string }): JSX.Element {
   // Received / Open only make sense once the PO is past draft; a draft shows Qty + cost only.
   const isDraft = (): boolean => 'in_prep' === po()?.stage;
 
-  // Supplier catalogue — only needed by the submit modal (MOQ / case-pack checks + [Fix all quantities]);
+  // Supplier catalog — only needed by the submit modal (MOQ / case-pack checks + [Fix all quantities]);
   // fetched once the PO is a draft. Same queryKey as PoLinesEditor's, so TanStack de-dupes the request.
-  const catalogue = createQuery(() => ({
+  const catalog = createQuery(() => ({
     queryKey: ['procurement', 'suppliers', po()?.supplierId ?? 0, 'products', 'po', props.id],
     queryFn: () =>
       api.get<SupplierProductsResponse>(`/procurement/suppliers/${po()?.supplierId}/products`, {
@@ -403,9 +494,9 @@ export function PoDetail(props: { id: string }): JSX.Element {
     enabled: isDraft() && undefined !== po()?.supplierId,
   }));
   const moqFor = (subjectId: number): number | null =>
-    catalogue.data?.products.find((p) => p.subjectId === subjectId)?.moq ?? null;
+    catalog.data?.products.find((p) => p.subjectId === subjectId)?.moq ?? null;
   const casePackFor = (subjectId: number): number | null =>
-    catalogue.data?.products.find((p) => p.subjectId === subjectId)?.casePack ?? null;
+    catalog.data?.products.find((p) => p.subjectId === subjectId)?.casePack ?? null;
 
   // Would the server prune any line at submission? We pass the matching `confirm` flag so the
   // client/server prune sets agree (the prune modal is only a fallback).
@@ -419,10 +510,10 @@ export function PoDetail(props: { id: string }): JSX.Element {
   // Stage a set of qty fixes from the submit modal ([Fix all quantities] / [Set suggested quantities]):
   // parallel PATCHes, one reconcile — the grid + modal then recompute from the authoritative reload.
   const fixQtys = createMutation(() => ({
-    mutationFn: (patches: Array<{ id: number; qty: number }>) =>
+    mutationFn: (patches: Array<{ subjectId: number; qty: number }>) =>
       Promise.all(
         patches.map((p) =>
-          api.patch(`/procurement/purchase-orders/${props.id}/lines/${p.id}`, {
+          api.patch(`/procurement/purchase-orders/${props.id}/lines/${p.subjectId}`, {
             qty_requested: p.qty,
           }),
         ),
@@ -446,11 +537,15 @@ export function PoDetail(props: { id: string }): JSX.Element {
   // meaningless before any goods receipt, so the read table hides them at the pre-GR stages and shows
   // Ordered + Expected + a confirmation Status instead. Expected itself is display-only here — its
   // entry lives in the dedicated OA/ASN/Invoice document-capture workflow, never inline.
-  const preReception = (): boolean => ['submitted', 'in_transit'].includes(po()?.stage ?? '');
+  // An arrived order is before reception only while nothing came before it; the next delivery of a
+  // split shipment arrives on an order that already has received figures to show.
+  const preReception = (): boolean =>
+    ['submitted', 'in_transit'].includes(po()?.stage ?? '') ||
+    ('arrived' === po()?.stage && !goodsTakenIn());
 
   // ── Which columns the lines table shows ───────────────────────────────────────────────────────
   // Visibility only, no order: the table below is a hand-written template, so a stored order could
-  // not be honoured. The hidden set persists per operator, per browser — a display preference, not
+  // not be honored. The hidden set persists per operator, per browser — a display preference, not
   // store policy, so it is deliberately not saved server-side.
   const [hiddenColumns, setHiddenColumns] = persistedSignal<PoLineColumnId[]>(
     'invflux:po-lines:hidden',
@@ -465,7 +560,155 @@ export function PoDetail(props: { id: string }): JSX.Element {
   };
   // Counted rather than a constant: the empty-state and total rows span whatever is actually on
   // screen, so hiding a column cannot leave a stray cell past the end of the table.
-  const readColCount = (): number => offeredColumns().filter((c) => shows(c.id)).length;
+  // The sent order's lines as the shared read-only table renders them: the columns this operator
+  // shows, in the template's fixed order, with the reception columns only once anything can have
+  // been received.
+  const readColumns = (): ReadColumn<PoLine>[] => {
+    const cols: ReadColumn<PoLine>[] = [];
+    const dash = (title?: string): JSX.Element => (
+      <span class="text-slate-300" title={title}>
+        —
+      </span>
+    );
+    if (shows('image'))
+      cols.push({
+        id: 'image',
+        width: 'w-12',
+        cell: (l) => (
+          <Show when={l.imageUrl} fallback={<div class="h-9 w-9 rounded bg-slate-100" />}>
+            {(u) => <img src={u()} alt="" class="h-9 w-9 rounded object-cover" />}
+          </Show>
+        ),
+      });
+    cols.push({
+      id: 'product',
+      header: __('Product'),
+      cell: (l) => (
+        <div class="font-medium" classList={{ 'text-text-muted italic': !l.exists }}>
+          {l.productLabel}
+        </div>
+      ),
+    });
+    if (shows('sku'))
+      cols.push({
+        id: 'sku',
+        header: __('SKU'),
+        kind: 'code',
+        width: 'w-28',
+        cell: (l) => l.sku ?? '—',
+      });
+    if (shows('supplier_sku'))
+      cols.push({
+        id: 'supplier_sku',
+        header: __('Supplier SKU'),
+        title: __('The supplier’s own code — matches their packing slip'),
+        kind: 'code',
+        width: 'w-32',
+        cell: (l) => l.supplierSku ?? '—',
+      });
+    if (shows('gtin'))
+      cols.push({
+        id: 'gtin',
+        header: __('GTIN'),
+        title: __('The barcode on the carton'),
+        kind: 'code',
+        width: 'w-36',
+        cell: (l) => l.gtin ?? '—',
+      });
+    if (shows('ordered'))
+      cols.push({
+        id: 'ordered',
+        header: __('Ordered'),
+        kind: 'num',
+        width: 'w-20',
+        cell: (l) => l.qtyRequested,
+      });
+    if (shows('expected'))
+      cols.push({
+        id: 'expected',
+        header: __('Expected'),
+        title: __('Supplier-confirmed (OA/ASN) quantity'),
+        kind: 'num',
+        width: 'w-24',
+        cell: (l) =>
+          null !== l.qtyExpected
+            ? l.qtyExpected
+            : dash(__('Not yet confirmed — falls back to the ordered quantity')),
+      });
+    if (!preReception()) {
+      if (shows('received'))
+        cols.push({
+          id: 'received',
+          header: __('Received'),
+          kind: 'num',
+          width: 'w-20',
+          cell: (l) => l.qtyReceived,
+        });
+      if (shows('damaged'))
+        cols.push({
+          id: 'damaged',
+          header: __('Damaged'),
+          kind: 'num',
+          width: 'w-20',
+          cell: (l) =>
+            l.qtyDamagedSoFar > 0 ? <span class="text-red-600">{l.qtyDamagedSoFar}</span> : dash(),
+        });
+      if (shows('open'))
+        cols.push({
+          id: 'open',
+          header: _x('Open', 'quantity remaining to receive'),
+          kind: 'num',
+          width: 'w-20',
+          cell: (l) => l.qtyOpen,
+        });
+    }
+    if (shows('status'))
+      cols.push({
+        id: 'status',
+        header: __('Status'),
+        kind: 'center',
+        width: 'w-24',
+        cell: (l) => (
+          <Show
+            when={isDeliveryStage(l)}
+            fallback={
+              // Confirmation badge only once an OA/ASN is recorded (expected set); an unconfirmed
+              // line shows nothing, so a match here is a real "Confirmed".
+              <Show when={null !== l.qtyExpected}>
+                <VarianceBadge
+                  kind="confirmation"
+                  status={confirmationStatus(l)}
+                  varianceQty={confirmationVarianceQty(l)}
+                />
+              </Show>
+            }
+          >
+            <VarianceBadge
+              kind="delivery"
+              status={deliveryStatus(l, lens())}
+              varianceQty={deliveryVarianceQty(l, lens())}
+            />
+          </Show>
+        ),
+      });
+    if (shows('unit_cost'))
+      cols.push({
+        id: 'unit_cost',
+        header: __('Unit cost'),
+        kind: 'num',
+        width: 'w-28',
+        cell: (l) => fmt(l.unitCost),
+      });
+    if (shows('line_total'))
+      cols.push({
+        id: 'line_total',
+        header: __('Line total'),
+        kind: 'num',
+        width: 'w-28',
+        cell: (l) => fmt(l.lineTotal),
+      });
+    return cols;
+  };
 
   // Which variance a line surfaces: pre-reception → confirmation (ordered vs supplier-confirmed); once
   // anything is received or the line is finalized → delivery (received vs the chosen lens).
@@ -491,10 +734,10 @@ export function PoDetail(props: { id: string }): JSX.Element {
     const stage = po()?.stage ?? '';
     if ('in_reception' === stage) {
       return __(
-        'A count is in progress. Expected quantities are the baseline its variance is measured against, so they stay put until it is finalised.',
+        'A count is in progress. Expected quantities are the baseline its variance is measured against, so they stay put until it is finalized.',
       );
     }
-    if (['received', 'cancelled', 'archived'].includes(stage)) {
+    if (['received', 'canceled', 'archived'].includes(stage)) {
       return __('This order is settled — nothing further is expected on it.');
     }
 
@@ -502,7 +745,7 @@ export function PoDetail(props: { id: string }): JSX.Element {
   };
   // An invoice is on a different clock. It arrives before the goods, with them, or long after the
   // order closed, so no stage forbids it — only a draft, which the supplier has not been sent yet,
-  // and a cancelled order, which was never delivered. Pricing is its own authority, so the
+  // and a canceled order, which was never delivered. Pricing is its own authority, so the
   // capability is asked separately and mirrored from the server's own check on that route.
   const invoiceBlockedBecause = (): string | undefined => {
     if (!ctx.capabilities.stateCost) {
@@ -513,6 +756,7 @@ export function PoDetail(props: { id: string }): JSX.Element {
         'submitted',
         'acknowledged',
         'in_transit',
+        'arrived',
         'in_reception',
         'partially_received',
         'received',
@@ -610,7 +854,7 @@ export function PoDetail(props: { id: string }): JSX.Element {
     workbenchHref: workbenchHref(),
     transitionTo: (slug) => transition.mutate(slug),
     openIssue: () => setConfirming(true),
-    markSent: () => markSent.mutate(false),
+    markSent: () => markSent.mutate({ confirm: false, adopt: false }),
     exportXlsx: () => exportXlsx.mutate(),
     copyToDraft: () => copyToDraft.mutate(),
     print: () => window.open(printHref(), '_blank', 'noopener'),
@@ -620,11 +864,18 @@ export function PoDetail(props: { id: string }): JSX.Element {
       if (hostNav.opensNewTab) window.open(href, '_blank', 'noopener');
       else window.location.href = href;
     },
-    beginCancel: () => setCancelling(true),
+    beginCancel: () => setCanceling(true),
+    beginArrived: () => setArrivalDate(todayIso()),
+    // Canceling is only possible while nothing has been taken in; the server refuses it otherwise.
+    beginRefuse: () => setRefusing('resend'),
     archived: po()?.archived ?? false,
     beginArchive: () => setArchiving(true),
     unarchive: () => setArchived.mutate(false),
   });
+
+  // Anything counted in, good or damaged: an order that took goods in cannot be canceled, only closed short.
+  const goodsTakenIn = (): boolean =>
+    lines().some((l) => l.qtyReceived > 0 || l.qtyDamagedSoFar > 0);
 
   // Inline ETA editing. The expected date is set at creation but supplier dates move, so it stays
   // revisable until the PO is terminal; each change records a po.eta_changed audit event server-side
@@ -632,7 +883,7 @@ export function PoDetail(props: { id: string }): JSX.Element {
   const [editingEta, setEditingEta] = createSignal(false);
   const [etaDraft, setEtaDraft] = createSignal('');
   const canEditHeader = (): boolean =>
-    !(po()?.archived ?? false) && !['received', 'cancelled'].includes(po()?.stage ?? '');
+    !(po()?.archived ?? false) && !['received', 'canceled'].includes(po()?.stage ?? '');
   // The commercial terms are what the supplier was sent, so they close when the order goes out —
   // earlier than the ETA, which keeps moving for the whole live life of the order. Mirrors the
   // server, which refuses the same fields from `submitted` on, so the pencil is withheld rather than
@@ -1486,200 +1737,16 @@ export function PoDetail(props: { id: string }): JSX.Element {
                           pushes the page down puts the Activity header — which carries the total —
                           below the fold. `overflow-auto` now, not just `-x`: the box owns both
                           axes once its height is fixed. */}
-                      <ViewportFilled
-                        gutter={READ_FOOTER_GUTTER}
-                        class="box-border overflow-auto rounded border border-border bg-surface"
-                      >
-                        {/* `min-w-full`, not `w-full`: the latter pins the table to the box and makes
-                            the columns compress instead, so the scroll container it sits in would
-                            never have anything to scroll. */}
-                        <table class="min-w-full border-collapse text-sm">
-                          <thead class="bg-surface-raised">
-                            <tr>
-                              <Show when={shows('image')}>
-                                <th class={`${TH} w-12`} />
-                              </Show>
-                              <th class={TH_LEFT}>{__('Product')}</th>
-                              <Show when={shows('sku')}>
-                                <th class={`${TH_LEFT} w-28`}>{__('SKU')}</th>
-                              </Show>
-                              <Show when={shows('supplier_sku')}>
-                                <th
-                                  class={`${TH_LEFT} w-32`}
-                                  title={__('The supplier’s own code — matches their packing slip')}
-                                >
-                                  {__('Supplier SKU')}
-                                </th>
-                              </Show>
-                              <Show when={shows('gtin')}>
-                                <th
-                                  class={`${TH_LEFT} w-36`}
-                                  title={__('The barcode on the carton')}
-                                >
-                                  {__('GTIN')}
-                                </th>
-                              </Show>
-                              <Show when={shows('ordered')}>
-                                <th class={`${TH} w-20`}>{__('Ordered')}</th>
-                              </Show>
-                              <Show when={shows('expected')}>
-                                <th
-                                  class={`${TH} w-24`}
-                                  title={__('Supplier-confirmed (OA/ASN) quantity')}
-                                >
-                                  {__('Expected')}
-                                </th>
-                              </Show>
-                              <Show when={!preReception()}>
-                                <Show when={shows('received')}>
-                                  <th class={`${TH} w-20`}>{__('Received')}</th>
-                                </Show>
-                                <Show when={shows('damaged')}>
-                                  <th class={`${TH} w-20`}>{__('Damaged')}</th>
-                                </Show>
-                                <Show when={shows('open')}>
-                                  <th class={`${TH} w-20`}>
-                                    {_x('Open', 'quantity remaining to receive')}
-                                  </th>
-                                </Show>
-                              </Show>
-                              <Show when={shows('status')}>
-                                <th class="border-b border-slate-200 px-3 py-2 text-center font-semibold text-slate-600 w-24">
-                                  {__('Status')}
-                                </th>
-                              </Show>
-                              <Show when={shows('unit_cost')}>
-                                <th class={`${TH} w-28`}>{__('Unit cost')}</th>
-                              </Show>
-                              <Show when={shows('line_total')}>
-                                <th class={`${TH} w-28`}>{__('Line total')}</th>
-                              </Show>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            <For each={lines()}>
-                              {(l) => (
-                                <tr class="hover:bg-slate-50">
-                                  <Show when={shows('image')}>
-                                    <td class="border-b border-slate-100 px-3 py-1.5">
-                                      <Show
-                                        when={l.imageUrl}
-                                        fallback={<div class="h-9 w-9 rounded bg-slate-100" />}
-                                      >
-                                        {(u) => (
-                                          <img
-                                            src={u()}
-                                            alt=""
-                                            class="h-9 w-9 rounded object-cover"
-                                          />
-                                        )}
-                                      </Show>
-                                    </td>
-                                  </Show>
-                                  <td class="border-b border-slate-100 px-3 py-1.5">
-                                    <div
-                                      class="font-medium"
-                                      classList={{ 'text-text-muted italic': !l.exists }}
-                                    >
-                                      {l.productLabel}
-                                    </div>
-                                  </td>
-                                  <Show when={shows('sku')}>
-                                    <td class={TD_CODE}>{l.sku ?? '—'}</td>
-                                  </Show>
-                                  <Show when={shows('supplier_sku')}>
-                                    <td class={TD_CODE}>{l.supplierSku ?? '—'}</td>
-                                  </Show>
-                                  <Show when={shows('gtin')}>
-                                    <td class={TD_CODE}>{l.gtin ?? '—'}</td>
-                                  </Show>
-                                  <Show when={shows('ordered')}>
-                                    <td class={TD}>{l.qtyRequested}</td>
-                                  </Show>
-                                  <Show when={shows('expected')}>
-                                    <td class={TD}>
-                                      <Show
-                                        when={null !== l.qtyExpected}
-                                        fallback={
-                                          <span
-                                            class="text-slate-300"
-                                            title={__(
-                                              'Not yet confirmed — falls back to the ordered quantity',
-                                            )}
-                                          >
-                                            —
-                                          </span>
-                                        }
-                                      >
-                                        {l.qtyExpected}
-                                      </Show>
-                                    </td>
-                                  </Show>
-                                  <Show when={!preReception()}>
-                                    <Show when={shows('received')}>
-                                      <td class={TD}>{l.qtyReceived}</td>
-                                    </Show>
-                                    <Show when={shows('damaged')}>
-                                      <td class={TD}>
-                                        <Show
-                                          when={l.qtyDamagedSoFar > 0}
-                                          fallback={<span class="text-slate-300">—</span>}
-                                        >
-                                          <span class="text-red-600">{l.qtyDamagedSoFar}</span>
-                                        </Show>
-                                      </td>
-                                    </Show>
-                                    <Show when={shows('open')}>
-                                      <td class={TD}>{l.qtyOpen}</td>
-                                    </Show>
-                                  </Show>
-                                  <Show when={shows('status')}>
-                                    <td class="border-b border-slate-100 px-3 py-1.5 text-center">
-                                      <Show
-                                        when={isDeliveryStage(l)}
-                                        fallback={
-                                          // Confirmation badge only once an OA/ASN is recorded (expected set); an
-                                          // unconfirmed line shows nothing, so a match here is a real "Confirmed".
-                                          <Show when={null !== l.qtyExpected}>
-                                            <VarianceBadge
-                                              kind="confirmation"
-                                              status={confirmationStatus(l)}
-                                              varianceQty={confirmationVarianceQty(l)}
-                                            />
-                                          </Show>
-                                        }
-                                      >
-                                        <VarianceBadge
-                                          kind="delivery"
-                                          status={deliveryStatus(l, lens())}
-                                          varianceQty={deliveryVarianceQty(l, lens())}
-                                        />
-                                      </Show>
-                                    </td>
-                                  </Show>
-                                  <Show when={shows('unit_cost')}>
-                                    <td class={TD}>{fmt(l.unitCost)}</td>
-                                  </Show>
-                                  <Show when={shows('line_total')}>
-                                    <td class={TD}>{fmt(l.lineTotal)}</td>
-                                  </Show>
-                                </tr>
-                              )}
-                            </For>
-                            <Show when={0 === lines().length}>
-                              <tr>
-                                <td colspan={readColCount()} class="px-3 py-3 text-slate-500">
-                                  {__('No lines on this purchase order.')}
-                                </td>
-                              </tr>
-                            </Show>
-                          </tbody>
-                          {/* No totals row: the order total is on the Activity header, which is on
-                              screen whether or not this table is scrolled to its end. A figure at
-                              the foot of a scrolling box is only visible once you reach the
-                              bottom, which is the wrong place for the number people come for. */}
-                        </table>
-                      </ViewportFilled>
+                      <ReadLinesTable
+                        columns={readColumns()}
+                        rows={lines()}
+                        empty={__('No lines on this purchase order.')}
+                        fillGutter={READ_FOOTER_GUTTER}
+                      />
+                      {/* No totals row: the order total is on the Activity header, which is on
+                          screen whether or not this table is scrolled to its end. A figure at
+                          the foot of a scrolling box is only visible once you reach the
+                          bottom, which is the wrong place for the number people come for. */}
                     </>
                   }
                 >
@@ -1758,12 +1825,7 @@ export function PoDetail(props: { id: string }): JSX.Element {
                       glance away from a factor of ten. The cost decimals stay fixed so the
                       minor unit never collapses. */}
                     <span class="text-sm font-semibold tabular-nums">
-                      {__('Total')}:{' '}
-                      {formatNumber(grandTotal(), {
-                        minimumFractionDigits: decimals(),
-                        maximumFractionDigits: decimals(),
-                      })}{' '}
-                      {p().currency}
+                      {__('Total')}: {formatMoney(grandTotal(), p().currency, decimals())}
                     </span>
                   </Show>
                 }
@@ -1780,7 +1842,7 @@ export function PoDetail(props: { id: string }): JSX.Element {
           columns={offeredColumns()}
           hidden={hiddenColumns()}
           onToggle={toggleColumn}
-          // No `onMove`: the table renders from a template, so a stored order could not be honoured.
+          // No `onMove`: the table renders from a template, so a stored order could not be honored.
           onReset={() => setHiddenColumns([])}
           onClose={() => setColumnsOpen(false)}
         />
@@ -1800,7 +1862,7 @@ export function PoDetail(props: { id: string }): JSX.Element {
             issuing={assignNumber.isPending}
             // The modal already surfaces the lines the server would drop, so confirm them up-front
             // when there are any (confirm:true) — no second "these will be removed" round-trip.
-            onConfirm={() => assignNumber.mutate(wouldPrune())}
+            onConfirm={(adopt) => assignNumber.mutate({ confirm: wouldPrune(), adopt })}
             onCancel={() => setConfirming(false)}
           />
         )}
@@ -1825,10 +1887,10 @@ export function PoDetail(props: { id: string }): JSX.Element {
                 <ul class="list-disc space-y-0.5 pl-5">
                   <For each={prune()}>
                     {(p) => {
-                      const line = lines().find((l) => l.id === p.lineId);
+                      const line = lines().find((l) => l.subjectId === p.subjectId);
                       return (
                         <li>
-                          {line?.productLabel ?? `#${p.lineId}`}{' '}
+                          {line?.productLabel ?? `#${p.subjectId}`}{' '}
                           <span class="text-text-muted">
                             — {'zero_qty' === p.reason ? __('no quantity') : __('no price')}
                           </span>
@@ -1844,14 +1906,59 @@ export function PoDetail(props: { id: string }): JSX.Element {
             }
             variant="warning"
             onConfirm={() =>
-              'mark-sent' === pruneGate() ? markSent.mutate(true) : assignNumber.mutate(true)
+              'mark-sent' === pruneGate()
+                ? markSent.mutate({ confirm: true, adopt: false })
+                : assignNumber.mutate({ confirm: true, adopt: false })
             }
             onCancel={() => setPrunePreview(null)}
           />
         )}
       </Show>
 
-      <Show when={cancelling()}>
+      {/* The backstop for adoption — see `adoptPreview`. The review modal states this up front when it
+          can; this is for when it could not. The consequence is spelled out because confirming is what
+          changes the products, and the button names it, as "Remove & …" does above. */}
+      <Show when={adoptPreview()}>
+        {(adopt) => (
+          <ConfirmModal
+            title={__('Put these products under InvFlux management?')}
+            message={
+              <div>
+                <p class="mb-2">
+                  {sprintf(
+                    _n(
+                      '%d product on this order is not managed by InvFlux yet:',
+                      '%d products on this order are not managed by InvFlux yet:',
+                      adopt().length,
+                    ),
+                    adopt().length,
+                  )}
+                </p>
+                <ul class="mb-2 list-disc space-y-0.5 pl-5">
+                  <For each={adopt()}>{(a) => <li>{a.label || `#${a.subjectId}`}</li>}</For>
+                </ul>
+                <p class="text-text-muted">
+                  {__(
+                    'Stock cannot be received against a product InvFlux does not manage. Continuing puts these under InvFlux management: InvFlux starts managing their stock, and WooCommerce’s own stock tracking is switched on for them. A variable product is adopted together with its variations. While the order is open after it is sent, InvFlux management cannot be switched off for these products. Once the order is cancelled, closed or received in full, that restriction ends.',
+                  )}
+                </p>
+              </div>
+            }
+            confirmLabel={
+              'mark-sent' === adoptGate() ? __('Adopt & mark as sent') : __('Adopt & download')
+            }
+            variant="warning"
+            onConfirm={() =>
+              'mark-sent' === adoptGate()
+                ? markSent.mutate({ confirm: adoptCarry(), adopt: true })
+                : assignNumber.mutate({ confirm: adoptCarry(), adopt: true })
+            }
+            onCancel={() => setAdoptPreview(null)}
+          />
+        )}
+      </Show>
+
+      <Show when={canceling()}>
         <ConfirmModal
           title={__('Cancel this purchase order?')}
           message={__(
@@ -1860,9 +1967,148 @@ export function PoDetail(props: { id: string }): JSX.Element {
           confirmLabel={__('Cancel PO')}
           cancelLabel={__('Keep')}
           variant="danger"
-          onConfirm={() => transition.mutate(STAGE_CANCELLED)}
-          onCancel={() => setCancelling(false)}
+          onConfirm={() => transition.mutate(STAGE_CANCELED)}
+          onCancel={() => setCanceling(false)}
         />
+      </Show>
+
+      <Show when={arrivalDate()}>
+        {(date) => (
+          <ConfirmModal
+            title={__('Mark as arrived?')}
+            message={
+              <div class="space-y-3">
+                <p>
+                  {__(
+                    'The goods are at your door and have not been counted yet. Nothing changes in stock until you count them.',
+                  )}
+                </p>
+                <label class="block text-sm font-medium text-slate-600" for="po-arrival-date">
+                  {__('Arrived on')}
+                </label>
+                <input
+                  id="po-arrival-date"
+                  data-testid="po-arrival-date"
+                  type="date"
+                  class="rounded border border-border px-2 py-1 text-sm"
+                  value={date()}
+                  max={todayIso()}
+                  onInput={(e) => setArrivalDate(e.currentTarget.value)}
+                />
+              </div>
+            }
+            confirmLabel={__('Mark as arrived')}
+            onConfirm={() =>
+              '' !== date() && transition.mutate({ to: STAGE_ARRIVED, arrived_at: date() })
+            }
+            onCancel={() => setArrivalDate(null)}
+          />
+        )}
+      </Show>
+
+      <Show when={refusing()}>
+        {(choice) => {
+          // Refusing returns the order to where it rested before it arrived: partially received when
+          // earlier deliveries came in, in transit otherwise. Ending it is a cancel only while nothing
+          // was ever taken in; after that it is a close-short, which keeps what arrived.
+          const resting = (): string =>
+            goodsTakenIn() ? STAGE_PARTIALLY_RECEIVED : STAGE_IN_TRANSIT;
+          const endBlocked = (): boolean => goodsTakenIn() && !ctx.capabilities.closeShort;
+          return (
+            <ConfirmModal
+              title={__('Refuse this delivery?')}
+              message={
+                <div class="space-y-3" data-testid="po-refuse-delivery">
+                  <p>
+                    {__(
+                      'Nothing from this delivery has been counted, so refusing it changes no stock. The goods go back with the carrier.',
+                    )}
+                  </p>
+                  <label class="flex items-start gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name="po-refuse-outcome"
+                      data-testid="po-refuse-resend"
+                      checked={'resend' === choice()}
+                      onChange={() => setRefusing('resend')}
+                    />
+                    <span>
+                      <span class="font-medium">{__('The supplier will send it again')}</span>
+                      <br />
+                      {goodsTakenIn() ? (
+                        <WithStatus
+                          /* translators: %s is a status pill ("Partially received"). */
+                          text={__('The order stays open as %s and waits for the rest.')}
+                          status={STAGE_PARTIALLY_RECEIVED}
+                        />
+                      ) : (
+                        <WithStatus
+                          /* translators: %s is a status pill ("In transit"). */
+                          text={__('The order stays open and goes back to %s.')}
+                          status={STAGE_IN_TRANSIT}
+                        />
+                      )}
+                    </span>
+                  </label>
+                  <label class="flex items-start gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name="po-refuse-outcome"
+                      data-testid="po-refuse-end"
+                      checked={'end' === choice()}
+                      disabled={endBlocked()}
+                      onChange={() => setRefusing('end')}
+                    />
+                    <span classList={{ 'text-text-muted': endBlocked() }}>
+                      <span class="font-medium">
+                        {goodsTakenIn() ? __('Close the order short') : __('Cancel the order')}
+                      </span>
+                      <br />
+                      {endBlocked() ? (
+                        __(
+                          'Finishing an order on less than was ordered needs permission you do not have.',
+                        )
+                      ) : goodsTakenIn() ? (
+                        <WithStatus
+                          /* translators: %s is a status pill ("Received"). */
+                          text={__(
+                            'Earlier deliveries were received. The order finishes as %s on what arrived, and nothing more is expected. You will be asked why.',
+                          )}
+                          status={STAGE_RECEIVED}
+                        />
+                      ) : (
+                        <WithStatus
+                          /* translators: %s is a status pill ("Cancelled"). */
+                          text={__(
+                            'Nothing more is expected from this order. It is marked %s and stays in the history.',
+                          )}
+                          status={STAGE_CANCELED}
+                        />
+                      )}
+                    </span>
+                  </label>
+                </div>
+              }
+              confirmLabel={
+                'end' === choice()
+                  ? goodsTakenIn()
+                    ? __('Refuse and close short…')
+                    : __('Refuse and cancel the order')
+                  : __('Refuse delivery')
+              }
+              variant={'end' === choice() ? 'danger' : 'warning'}
+              onConfirm={() => {
+                if ('end' === choice() && !goodsTakenIn()) {
+                  transition.mutate(STAGE_CANCELED);
+                  return;
+                }
+                closeShortAfterRefusal = 'end' === choice();
+                transition.mutate(resting());
+              }}
+              onCancel={() => setRefusing(null)}
+            />
+          );
+        }}
       </Show>
 
       <Show when={archiving()}>
@@ -1878,6 +2124,24 @@ export function PoDetail(props: { id: string }): JSX.Element {
         />
       </Show>
     </section>
+  );
+}
+
+/**
+ * A translated sentence naming the status an action leads to, with the status drawn as its pill where
+ * the sentence's `%s` stands — so the outcome reads as the same badge the order will wear, and the
+ * sentence stays whole for a translator, who places `%s` where their language wants it.
+ */
+function WithStatus(props: { text: string; status: string }): JSX.Element {
+  const parts = (): string[] => props.text.split('%s');
+  return (
+    <>
+      {parts()[0]}
+      <span class="mx-0.5 inline-block align-middle">
+        <StatusPill status={props.status} />
+      </span>
+      {parts()[1] ?? ''}
+    </>
   );
 }
 
@@ -1934,38 +2198,6 @@ function EventDescription(props: {
         </>
       )}
     </Show>
-  );
-}
-
-/**
- * A box that fills from where it sits down to the viewport bottom, less `gutter`.
- *
- * **Its own component on purpose.** `createViewportFill` measures in `onMount`, so the hook has to
- * live in the component that owns the element: called from a parent that mounts earlier — this page
- * renders its lines table behind a `<Show>` that flips only once the lines arrive — it measures
- * while the ref is still undefined, keeps its fallback height, and nothing afterwards corrects it.
- * The symptom is a box that fills the whole window instead of the space below it, which reads as
- * the fill being broken rather than mistimed.
- *
- * The gutter is subtracted rather than padded because what has to fit below is a *sibling* (the
- * Activity header). Padding would sit inside this box and still leave it touching the fold.
- */
-function ViewportFilled(props: {
-  gutter: string;
-  class?: string;
-  children: JSX.Element;
-}): JSX.Element {
-  let el: HTMLDivElement | undefined;
-  const height = createViewportFill(() => el);
-
-  return (
-    <div
-      ref={(node) => (el = node)}
-      class={props.class}
-      style={{ height: `calc(${height()} - ${props.gutter})` }}
-    >
-      {props.children}
-    </div>
   );
 }
 

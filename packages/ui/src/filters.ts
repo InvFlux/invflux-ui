@@ -315,13 +315,23 @@ export type FilterSelectionChange = { kind: 'select'; value: string[] } | { kind
  *
  * A change that moves more than one value at once (an async result set churning under the control)
  * is not a click, so it is taken at face value rather than collapsed to a single option.
+ *
+ * `additive` is the operator saying *keep what is marked*: the click is read as an ordinary toggle
+ * on the defaults rather than a replace of them. It exists because replace alone makes two common
+ * moves unreachable in one gesture — "the defaults plus this one" and "the defaults except that
+ * one" — each costing a click per default the operator wants back. The toolkit's `next` is already
+ * exactly that toggle, so additive is the absence of the replace rule, not a rule of its own; the
+ * revert rule still applies, so toggling off the last remaining default returns to default instead
+ * of matching nothing. It has no effect once the selection is deliberate, where every click is
+ * already additive.
  */
 export function resolveFilterSelection(
   current: string[],
   next: string[],
   isDefault: boolean,
+  additive = false,
 ): FilterSelectionChange {
-  if (isDefault) {
+  if (isDefault && !additive) {
     const inCurrent = new Set(current);
     const inNext = new Set(next);
     const clicked = [

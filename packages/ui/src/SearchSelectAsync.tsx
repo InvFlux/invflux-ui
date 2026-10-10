@@ -24,8 +24,10 @@ export interface SearchSelectAsyncProps {
   ariaLabel?: string;
   autoFocus?: boolean;
   class?: string;
-  /** Highlight the typed text within each result label (client-only — the server still owns matching
-   *  + ranking; this just emphasises why each row matched). Off by default. */
+  /** Highlight the typed words within each result label (client-only — the server still owns matching
+   *  + ranking; this just emphasises why each row matched). By words, the rule a server search
+   *  applies, so a row is never shown matching by a looser rule than the one that found it. Off by
+   *  default. */
   highlight?: boolean;
   /** Auto-highlight the first (top-ranked) result so Enter accepts it without pressing Down. The
    *  server's order is preserved — this never re-ranks. Off by default. */
@@ -92,7 +94,7 @@ export function SearchSelectAsync(props: SearchSelectAsyncProps): JSX.Element {
         <Combobox.Item item={itemProps.item} class={ITEM}>
           <Combobox.ItemLabel class="truncate">
             <Show when={props.highlight} fallback={itemProps.item.rawValue.label}>
-              <HighlightMatch text={itemProps.item.rawValue.label} query={query()} />
+              <HighlightMatch text={itemProps.item.rawValue.label} query={query()} mode="words" />
             </Show>
           </Combobox.ItemLabel>
           <Combobox.ItemIndicator>✓</Combobox.ItemIndicator>

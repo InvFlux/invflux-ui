@@ -13,8 +13,8 @@ export interface ProcurementApi {
    */
   put<T = undefined>(path: string, body: unknown): Promise<T>;
   del<T>(path: string): Promise<T>;
-  /** Fetch a binary endpoint (nonce-auth) and trigger a browser download as `filename`. */
-  download(path: string, filename: string): Promise<void>;
+  /** Fetch a binary endpoint (nonce-auth) and download it under the server's name, else `fallbackName`. */
+  download(path: string, fallbackName: string): Promise<void>;
 }
 
 /**
@@ -52,6 +52,7 @@ export function createApi(context: Pick<ProcurementContext, 'apiRoot' | 'nonce'>
     // rest are unchanged.
     put: <T = undefined>(route: string, body: unknown): Promise<T> => api.put<T>(ns(route), body),
     del: <T>(route: string): Promise<T> => api.del<T>(ns(route)),
-    download: (route: string, filename: string): Promise<void> => api.download(ns(route), filename),
+    download: (route: string, fallbackName: string): Promise<void> =>
+      api.download(ns(route), fallbackName),
   };
 }

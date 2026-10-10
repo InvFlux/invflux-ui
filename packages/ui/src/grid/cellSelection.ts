@@ -113,7 +113,7 @@ export interface CellEdges {
 
 /**
  * Outline edges for `(row, col)`: a side is an edge when the cell is selected and the
- * neighbour on that side is not — so a contiguous region (single or multi-range) is framed by
+ * neighbor on that side is not — so a contiguous region (single or multi-range) is framed by
  * a single thin outline, with no internal borders between adjacent selected cells.
  */
 export function selectionEdges(state: SelectionState, row: number, col: number): CellEdges {

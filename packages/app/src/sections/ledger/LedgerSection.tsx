@@ -1,11 +1,24 @@
-import { ErrorBanner } from '@invflux/ui';
-import { __, _x, formatDate, sprintf } from '@invflux/i18n';
+import { createViewportFill, ErrorBanner, surfaceSettingsRegistry } from '@invflux/ui';
+import { __, _x, formatDate, formatMoney, formatTime, sprintf } from '@invflux/i18n';
 import { A, useParams } from '@solidjs/router';
 import { createQuery } from '@tanstack/solid-query';
-import { createMemo, createSignal, For, type JSX, Show } from 'solid-js';
+import { createMemo, createSignal, For, type JSX, onCleanup, Show } from 'solid-js';
 import { useApp } from '../../context';
 import { createApi } from '../../lib/api';
 import { slotParts, stockCard, type StockCardCell } from './stockCard';
+import {
+  buildDisplayCard,
+  columnKeyLabel,
+  columnTitle,
+  type DisplayColumn,
+  loadDisplay,
+  locationLabel,
+  type LedgerDisplay,
+  saveDisplay,
+  stateLabel,
+  visibleCount,
+} from './ledgerDisplay';
+import { LedgerSettingsPanel } from './LedgerSettingsPanel';
 
 /** One resolved reference document: PO (goods receipt), order (reservation/booking/correction),
  *  shipment, or stock adjustment. `label` is the human id (PO number / WC order id) — or, for an
@@ -31,11 +44,17 @@ interface LedgerRow {
   initialFrom: number | null;
   initialTo: number | null;
   actor: { typeCode: string | null; ref: string | null; name: string | null } | null;
-  surface: { typeCode: string | null; ref: string | null; name: string | null } | null;
+  surface: {
+    typeCode: string | null;
+    ref: string | null;
+    name: string | null;
+    /** Resolved through the label system: the reader's language, or the merchant's own word. */
+    displayName: string | null;
+  } | null;
   refType: string | null;
   refId: number | null;
   refDocument: RefDocument | null;
-  cost: { unitCost: string } | null;
+  cost: { unitCost: string; currency: string | null } | null;
 }
 
 /** One variation in the family, for the segmented switcher: its subject id + attribute label. */
@@ -157,12 +176,20 @@ type LedgerView = 'transitions' | 'stock-card';
 
 const LEDGER_VIEW_KEY = 'invflux:app:ledger:view';
 
-/** The view this browser last chose; transitions when it chose none or storage is unavailable. */
+/**
+ * The view this browser last chose, defaulting to the stock card.
+ *
+ * The stock card answers the question a merchant arrives with — "how much was there, and when did
+ * that change" — by carrying a running balance per slot on every row. Transitions answers "what
+ * exactly moved where", which is the auditor's question and the second one asked. Only an explicit
+ * choice of transitions is honoured, so a reader who picked it keeps it and everyone else lands on
+ * the balance.
+ */
 function storedLedgerView(): LedgerView {
   try {
-    return 'stock-card' === localStorage.getItem(LEDGER_VIEW_KEY) ? 'stock-card' : 'transitions';
+    return 'transitions' === localStorage.getItem(LEDGER_VIEW_KEY) ? 'transitions' : 'stock-card';
   } catch {
-    return 'transitions';
+    return 'stock-card';
   }
 }
 
@@ -334,25 +361,41 @@ function actorKey(row: LedgerRow): string {
 
 /** Actor cell — the named principal, over the raw key it resolves from (a system/plugin actor has no
  *  name, so its key carries the whole cell rather than being repeated under a placeholder). */
-function ActorCell(props: { row: LedgerRow }): JSX.Element {
+/**
+ * Who moved the stock, and through what.
+ *
+ * The surface — the screen or job a movement was initiated from — lives here rather than in a
+ * column of its own because the two answer one question together. On its own it mostly restated
+ * the movement ("reconciliation" beside "Stock reconciliation"); it says something only beside a
+ * person, where it tells you which screen they used. So it is a quiet line under the name, and a
+ * movement with no recorded surface simply has nothing under it instead of a dash in a column.
+ */
+function ActorCell(props: { row: LedgerRow; showKey: boolean }): JSX.Element {
   const name = (): string | null => props.row.actor?.name ?? null;
+  const via = (): string | null => props.row.surface?.displayName ?? null;
   return (
-    <Show when={name()} fallback={<span>{actorKey(props.row)}</span>}>
-      {(resolved) => (
-        <>
-          <span>{resolved()}</span>
-          <br />
-          <span class="font-mono text-xs text-text-muted">{actorKey(props.row)}</span>
-        </>
-      )}
-    </Show>
+    <>
+      {/* With no name to show, the key IS the answer and appears whatever the preference says:
+          hiding it there would leave the cell empty rather than discreet. */}
+      <Show when={name()} fallback={<span>{actorKey(props.row)}</span>}>
+        {(resolved) => <span>{resolved()}</span>}
+      </Show>
+      <Show when={via()}>
+        {(surface) => (
+          <span class="block text-xs text-text-muted">
+            {sprintf(
+              /* translators: %s: the screen or job a stock movement was initiated from, e.g. "Workbench". */
+              _x('via %s', 'ledger actor cell: where a stock movement was initiated'),
+              surface(),
+            )}
+          </span>
+        )}
+      </Show>
+      <Show when={props.showKey && name()}>
+        <span class="block font-mono text-xs text-text-muted">{actorKey(props.row)}</span>
+      </Show>
+    </>
   );
-}
-
-function surfaceLabel(row: LedgerRow): string {
-  if (!row.surface) return '—';
-  const parts = [row.surface.typeCode, row.surface.name ?? row.surface.ref].filter(Boolean);
-  return parts.length > 0 ? parts.join(':') : '—';
 }
 
 /** A human prefix before the linked id, by resolved-document type. Raw ids come from PHP; the
@@ -393,10 +436,21 @@ function AdjustmentRef(props: { doc: RefDocument }): JSX.Element {
 /** Reference cell — a labelled, linked named document when resolved, else the raw `{type} #{id}`. */
 function ReferenceCell(props: { row: LedgerRow }): JSX.Element {
   const doc = (): RefDocument | null => props.row.refDocument;
+  /**
+   * What to show when the reference did not resolve to a named document.
+   *
+   * **An internal uuid is never shown.** The column exists to point at something a merchant can
+   * open — a purchase order, an order — and a 32-character key opens nothing, identifies nothing a
+   * merchant holds, and reads as damage on the page. Where the id is one of ours, the row's movement
+   * label is already the honest account of what happened, so the cell stays empty rather than
+   * printing a key next to it. An admin-minted number (a receipt, a PO) is a real handle and stays.
+   */
   const fallback = (): string => {
     const { refType, refId } = props.row;
     if (!refType) return '—';
-    return refId === null ? refType : `${refType} #${refId}`;
+    if (refId === null) return refType;
+
+    return /^[0-9a-f]{32}$/.test(String(refId)) ? '—' : `${refType} #${refId}`;
   };
   return (
     <Show when={doc()} fallback={<span class="text-slate-500">{fallback()}</span>}>
@@ -447,7 +501,40 @@ export default function LedgerSection(): JSX.Element {
       // Not remembered across visits; the choice still holds for this one.
     }
   };
-  const card = createMemo(() => stockCard(query.data?.rows ?? []));
+  const [display, setDisplay] = createSignal<LedgerDisplay>(loadDisplay());
+  const updateDisplay = (patch: Partial<LedgerDisplay>): void => {
+    const next = { ...display(), ...patch };
+    setDisplay(next);
+    saveDisplay(next);
+  };
+  // The ledger is a detail route, so the shell reads its surface id off the first path segment
+  // (`#/ledger/906` → `ledger`) rather than from a nav section; the panel registers under that.
+  onCleanup(
+    surfaceSettingsRegistry.register({
+      surfaceId: 'ledger',
+      id: 'display',
+      order: 10,
+      label: () => __('Display'),
+      component: () => <LedgerSettingsPanel display={display} onChange={updateDisplay} />,
+    }),
+  );
+
+  const card = createMemo(() => buildDisplayCard(stockCard(query.data?.rows ?? []), display()));
+  /** The stock card's head is two rows deep (location over state); every other view's is one. */
+  const headRows = (): number => ('stock-card' === view() ? 2 : 1);
+  /**
+   * The rows to draw, each keeping the index of its cells in the card.
+   *
+   * Merging can leave a row with nothing to say — it moved stock between two slots that are now one
+   * column — and such a row is dropped rather than drawn blank. The original index travels with it
+   * because the card is still computed over every row: the hidden ones carry balances the visible
+   * ones depend on.
+   */
+  const visibleRows = createMemo(() =>
+    (query.data?.rows ?? [])
+      .map((row, index) => ({ row, index }))
+      .filter(({ index }) => !card().hiddenRows[index]),
+  );
   const viewOptions = (): Array<{ id: LedgerView; label: string }> => [
     {
       id: 'transitions',
@@ -475,11 +562,30 @@ export default function LedgerSection(): JSX.Element {
     siblings().find((s) => s.subjectId === currentId());
   const isParentView = (): boolean => siblings().length > 0 && selected() === undefined;
 
-  const money = (value: string | null, currency: string | null): string =>
-    value === null ? '—' : `${value}${currency ? ` ${currency}` : ''}`;
+  /**
+   * A cost as money, not as the column that stores it. The wire value is a 4-decimal string because
+   * that is the precision a unit cost is kept at; showing `142.0000 USD` leaks the storage decision
+   * to a merchant who only ever wanted 142.00.
+   *
+   * The formatting itself is the app's one money format — the ISO code placed by the locale, never a
+   * symbol — so this only decides what a *missing* cost looks like, which is a dash rather than a
+   * zero: an unvalued movement has no cost, and 0.00 would be a claim about its worth.
+   */
+  const money = (value: string | null, currency: string | null): string => {
+    if (value === null) return '—';
+    const amount = Number(value);
+
+    return Number.isFinite(amount) ? formatMoney(amount, currency) : value;
+  };
+
+  // Fill the viewport from wherever the section begins, the way the queue and the workbench do.
+  // `h-screen` is 100vh measured from the top of the PAGE, not from below WordPress's admin bar and
+  // the shell's tab strip, so it would overhang by exactly that chrome; this measures the element.
+  let rootEl: HTMLDivElement | undefined;
+  const fillHeight = createViewportFill(() => rootEl);
 
   return (
-    <div class="p-4 bg-ground">
+    <div ref={rootEl} class="flex flex-col p-4 bg-ground" style={{ height: fillHeight() }}>
       <Show
         when={query.data}
         fallback={
@@ -499,7 +605,7 @@ export default function LedgerSection(): JSX.Element {
           <>
             {/* Header: subject identity + (cost-gated) valuation. For a variable product the title is
                 the family (parent) name; the segmented control below switches between variations. */}
-            <header class="mb-4">
+            <header class="mb-4 shrink-0">
               <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
                 <h1 class="text-lg font-semibold text-slate-900">
                   {data().subject.familyTitle ||
@@ -530,36 +636,88 @@ export default function LedgerSection(): JSX.Element {
                   </div>
                 </Show>
               </div>
-              <dl class="mt-1 flex flex-wrap gap-x-6 gap-y-1 text-sm text-slate-600">
-                <div>
-                  <dt class="inline text-text-muted">{__('SKU')}: </dt>
-                  <dd class="inline font-mono">{data().subject.sku || '—'}</dd>
-                </div>
-                <div>
-                  <dt class="inline text-text-muted">{__('Woo post')}: </dt>
-                  <dd class="inline font-mono">{data().subject.postId}</dd>
-                </div>
-                <div>
-                  <dt class="inline text-text-muted">{__('Subject')}: </dt>
-                  <dd class="inline font-mono">{data().subject.subjectId}</dd>
-                </div>
-                <Show when={data().cost}>
-                  {(cost) => (
-                    <>
-                      <div>
-                        <dt class="inline text-text-muted">{__('WAC')}: </dt>
+              {/* The identity line and the view switcher share a row: the switcher belongs to the
+                  grid below, and on its own line it cost a whole band of vertical space that the
+                  grid now wants, since the grid fills the viewport. */}
+              <div class="mt-1 flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
+                <dl class="flex flex-wrap gap-x-6 gap-y-1 text-sm text-text">
+                  <div>
+                    <dt class="inline text-text-muted">{__('SKU')}: </dt>
+                    <dd class="inline font-mono">{data().subject.sku || '—'}</dd>
+                  </div>
+                  <div>
+                    {/* WooCommerce's own product id, under the name its admin uses. The InvFlux
+                      subject id is deliberately absent: it is an internal key, and a merchant
+                      reading a stock history has nothing to do with it. */}
+                    <dt class="inline text-text-muted">{__('Product ID')}: </dt>
+                    <dd class="inline font-mono">{data().subject.postId}</dd>
+                  </div>
+                  {/* One cost, the one in force. The two are successive, not parallel: a product is
+                      valued at the baseline a merchant seeded until a costed goods receipt
+                      establishes a weighted average, and from then on the baseline is history. Shown
+                      side by side they were two numbers with nothing saying which one counts — and
+                      on 86% of this store's subjects the WAC half was simply a dash. The rest of the
+                      system reads the same `weighted_avg_cost ?? seed_cost`.
+
+                      The label is the workbench's, because this is that column's field and a second
+                      name for it on a second surface is how vocabulary drifts — minus the "(WAC)"
+                      while no receipt has established one, since the parenthetical names the very
+                      thing that is absent. Both forms are words the app already had; which phase
+                      applies is spelled out in the tooltip, at no new vocabulary at all. */}
+                  <Show when={data().cost}>
+                    {(cost) => (
+                      <div
+                        title={
+                          cost().weightedAvgCost === null
+                            ? __(
+                                'Unit cost, editable as a starting baseline until the first goods receipt.',
+                              )
+                            : __(
+                                'Weighted average cost, maintained from goods receipts. It supersedes the starting baseline.',
+                              )
+                        }
+                      >
+                        <dt class="inline text-text-muted">
+                          {cost().weightedAvgCost === null
+                            ? __('Unit cost')
+                            : __('Unit cost (WAC)')}
+                          :{' '}
+                        </dt>
                         <dd class="inline font-mono">
-                          {money(cost().weightedAvgCost, cost().currency)}
+                          {money(cost().weightedAvgCost ?? cost().seedCost, cost().currency)}
                         </dd>
                       </div>
-                      <div>
-                        <dt class="inline text-text-muted">{__('Unit cost')}: </dt>
-                        <dd class="inline font-mono">{money(cost().seedCost, cost().currency)}</dd>
-                      </div>
-                    </>
-                  )}
+                    )}
+                  </Show>
+                </dl>
+                <Show when={!isParentView() && data().rows.length > 0}>
+                  <div
+                    class="inline-flex gap-0.5 rounded-md bg-surface-raised p-0.5"
+                    role="radiogroup"
+                    aria-label={__('Ledger view')}
+                    data-testid="ledger-view-toggle"
+                  >
+                    <For each={viewOptions()}>
+                      {(option) => (
+                        <button
+                          type="button"
+                          role="radio"
+                          aria-checked={view() === option.id}
+                          data-view={option.id}
+                          class="rounded px-2.5 py-1 text-xs font-medium transition-colors"
+                          classList={{
+                            'bg-surface text-text shadow-sm': view() === option.id,
+                            'text-text-muted hover:text-text': view() !== option.id,
+                          }}
+                          onClick={() => chooseView(option.id)}
+                        >
+                          {option.label}
+                        </button>
+                      )}
+                    </For>
+                  </div>
                 </Show>
-              </dl>
+              </div>
             </header>
 
             <Show
@@ -581,79 +739,93 @@ export default function LedgerSection(): JSX.Element {
                   </Show>
                 }
               >
-                <div class="mb-2 flex justify-end">
-                  <div
-                    class="inline-flex gap-0.5 rounded-md bg-slate-100 p-0.5"
-                    role="radiogroup"
-                    aria-label={__('Ledger view')}
-                    data-testid="ledger-view-toggle"
-                  >
-                    <For each={viewOptions()}>
-                      {(option) => (
-                        <button
-                          type="button"
-                          role="radio"
-                          aria-checked={view() === option.id}
-                          data-view={option.id}
-                          class="rounded px-2.5 py-1 text-xs font-medium transition-colors"
-                          classList={{
-                            'bg-surface text-slate-900 shadow-sm': view() === option.id,
-                            'text-slate-600 hover:text-slate-900': view() !== option.id,
-                          }}
-                          onClick={() => chooseView(option.id)}
-                        >
-                          {option.label}
-                        </button>
-                      )}
-                    </For>
-                  </div>
-                </div>
-                <div class="overflow-x-auto rounded border border-slate-200">
+                <div class="min-h-0 flex-1 overflow-auto rounded border border-border bg-surface shadow-sm">
                   <table
                     class="w-full min-w-[720px] text-left text-sm"
                     data-testid="ledger-table"
                     data-view={view()}
                   >
-                    <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                    {/* The stock card heads its columns twice: a location spanning its states, then
+                        the states themselves. Every other column is one head spanning both rows, so
+                        the two layouts share one row of cells. The transitions view has no column
+                        groups and keeps a single head row. */}
+                    <thead class="sticky top-0 z-10 border-b border-border bg-surface-raised text-xs font-semibold uppercase tracking-wide text-text-muted">
                       <tr>
-                        <th class="px-3 py-2">{__('Timestamp')}</th>
-                        <th class="px-3 py-2">{__('Movement')}</th>
+                        <th class="px-3 py-2" rowSpan={headRows()}>
+                          {__('Timestamp')}
+                        </th>
+                        <th class="px-3 py-2" rowSpan={headRows()}>
+                          {__('Movement')}
+                        </th>
                         <Show
                           when={'stock-card' === view()}
                           fallback={<th class="px-3 py-2">{__('Transition')}</th>}
                         >
-                          <For each={card().slots}>
-                            {(slot) => (
+                          <For each={card().groups}>
+                            {(group) => (
                               <th
-                                class="cursor-help px-3 py-2 text-right font-mono normal-case"
-                                title={slotTooltip(slot)}
+                                class="border-l border-border px-3 py-2 text-center normal-case"
+                                colSpan={group.columns.length}
+                                title={group.location}
                               >
-                                {slot}
+                                {display().stateNames
+                                  ? locationLabel(group.location)
+                                  : group.location}
                               </th>
                             )}
                           </For>
                         </Show>
-                        <th class="px-3 py-2">{__('Actor')}</th>
-                        <th class="px-3 py-2">{__('Surface')}</th>
-                        <th class="px-3 py-2">{__('Reference')}</th>
+                        <th class="px-3 py-2" rowSpan={headRows()}>
+                          {__('Actor')}
+                        </th>
+                        <th class="px-3 py-2" rowSpan={headRows()}>
+                          {__('Reference')}
+                        </th>
                         <Show when={showCosts()}>
-                          <th class="px-3 py-2 text-right">{__('Unit cost')}</th>
+                          <th class="px-3 py-2 text-right" rowSpan={headRows()}>
+                            {__('Unit cost')}
+                          </th>
                         </Show>
                       </tr>
+                      <Show when={'stock-card' === view()}>
+                        <tr>
+                          <For each={card().columns}>
+                            {(column) => (
+                              <th
+                                class="cursor-help px-3 py-1.5 text-right font-normal normal-case"
+                                classList={{ 'font-mono': !display().stateNames }}
+                                title={columnTitle(column, display())}
+                              >
+                                {display().stateNames
+                                  ? stateLabel(column.state)
+                                  : columnKeyLabel(column)}
+                              </th>
+                            )}
+                          </For>
+                        </tr>
+                      </Show>
                     </thead>
-                    <tbody class="divide-y divide-slate-100">
-                      <For each={data().rows}>
-                        {(row, index) => (
-                          <tr class="hover:bg-slate-50">
-                            <td class="px-3 py-2 whitespace-nowrap font-mono text-xs text-slate-500">
-                              {row.recordedAt}
-                            </td>
-                            <td class="px-3 py-2">
-                              <span>{row.movementLabel}</span>
+                    <tbody class="divide-y divide-border">
+                      <For each={visibleRows()}>
+                        {({ row, index }) => (
+                          <tr class="even:bg-ground hover:bg-surface-hover">
+                            {/* Date over time: a ledger is read down the column, and stacking lets the
+                                eye follow the days while the time stays available for the rows that
+                                share one. The stored microsecond value remains the tooltip. */}
+                            <td
+                              class="px-3 py-2 whitespace-nowrap text-xs text-text-muted"
+                              title={row.recordedAt}
+                            >
+                              {formatDate(row.recordedAt)}
                               <br />
-                              <span class="font-mono text-xs text-text-muted">
-                                {row.movementCode}
-                              </span>
+                              <span class="text-text-muted">{formatTime(row.recordedAt)}</span>
+                            </td>
+                            {/* The label alone. A movement's machine code says the same thing in our
+                                vocabulary rather than the merchant's, and the label is what the
+                                registry exists to provide — so the code rides along as a tooltip for
+                                whoever is debugging, and stops being a second line on every row. */}
+                            <td class="px-3 py-2" title={row.movementCode}>
+                              {row.movementLabel}
                             </td>
                             <Show
                               when={'stock-card' === view()}
@@ -663,22 +835,31 @@ export default function LedgerSection(): JSX.Element {
                                 </td>
                               }
                             >
-                              <For each={card().slots}>
-                                {(_slot, col) => (
-                                  <StockCardCellView cell={card().cells[index()]?.[col()]} />
+                              <For each={card().columns}>
+                                {(_column, col) => (
+                                  <StockCardCellView cell={card().cells[index]?.[col()]} />
                                 )}
                               </For>
                             </Show>
-                            <td class="px-3 py-2 text-slate-600">
-                              <ActorCell row={row} />
+                            <td class="px-3 py-2 text-text">
+                              <ActorCell row={row} showKey={display().actorKeys} />
                             </td>
-                            <td class="px-3 py-2 text-slate-600">{surfaceLabel(row)}</td>
                             <td class="px-3 py-2">
                               <ReferenceCell row={row} />
                             </td>
                             <Show when={showCosts()}>
-                              <td class="px-3 py-2 text-right font-mono">
-                                {row.cost ? row.cost.unitCost : '—'}
+                              {/* Grounded in the subject's cost currency: a row carries the amount
+                                  but not what it is denominated in, and the currency is what decides
+                                  how many decimals the amount has — two for CHF, none for JPY. The
+                                  stored 4-decimal precision stays available as the tooltip. */}
+                              <td class="px-3 py-2 text-right font-mono" title={row.cost?.unitCost}>
+                                {money(
+                                  row.cost?.unitCost ?? null,
+                                  // Each costed line is frozen in its own currency and never
+                                  // reconverted, so the line grounds its own amount; the subject's
+                                  // currency covers the one source that has none, a goods receipt.
+                                  row.cost?.currency ?? data().cost?.currency ?? null,
+                                )}
                               </td>
                             </Show>
                           </tr>
@@ -687,12 +868,26 @@ export default function LedgerSection(): JSX.Element {
                     </tbody>
                   </table>
                 </div>
-                <p class="mt-2 text-xs text-text-muted">
-                  {sprintf(
-                    /* translators: %d: number of ledger rows shown */
-                    __('Showing the %d most recent movements.'),
-                    data().rows.length,
-                  )}
+                {/* Once a row can be hidden, a bare count would describe a page the reader is not
+                    looking at — so the footer says both numbers whenever they differ. */}
+                <p class="mt-2 shrink-0 text-xs text-text-muted">
+                  <Show
+                    when={visibleCount(card().hiddenRows) !== data().rows.length}
+                    fallback={sprintf(
+                      /* translators: %d: number of ledger rows shown */
+                      __('Showing the %d most recent movements.'),
+                      data().rows.length,
+                    )}
+                  >
+                    {sprintf(
+                      /* translators: %1$d: movements shown; %2$d: movements in this page of the ledger. */
+                      __(
+                        'Showing %1$d of the %2$d most recent movements — the rest only moved stock within a column.',
+                      ),
+                      visibleCount(card().hiddenRows),
+                      data().rows.length,
+                    )}
+                  </Show>
                 </p>
               </Show>
             </Show>

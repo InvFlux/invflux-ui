@@ -385,7 +385,7 @@ export function CapturePaymentModal(props: {
               <label for="rp-reference" class={labelClass}>
                 {_x(
                   'Reference',
-                  'record payment form: the transfer or cheque reference, field label',
+                  'record payment form: the transfer or check reference, field label',
                 )}
               </label>
               <Input

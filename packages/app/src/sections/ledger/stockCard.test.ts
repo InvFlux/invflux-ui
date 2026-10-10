@@ -61,10 +61,12 @@ describe('compareSlots', () => {
 
   it('treats a leaf location like its root, and puts unknown values last, alphabetically', () => {
     const slots = ['zz.atp', 'oh/main.ctd', 'aa.atp', 'oh/main.atp', 'oh.xyz'];
+    // `oh` and `oh/main` share a rank, and each keeps its own states together rather than
+    // interleaving by state — that contiguity is what lets a location head span its columns.
     expect([...slots].sort(compareSlots)).toEqual([
+      'oh.xyz',
       'oh/main.atp',
       'oh/main.ctd',
-      'oh.xyz',
       'aa.atp',
       'zz.atp',
     ]);

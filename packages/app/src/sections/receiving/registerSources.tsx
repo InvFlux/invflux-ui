@@ -40,8 +40,9 @@ export function registerReceivingSources(): void {
     label: () => __('No document'),
     description: () =>
       __('An opening balance, a delivery nobody ordered, stock found on a shelf, goods made here.'),
-    // The form takes no props: a source-less intake has no document to be told about.
-    component: (): JSX.Element => <ReceiveStockForm />,
+    // `rest` is the count's id once one is open, so a reload or a link from the landing list lands
+    // back on the same count; without it, the screen opens one.
+    component: (props): JSX.Element => <ReceiveStockForm rest={props.rest} />,
   };
 
   slotRegistry.register(RECEIVING_SOURCE_SLOT, purchaseOrder);

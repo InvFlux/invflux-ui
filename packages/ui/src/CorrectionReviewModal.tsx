@@ -96,6 +96,24 @@ export interface CorrectionReviewModalProps {
   governanceNotes?: ReviewNote[];
   /** Portal the modal to this root (shadow-DOM / transformed-ancestor surfaces). */
   mount?: HTMLElement;
+  /**
+   * Offer to hand the on-hand INCREASES to a goods receipt instead of applying them as a correction.
+   * Shown whenever the review holds at least one increase, and it becomes the primary action, Apply
+   * stepping back. Only the increases move: a decrease is a real correction, so it stays staged along
+   * with every other pending change, for a later Apply. The host owns the request (and unstages the
+   * moved cells when it succeeds); the modal only asks the receipt's reason, once, because a
+   * receiving session locks it on creation.
+   */
+  receipt?: ReceiptOffer;
+}
+
+/** The goods-receipt hand-off a host makes available to the review modal. */
+export interface ReceiptOffer {
+  /** Reasons the operator may pick, as the server states them. Empty while they load. */
+  reasons: Array<{ value: string; label: string; hint?: string; disabled?: boolean }>;
+  /** Preselected value; falls back to the first reason. */
+  defaultReason?: string;
+  onOpen: (reason: string) => void;
 }
 
 /**
@@ -180,9 +198,12 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
   const [dispositionNeg, setDispositionNeg] = createSignal('');
   const [dispositionPos, setDispositionPos] = createSignal('');
   const [discoveryContext, setDiscoveryContext] = createSignal('');
-  const [showBreakdown, setShowBreakdown] = createSignal(true);
+  const [showBreakdown, setShowBreakdown] = createSignal(false);
+  const [receiptStep, setReceiptStep] = createSignal(false);
+  const [receiptReason, setReceiptReason] = createSignal('');
   let firstReasonRef: HTMLTextAreaElement | undefined;
   let scrimRef: HTMLDivElement | undefined;
+  let receiptPanelRef: HTMLDivElement | undefined;
   let applyRef: HTMLButtonElement | undefined;
 
   const distinctSubjects = createMemo(() => {
@@ -238,6 +259,27 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
   const hasPos = createMemo(() =>
     (dispositionSection()?.rows ?? []).some((r) => (r.delta ?? 0) > 0),
   );
+
+  // The receipt route is for on-hand INCREASES. A review may also carry decreases and other columns:
+  // the host moves only the increasing on-hand rows into the receipt and leaves everything else staged,
+  // to be applied through a normal review afterwards.
+  const stockIncreaseRows = createMemo(
+    () =>
+      props.groups.find((g) => isOnHand(g.columnId))?.rows.filter((r) => (r.delta ?? 0) > 0) ?? [],
+  );
+  const hasStockIncrease = createMemo(() => stockIncreaseRows().length > 0);
+  const offersReceipt = createMemo(() => props.receipt !== undefined && hasStockIncrease());
+  // Keep a pickable reason selected: the default when there is one, else the first that is not disabled.
+  createEffect(() => {
+    const offer = props.receipt;
+    const pickable = (offer?.reasons ?? []).filter((r) => !r.disabled);
+    if (pickable.length === 0 || pickable.some((r) => r.value === receiptReason())) return;
+    setReceiptReason((pickable.find((r) => r.value === offer?.defaultReason) ?? pickable[0]).value);
+  });
+  // Leaving the "holds an increase" state (cannot happen while open, but keeps the invariant local).
+  createEffect(() => {
+    if (!offersReceipt()) setReceiptStep(false);
+  });
 
   // Boundary warnings: a negative cascade that reaches reserved-in-cart (res) / paid-undispatched (ctd).
   const warnRes = createMemo(() =>
@@ -326,8 +368,18 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
     return entries.map((e) => `${e.label}: ${e.text}`).join('\n');
   }
 
+  function openReceipt(): void {
+    if (props.pending || !offersReceipt() || receiptReason() === '') return;
+    props.receipt?.onOpen(receiptReason());
+  }
+
   function confirm(): void {
     if (props.pending) return;
+    // In the receipt step the chord opens the receipt: it is what the dialog is asking for then.
+    if (receiptStep()) {
+      openReceipt();
+      return;
+    }
     if (cannotApply()) {
       if (requiredMissing().length > 0) firstReasonRef?.focus();
       return;
@@ -641,16 +693,24 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
                         </table>
                       }
                     >
-                      {/* On-hand: SKU · Name · State · Base · Delta · Result, with slot sub-rows. */}
+                      {/* On-hand: SKU · Name · [State] · Base · Delta · Result; the slot sub-rows and the State column
+                          appear only with the breakdown open. */}
                       <table class="w-full text-sm">
                         <thead>
                           <tr class="border-b border-border text-left text-xs uppercase text-text-muted">
-                            <th class="px-4 py-1.5 font-semibold">{__('SKU')}</th>
-                            <th class="px-4 py-1.5 font-semibold">{__('Name')}</th>
-                            <th class="px-4 py-1.5 font-semibold">{__('State')}</th>
-                            <th class="px-4 py-1.5 text-right font-semibold">{__('Base')}</th>
-                            <th class="px-4 py-1.5 text-right font-semibold">{__('Delta')}</th>
-                            <th class="px-4 py-1.5 text-right font-semibold">{__('Result')}</th>
+                            {/* Narrow screens (below `sm:`) drop SKU (it moves under the name) and
+                                Base; State only exists while the breakdown is open, since every row
+                                is "Total" otherwise. */}
+                            <th class="hidden px-4 py-1.5 font-semibold sm:table-cell">{__('SKU')}</th>
+                            <th class="px-3 py-1.5 font-semibold sm:px-4">{__('Name')}</th>
+                            <Show when={showBreakdown()}>
+                              <th class="px-3 py-1.5 font-semibold sm:px-4">{__('State')}</th>
+                            </Show>
+                            <th class="hidden px-4 py-1.5 text-right font-semibold sm:table-cell">
+                              {__('Base')}
+                            </th>
+                            <th class="px-3 py-1.5 text-right font-semibold sm:px-4">{__('Delta')}</th>
+                            <th class="px-3 py-1.5 text-right font-semibold sm:px-4">{__('Result')}</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -662,20 +722,30 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
                               return (
                                 <>
                                   <tr class="border-t border-border align-top font-semibold">
-                                    <td class="px-4 py-2 font-mono text-xs font-normal text-text-muted">
+                                    <td class="hidden px-4 py-2 font-mono text-xs font-normal text-text-muted sm:table-cell">
                                       {row.sku || '—'}
                                     </td>
-                                    <td class="px-4 py-2 text-text">{row.name}</td>
-                                    <td class="px-4 py-2 text-text">{__('Total')}</td>
-                                    <td class="px-4 py-2 text-right tabular-nums text-text">
+                                    <td class="px-3 py-2 text-text sm:px-4">
+                                      {row.name}
+                                      {/* The SKU column is hidden on narrow screens; it lives here. */}
+                                      <Show when={row.sku}>
+                                        <span class="block font-mono text-xs font-normal text-text-muted sm:hidden">
+                                          {row.sku}
+                                        </span>
+                                      </Show>
+                                    </td>
+                                    <Show when={showBreakdown()}>
+                                      <td class="px-3 py-2 text-text sm:px-4">{__('Total')}</td>
+                                    </Show>
+                                    <td class="hidden px-4 py-2 text-right tabular-nums text-text sm:table-cell">
                                       {base}
                                     </td>
                                     <td
-                                      class={`px-4 py-2 text-right tabular-nums ${deltaClass(delta)}`}
+                                      class={`px-3 py-2 text-right tabular-nums sm:px-4 ${deltaClass(delta)}`}
                                     >
                                       {signedDelta(delta)}
                                     </td>
-                                    <td class="px-4 py-2 text-right tabular-nums text-text">
+                                    <td class="px-3 py-2 text-right tabular-nums text-text sm:px-4">
                                       {base + delta}
                                     </td>
                                   </tr>
@@ -687,18 +757,18 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
                                         return (
                                           <Show when={slotDelta() !== 0}>
                                             <tr class="border-t border-border align-top text-text-muted">
-                                              <td class="px-4 py-1" />
-                                              <td class="px-4 py-1" />
-                                              <td class="px-4 py-1 pl-8">{slot.label()}</td>
-                                              <td class="px-4 py-1 text-right tabular-nums">
+                                              <td class="hidden px-4 py-1 sm:table-cell" />
+                                              <td class="px-3 py-1 sm:px-4" />
+                                              <td class="px-3 py-1 sm:px-4 sm:pl-8">{slot.label()}</td>
+                                              <td class="hidden px-4 py-1 text-right tabular-nums sm:table-cell">
                                                 {slotBase()}
                                               </td>
                                               <td
-                                                class={`px-4 py-1 text-right tabular-nums ${deltaClass(slotDelta())}`}
+                                                class={`px-3 py-1 text-right tabular-nums sm:px-4 ${deltaClass(slotDelta())}`}
                                               >
                                                 {signedDelta(slotDelta())}
                                               </td>
-                                              <td class="px-4 py-1 text-right tabular-nums">
+                                              <td class="px-3 py-1 text-right tabular-nums sm:px-4">
                                                 {slotBase() + slotDelta()}
                                               </td>
                                             </tr>
@@ -734,11 +804,22 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
               }}
             </For>
           </Show>
-        </div>
 
-        {/* Shared on-hand controls: disposition (why) → discovery (how) → reason (conditional). */}
+          {/* Shared on-hand controls: disposition (why) → discovery (how) → reason (conditional).
+              Below the review, inside the scroll area: on a short screen the questions would otherwise
+              claim the height the review needs. */}
+          <Show
+            when={!(receiptStep() && props.receipt)}
+            fallback={null}
+          >
         <Show when={dispositionSection() || reasonSections().length > 0}>
-          <div class="space-y-4 border-t border-border bg-gray-50 p-4">
+          <div class="space-y-4 rounded border border-border bg-gray-50 p-4">
+            {/* Says why Apply is disabled, at the head of the questions that would enable it. */}
+            <Show when={dispositionsMissing()}>
+              <p class="text-xs text-text-muted">
+                {__('Choose a disposition below to apply these changes.')}
+              </p>
+            </Show>
             <Show when={dispositionSection()}>
               <div class="flex flex-wrap gap-x-10 gap-y-3">
                 <Show when={hasNeg()}>
@@ -771,18 +852,46 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
                       onChange={(v) => setDispositionPos(v)}
                       class="flex-wrap"
                     />
-                    <p
-                      class={`text-xs ${dispositionPos() === 'other_write_in' ? 'text-amber-700' : 'text-text-muted'}`}
-                    >
-                      {__(
-                        'Added units are valued at the current average cost — a correction records no purchase cost. For new stock at a specific cost, receive it via a purchase order.',
-                      )}
-                    </p>
+                    {/* The uncosted warning below says the same thing more urgently (no cost at all, not
+                        just no purchase cost), so when it shows, it replaces this line. */}
+                    <Show when={!warnUncosted()}>
+                      <p
+                        class={`text-xs ${dispositionPos() === 'other_write_in' ? 'text-amber-700' : 'text-text-muted'}`}
+                      >
+                        {/* With the receipt on offer, point at it: it is where the units' cost is stated.
+                            Without it (no receiving capability), the purchase-order route is the pointer. */}
+                        {offersReceipt()
+                          ? __(
+                              'Added units are valued at the current average cost — a correction records no purchase cost. To record what the units cost, enter them as a Goods Receipt.',
+                            )
+                          : __(
+                              'Added units are valued at the current average cost — a correction records no purchase cost. For new stock at a specific cost, receive it via a purchase order.',
+                            )}
+                      </p>
+                    </Show>
                     <Show when={warnUncosted()}>
                       <div class="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                        {__(
-                          "No cost basis: this stock is added uncosted and the movement can't be valued. Seed the cost first (Cost column) so it's recorded with a value.",
-                        )}
+                        {offersReceipt()
+                          ? (() => {
+                              // Split on the placeholder rather than sprintf() it, so the remedy keeps
+                              // its bold — and stays one sentence a translator can reorder.
+                              const [before, after] = __(
+                                /* translators: %s: the bold remedy, "Enter it as a Goods Receipt" */
+                                'No cost basis: this stock would be added uncosted. %s to state its cost, or seed the cost first (Unit cost column).',
+                              ).split(/%(?:1\$)?s/);
+                              return (
+                                <>
+                                  {before}
+                                  <strong class="font-semibold">
+                                    {__('Enter it as a Goods Receipt')}
+                                  </strong>
+                                  {after}
+                                </>
+                              );
+                            })()
+                          : __(
+                              "No cost basis: this stock is added uncosted and the movement can't be valued. Seed the cost first (Unit cost column) so it's recorded with a value.",
+                            )}
                       </div>
                     </Show>
                   </div>
@@ -835,6 +944,85 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
             </Show>
           </div>
         </Show>
+          </Show>
+
+          {/* The receipt hand-off replaces the correction's own questions: its reason is asked here, once,
+              because a receiving session locks it on creation. The units are not booked by this click. */}
+          <Show when={receiptStep() && props.receipt}>
+            {(offer) => (
+              <div
+                ref={receiptPanelRef}
+                class="space-y-3 rounded border border-border bg-gray-50 p-4"
+              >
+                <div class="grid gap-1">
+                  <span class="text-xs font-semibold uppercase text-text-muted">
+                    {__('Why is there more than recorded?')}
+                    <RequiredMark />
+                  </span>
+                  <div
+                    role="radiogroup"
+                    aria-label={__('Why is there more than recorded?')}
+                    class="grid gap-1.5"
+                  >
+                    <For each={offer().reasons}>
+                      {(r) => (
+                        <label
+                          class="flex items-start gap-2 text-sm"
+                          classList={{
+                            'cursor-pointer': !r.disabled && !props.pending,
+                            'cursor-not-allowed opacity-50': !!r.disabled,
+                          }}
+                        >
+                          <input
+                            type="radio"
+                            name="receipt-reason"
+                            class="mt-1"
+                            value={r.value}
+                            checked={receiptReason() === r.value}
+                            disabled={r.disabled || props.pending}
+                            onChange={() => setReceiptReason(r.value)}
+                          />
+                          <span class="grid">
+                            <span class="font-medium text-text">{r.label}</span>
+                            <Show when={r.hint}>
+                              <span class="text-xs text-text-muted">{r.hint}</span>
+                            </Show>
+                          </span>
+                        </label>
+                      )}
+                    </For>
+                  </div>
+                </div>
+                <p class="text-xs font-medium text-text">
+                  {sprintf(
+                    _n(
+                      '%d increase moves to the receipt.',
+                      '%d increases move to the receipt.',
+                      stockIncreaseRows().length,
+                    ),
+                    stockIncreaseRows().length,
+                  )}
+                  <Show when={totalCount() - stockIncreaseRows().length > 0}>
+                    {' '}
+                    {sprintf(
+                      _n(
+                        '%d other pending change stays staged.',
+                        '%d other pending changes stay staged.',
+                        totalCount() - stockIncreaseRows().length,
+                      ),
+                      totalCount() - stockIncreaseRows().length,
+                    )}
+                  </Show>
+                </p>
+                <p class="text-xs text-text-muted">
+                  {__(
+                    'A Goods Receipt opens with these on-hand increases. Nothing is booked until you post it there, where you also state what the units cost. The increases are cleared here; any other pending changes stay staged.',
+                  )}
+                </p>
+              </div>
+            )}
+          </Show>
+        </div>
 
         {/* Governance-change advisories: a fixed band just above the action buttons — always visible,
             independent of the Per-SKU / Per-field tab and of scroll position. */}
@@ -857,23 +1045,75 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
         </Show>
 
         <ModalFooter layout="between">
-          <Show when={props.onDiscard} fallback={<span />}>
-            <Button
-              variant="danger"
-              weight="outline"
-              disabled={props.pending}
-              onClick={() => props.onDiscard?.()}
-            >
-              {__('Discard pending edits')}
-            </Button>
-          </Show>
-          <div class="flex gap-2">
-            <Button variant="secondary" disabled={props.pending} onClick={props.onCancel}>
-              {__('Continue editing')}
-            </Button>
-            <Button ref={applyRef} disabled={cannotApply() || props.pending} onClick={confirm}>
-              {confirmText()}
-            </Button>
+          {/* One wrapper so the narrow layout can stack: the primary actions first, the destructive
+              one last and on its own row, instead of three buttons fighting for a phone's width. */}
+          <div class="flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <Show when={props.onDiscard} fallback={<span />}>
+              <Button
+                class="order-last self-start whitespace-nowrap sm:order-first"
+                variant="danger"
+                weight="outline"
+                disabled={props.pending}
+                onClick={() => props.onDiscard?.()}
+              >
+                {__('Discard pending edits')}
+              </Button>
+            </Show>
+            <div class="flex flex-wrap justify-end gap-2">
+              <Show
+                when={receiptStep()}
+                fallback={
+                  <>
+                    <Button variant="secondary" disabled={props.pending} onClick={props.onCancel}>
+                      {__('Continue editing')}
+                    </Button>
+                    {/* With the receipt on offer, Apply steps back: for increases the receipt is the
+                        primary route (it asks about cost; a correction never does). */}
+                    <Button
+                      ref={applyRef}
+                      variant={offersReceipt() ? 'secondary' : 'primary'}
+                      disabled={cannotApply() || props.pending}
+                      onClick={confirm}
+                    >
+                      {confirmText()}
+                    </Button>
+                    <Show when={offersReceipt()}>
+                      <Button
+                        data-testid="correction-enter-as-receipt"
+                        disabled={props.pending || (props.receipt?.reasons.length ?? 0) === 0}
+                        onClick={() => {
+                        setReceiptStep(true);
+                        // The reason form sits under the review; on a short screen it opens out of
+                        // sight, so scroll to it once it has rendered. Aligned to its TOP: the browser
+                        // stops at the bottom of the scroll area, so a short form lands fully in view,
+                        // and a form taller than the area still starts at its question.
+                        queueMicrotask(() =>
+                          receiptPanelRef?.scrollIntoView({ block: 'start', behavior: 'smooth' }),
+                        );
+                      }}
+                      >
+                        {__('Enter as a Goods Receipt…')}
+                      </Button>
+                    </Show>
+                  </>
+                }
+              >
+                <Button
+                  variant="secondary"
+                  disabled={props.pending}
+                  onClick={() => setReceiptStep(false)}
+                >
+                  {__('Back')}
+                </Button>
+                <Button
+                  data-testid="correction-open-receipt"
+                  disabled={props.pending || receiptReason() === ''}
+                  onClick={openReceipt}
+                >
+                  {__('Open the Goods Receipt')}
+                </Button>
+              </Show>
+            </div>
           </div>
         </ModalFooter>
       </ModalPanel>

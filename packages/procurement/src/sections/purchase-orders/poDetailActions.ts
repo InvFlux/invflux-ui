@@ -39,6 +39,10 @@ export interface PoDetailActionContext extends EntityActionContext {
   /** Workbench deep-link for this PO's products, or null when unavailable. */
   workbenchHref: string | null;
   transitionTo: (slug: string) => void;
+  /** Ask for the arrival date, then mark the order arrived. */
+  beginArrived: () => void;
+  /** Ask what happens to a delivery refused at the dock: sent again, or the order canceled. */
+  beginRefuse: () => void;
   /** Open the pre-flight review that assigns the number and downloads the document. */
   openIssue: () => void;
   /** Record that the numbered order went to the supplier (freezes the lines). */
@@ -174,13 +178,30 @@ export function registerPoDetailActions(): void {
     disabledReason: busyReason,
     run: (c) => c.transitionTo('in_transit'),
   });
+  // Goods at the dock, not yet counted. It headlines while the order is on its way; from the stages
+  // before that it is still offered, because an unannounced delivery is ordinary.
+  reg.register<PoDetailActionContext>(SCOPE, {
+    ...core,
+    id: 'mark-arrived',
+    label: () => __('Mark as arrived'),
+    icon: TruckIcon,
+    group: 'primary',
+    isAvailable: (c) =>
+      ['submitted', 'acknowledged', 'in_transit', 'partially_received'].includes(c.stage),
+    promoteWhen: (c) => ('in_transit' === c.stage ? DEFAULT_PRIMARY_WEIGHT : false),
+    disabledReason: busyReason,
+    run: (c) => c.beginArrived(),
+  });
   reg.register<PoDetailActionContext>(SCOPE, {
     ...core,
     id: 'start-receiving',
     label: () => __('Start receiving'),
     icon: PackageIcon,
     group: 'primary',
-    isAvailable: (c) => 'in_transit' === c.stage,
+    // Counting straight off the truck skips the arrival, which is allowed: Arrived is a waypoint,
+    // not a gate. Once the order has arrived, counting it is the next thing to do.
+    isAvailable: (c) => ['in_transit', 'arrived'].includes(c.stage),
+    promoteWhen: (c) => ('arrived' === c.stage ? DEFAULT_PRIMARY_WEIGHT : false),
     disabledReason: busyReason,
     run: (c) => c.transitionTo('in_reception'),
   });
@@ -193,9 +214,28 @@ export function registerPoDetailActions(): void {
     icon: CloseIcon,
     group: 'destructive',
     order: 100,
-    isAvailable: (c) => ['in_prep', 'submitted', 'in_transit', 'in_reception'].includes(c.stage),
+    isAvailable: (c) =>
+      ['in_prep', 'submitted', 'in_transit', 'arrived', 'in_reception'].includes(c.stage),
     disabledReason: busyReason,
-    run: (c) => (0 === c.lineCount ? c.transitionTo('cancelled') : c.beginCancel()),
+    // An arrived order's goods are at the door, so canceling it is refusing them: the refusal
+    // dialog says what that means and offers the other outcome, a delivery sent again.
+    run: (c) =>
+      'arrived' === c.stage
+        ? c.beginRefuse()
+        : 0 === c.lineCount
+          ? c.transitionTo('canceled')
+          : c.beginCancel(),
+  });
+  reg.register<PoDetailActionContext>(SCOPE, {
+    ...core,
+    id: 'refuse-delivery',
+    label: () => __('Refuse delivery'),
+    icon: CloseIcon,
+    group: 'destructive',
+    order: 99,
+    isAvailable: (c) => 'arrived' === c.stage,
+    disabledReason: busyReason,
+    run: (c) => c.beginRefuse(),
   });
   reg.register<PoDetailActionContext>(SCOPE, {
     ...core,

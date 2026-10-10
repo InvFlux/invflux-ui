@@ -21,14 +21,14 @@ export type { StageCode, StockConcerns, DispatchUser, OrderViewer, InboundCover 
  * - `Started`   — partial progress OR correction-blocked
  * - `Staged`    — ready to ship
  * - `Shipped`   — terminal positive
- * - `Cancelled` — terminal negative
+ * - `Canceled` — terminal negative
  */
-export type OrderStatus = 'Untouched' | 'Started' | 'Staged' | 'Shipped' | 'Cancelled';
+export type OrderStatus = 'Untouched' | 'Started' | 'Staged' | 'Shipped' | 'Canceled';
 
 /**
  * The *derived* headline over an order's workflow dimensions — never a stored
  * value; see the `holdReason` / `closedAt` fields below for the dimensions it
- * summarises (precedence Closed › OnHold › Active).
+ * summarizes (precedence Closed › OnHold › Active).
  *
  * Deliberately an **open** string type, not a union. The set of states an
  * install offers is decided server-side — an add-on registers its own, over
@@ -53,7 +53,7 @@ export type HoldReason = 'PaymentPending' | 'CaptureUnresolved' | 'FraudReview' 
  */
 /** A tag attached to an order (the chip shape) — also the tag-definition shape. */
 /**
- * GovernanceFlag PHP enum case names — Pro tag behaviours (a shared namespace;
+ * GovernanceFlag PHP enum case names — Pro tag behaviors (a shared namespace;
  */
 export type GovernanceFlag =
   | 'RequireNoteOnAdd'
@@ -99,7 +99,7 @@ export interface TagSummary {
   /** Index (0..23) into the fixed Gmail-modeled palette (`@invflux/ui` TAG_PALETTE). */
   colorId: number;
   /**
-   * Pro governance behaviours this tag carries (empty for a plain Essentials tag).
+   * Pro governance behaviors this tag carries (empty for a plain Essentials tag).
    * `SuppressActive` drops the order out of the active queue; `RequireNoteOnAdd`
    * demands a note on assign; `PromotedAffordance` earns a dedicated toggle;
    * `HidePicker` keeps it out of the generic tag menu; `LockRemoval` needs the
@@ -124,7 +124,7 @@ export interface TagSummary {
  *
  * Deliberately not a {@link TagSummary}: the list carries these so the manager can answer "is this
  * name taken?" and "is this nearly one you already have?" as the merchant types, and neither
- * question needs a colour, a flag or a count. The full records arrive when the archived section is
+ * question needs a color, a flag or a count. The full records arrive when the archived section is
  * actually opened.
  */
 export interface ArchivedTagName {
@@ -225,6 +225,11 @@ export interface DispatchOrderSummary {
   unprocessedCorrections: number;
   /** Unsettled manual refunds (non-refundable gateway) awaiting operator settlement. */
   pendingManualRefunds: number;
+  /**
+   * Shipped here, but moved back to a "not done" status in the host: the merchant has to say which
+   * side is right (the order page offers both). Derived server-side from the status policy.
+   */
+  hostReopened?: boolean;
   /**
    * Live notes written on this order — **all of them**, not the length of `recentNotes`.
    *
@@ -543,7 +548,12 @@ export interface DispatchOrderLine {
    */
   lineDiscount?: string;
   qtyOrdered: number;
+  /** Every corrected unit, either side of shipment: `qtyCanceled + qtyReturned`. */
   qtyCorrected: number;
+  /** Units corrected before shipment — no longer owed. */
+  qtyCanceled: number;
+  /** Units corrected after shipment — delivered and taken back, so still counted as shipped. */
+  qtyReturned: number;
   qtyShipped: number;
   stagedQty: number;
   stagedBy: number | null;
@@ -615,6 +625,12 @@ export interface DispatchOrderDetail {
    * WooCommerce could answer — the order's total, a refund record on it — cannot be had.
    */
   hostOrderMissing?: boolean;
+  /**
+   * A shipped order WooCommerce has moved back to an unfinished status: its status (slug and the
+   * host's own label) and the processed shipments a "follow WooCommerce" reversal would undo, one by
+   * one. Null for every other order.
+   */
+  hostReopened?: { status: string; label: string; shipments: string[] } | null;
   /**
    * The order's payment records and what it still owes, in the order's currency. `null` when the
    * host order could not be read for its total.
@@ -789,6 +805,11 @@ export interface DispatchCapabilities {
    */
   recordPayments: boolean;
   /**
+   * Undoing a Ship confirmed by mistake (`invflux_reverse_shipments`). A UX convenience only; the
+   * server gates the reverse route on it. Optional so a context from an older page still types.
+   */
+  reverseShipments?: boolean;
+  /**
    * Authority over restricted governance tags (`invflux_govern_tags`). Gates
    * applying a `Managed` tag and removing a `Managed` / `LockRemoval` tag. A UX
    * convenience only — the server enforces the same rules regardless.
@@ -836,7 +857,7 @@ export interface NativeStatusContext {
   /** Column header on the queue table. */
   columnLabel: string;
   /**
-   * The full list of status values the source system recognises, in
+   * The full list of status values the source system recognizes, in
    * display order. Values are the unprefixed slugs sent on the URL
    * (`processing`, `on-hold`, …); labels are merchant-facing.
    */
@@ -844,8 +865,8 @@ export interface NativeStatusContext {
     value: string;
     label: string;
     /**
-     * The merchant's chosen pill colour for this status, or `null`/absent where they have chosen
-     * none — in which case the SPA falls back to its own shipped default and then to grey.
+     * The merchant's chosen pill color for this status, or `null`/absent where they have chosen
+     * none — in which case the SPA falls back to its own shipped default and then to gray.
      *
      * Null is not "the default's index": only a null follows a later change to the shipped
      * defaults, which is why the server passes it through instead of resolving it.
@@ -967,8 +988,8 @@ export interface PaymentMethodsContext {
     value: string;
     label: string;
     /**
-     * The merchant's chosen pill colour for this status, or `null`/absent where they have chosen
-     * none — in which case the SPA falls back to its own shipped default and then to grey.
+     * The merchant's chosen pill color for this status, or `null`/absent where they have chosen
+     * none — in which case the SPA falls back to its own shipped default and then to gray.
      *
      * Null is not "the default's index": only a null follows a later change to the shipped
      * defaults, which is why the server passes it through instead of resolving it.

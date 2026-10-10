@@ -1,7 +1,11 @@
-import { For, type JSX, onMount, Show } from 'solid-js';
+import { createEffect, createSignal, For, type JSX, onCleanup, onMount, Show } from 'solid-js';
 import * as Combobox from '@kobalte/core/combobox';
-import { __, _x, formatNumber } from '@invflux/i18n';
+import { __, _x, formatNumber, sprintf } from '@invflux/i18n';
 import { usePortalRootOptional } from './portal';
+
+/** The key an operator holds to keep the defaults: Cmd on Apple platforms, where Ctrl+click is a right-click. */
+const modifierKeyName = (): string =>
+  typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘' : 'Ctrl';
 
 /** Locale-aware thousands separation — a five-digit count is unreadable without it. */
 const formatCount = (n: number): string => formatNumber(n);
@@ -24,7 +28,12 @@ export interface SearchMultiSelectProps {
   options: SearchMultiSelectOption[];
   /** Selected option values. */
   value: string[];
-  onChange: (values: string[]) => void;
+  /**
+   * `meta.additive` is true while the selection is still a default and the operator asked to keep
+   * what is marked — Ctrl/Cmd held, or the keep-the-defaults switch on. Without a default there is
+   * nothing to keep, so it is always false then.
+   */
+  onChange: (values: string[], meta?: { additive: boolean }) => void;
   placeholder?: string;
   disabled?: boolean;
   /** Accessible label for the control. */
@@ -45,6 +54,10 @@ export interface SearchMultiSelectProps {
    * fading — a dimmed *check* still reads as "checked", and checked things are additive by every
    * convention an operator brings, so a first click that clears the other marks would read as a
    * bug rather than as the replace it is. A dot claims no selection was made, which is the truth.
+   *
+   * While the operator is *keeping* the defaults (Ctrl/Cmd held, or the switch on) each dot shows as
+   * the checkmark it is about to become, so the gesture previews itself. The change is a preview of
+   * the next click, never a state: nothing is selected differently until a pick resolves it.
    */
   selectionIsDefault?: boolean;
   /**
@@ -94,6 +107,22 @@ export function SearchMultiSelect(props: SearchMultiSelectProps): JSX.Element {
   // A closure, not a constant: this module is imported at SPA boot and `__()` at module scope would
   // resolve before the locale is registered.
   const DEFAULT_HINT = (): string => __('default — no filter applied yet');
+  const KEEP_LABEL = (): string =>
+    _x(
+      'Keep the defaults',
+      'filter dropdown: switch so a click adds to or removes from the marked defaults instead of replacing them',
+    );
+  const KEEP_TITLE = (): string =>
+    __('Clicks add to or remove from the marked defaults instead of replacing them');
+  const KEEP_HINT = (): string =>
+    sprintf(
+      /* translators: %s: the name of the modifier key, Ctrl or ⌘ */
+      _x(
+        'or hold %s and click',
+        'filter dropdown: keyboard hint beside the keep-the-defaults switch',
+      ),
+      modifierKeyName(),
+    );
   let inputRef: HTMLInputElement | undefined;
   // Default the listbox portal to the SPA's shadow-escaping root unless the caller overrides it.
   const ctxMount = usePortalRootOptional();
@@ -103,6 +132,48 @@ export function SearchMultiSelect(props: SearchMultiSelectProps): JSX.Element {
   });
 
   const isAsync = (): boolean => props.onSearch !== undefined;
+
+  // ── Keeping the defaults ──────────────────────────────────────────────────────────────────
+  // Two ways into one state. Holding Ctrl/Cmd is momentary; the switch is latched, and is the way in
+  // on a touch screen, which has no modifier. Both only mean anything while the selection is still a
+  // default — once deliberate, every click is already additive.
+  const [open, setOpen] = createSignal(false);
+  const [modifierHeld, setModifierHeld] = createSignal(false);
+  const [keepDefaults, setKeepDefaults] = createSignal(false);
+  // There is only something to keep when the default actually marks options: a default that selects
+  // nothing (a filter with no preset) leaves a click with nothing to preserve, so the whole affordance —
+  // switch, preview, modifier — stays out of its way.
+  const hasDefaults = (): boolean => isDefault() && props.value.length > 0;
+  const additive = (): boolean => hasDefaults() && (modifierHeld() || keepDefaults());
+
+  // Read off each event's own modifier flags instead of tracking key-down/key-up pairs. A key-up that
+  // lands in another window (alt-tab with Ctrl held) never arrives, and a tracked flag would stay on:
+  // every dot a check, every click silently additive, with nothing to say why. The flags on the next
+  // event of any kind are the truth, so a stale value corrects itself on the first mouse move.
+  const syncModifier = (event: KeyboardEvent | MouseEvent): void => {
+    setModifierHeld(event.ctrlKey || event.metaKey);
+  };
+  const releaseModifier = (): void => {
+    setModifierHeld(false);
+  };
+
+  createEffect(() => {
+    // Listen only while this dropdown is open and has a default to keep.
+    if (!open() || !hasDefaults()) {
+      setModifierHeld(false);
+      return;
+    }
+    document.addEventListener('keydown', syncModifier, true);
+    document.addEventListener('keyup', syncModifier, true);
+    document.addEventListener('pointermove', syncModifier, true);
+    window.addEventListener('blur', releaseModifier);
+    onCleanup(() => {
+      document.removeEventListener('keydown', syncModifier, true);
+      document.removeEventListener('keyup', syncModifier, true);
+      document.removeEventListener('pointermove', syncModifier, true);
+      window.removeEventListener('blur', releaseModifier);
+    });
+  });
 
   // Resolve a value to its richest known option: current options → host-provided selectedOptions →
   // bare {value,label:value} fallback. Keeps selected tags labelled across async result churn.
@@ -138,7 +209,20 @@ export function SearchMultiSelect(props: SearchMultiSelectProps): JSX.Element {
       closeOnSelection={false}
       options={renderOptions()}
       value={selectedOptions()}
-      onChange={(opts) => props.onChange(opts.map((o) => o.value))}
+      onChange={(opts) => {
+        const keeping = additive();
+        props.onChange(
+          opts.map((o) => o.value),
+          { additive: keeping },
+        );
+        // One pick resolves the switch: the selection is deliberate from here, or has reverted to a
+        // default that should be offered fresh.
+        setKeepDefaults(false);
+      }}
+      onOpenChange={(isOpen) => {
+        setOpen(isOpen);
+        if (!isOpen) setKeepDefaults(false);
+      }}
       onInputChange={isAsync() ? (text: string) => props.onSearch?.(text) : undefined}
       defaultFilter={isAsync() ? () => true : undefined}
       // Open even with no options so the empty-state message shows (async "Searching…"/"No matches"
@@ -160,7 +244,11 @@ export function SearchMultiSelect(props: SearchMultiSelectProps): JSX.Element {
           // input lives in the SPA's shadow root, so a mouse-pick blurs the input with a null
           // relatedTarget (shadow boundary) and Kobalte closes on blur. Preventing the option's
           // mousedown default stops the input from losing focus; the click still selects.
-          onMouseDown={(e) => e.preventDefault()}
+          onMouseDown={(e) => {
+            e.preventDefault();
+            // The modifier at the instant of the pick, not whatever the last move event saw.
+            syncModifier(e);
+          }}
         >
           <Combobox.ItemLabel class="truncate">{itemProps.item.rawValue.label}</Combobox.ItemLabel>
           {/* The count is an affordance, not the answer: muted, after the label, and never
@@ -183,10 +271,11 @@ export function SearchMultiSelect(props: SearchMultiSelectProps): JSX.Element {
               skipped by keyboard and screen-reader users. */}
           <Combobox.ItemIndicator
             data-filter-selection={isDefault() ? 'default' : 'chosen'}
+            data-filter-additive={additive() ? 'true' : undefined}
             title={isDefault() ? DEFAULT_HINT() : undefined}
             class="inline-flex shrink-0 items-center"
           >
-            <span aria-hidden="true">{isDefault() ? '•' : '✓'}</span>
+            <span aria-hidden="true">{isDefault() && !additive() ? '•' : '✓'}</span>
             <span class="sr-only">
               {isDefault()
                 ? DEFAULT_HINT()
@@ -244,6 +333,44 @@ export function SearchMultiSelect(props: SearchMultiSelectProps): JSX.Element {
           <Combobox.Listbox class="max-h-[210px] overflow-y-auto focus:outline-none" />
           <Show when={!props.loading && 0 === renderOptions().length}>
             <div class="px-3 py-2 text-text-muted">{props.emptyMessage ?? 'No matches'}</div>
+          </Show>
+          {/* Only while the selection is still a default that marks something: that is the one state
+              with anything to keep. The switch shows the *effective* state — it reads on while the
+              modifier is held, and returns to its latched value on release — so the key and the
+              switch are visibly one control, not two. A press here must not take focus off the input
+              — Kobalte reads that as the control being left and closes the list — so, like the
+              options, it swallows the mousedown and acts on the click. */}
+          <Show when={hasDefaults()}>
+            <div
+              class="mt-1 flex items-center justify-between gap-3 border-t border-border px-3 pt-1.5 pb-0.5 text-xs text-text-muted"
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              <button
+                type="button"
+                role="switch"
+                aria-checked={additive()}
+                title={KEEP_TITLE()}
+                data-testid="filter-keep-defaults"
+                class="inline-flex cursor-pointer items-center gap-2 rounded text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                onClick={() => setKeepDefaults(!keepDefaults())}
+              >
+                <span
+                  aria-hidden="true"
+                  class={`relative inline-block h-4 w-7 shrink-0 rounded-full transition-colors motion-reduce:transition-none ${
+                    additive() ? 'bg-primary' : 'bg-text-muted/50'
+                  }`}
+                >
+                  <span
+                    class={`absolute top-0.5 left-0.5 h-3 w-3 rounded-full bg-white transition-transform motion-reduce:transition-none ${
+                      additive() ? 'translate-x-3' : ''
+                    }`}
+                  />
+                </span>
+                {KEEP_LABEL()}
+              </button>
+              {/* A touch screen has no modifier to hold, so the hint would only be noise there. */}
+              <span class="pointer-coarse:hidden">{KEEP_HINT()}</span>
+            </div>
           </Show>
         </Combobox.Content>
       </Combobox.Portal>

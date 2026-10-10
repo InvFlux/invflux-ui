@@ -14,7 +14,7 @@ import { entityActionRegistry, type EntityActionContext, TruckIcon } from '@invf
  * host's query client).
  */
 export interface DispatchOrderDetailContext extends EntityActionContext {
-  /** Dispatch readiness status (Untouched / Started / Staged / Shipped / Cancelled). */
+  /** Dispatch readiness status (Untouched / Started / Staged / Shipped / Canceled). */
   status: string;
   /** Every still-open line is fully staged — the whole order can ship now. */
   canShip: boolean;

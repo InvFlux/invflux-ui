@@ -45,7 +45,7 @@ export interface CommitNavRule {
    * Whether the rule applies right now, evaluated **at commit time** rather than at registration.
    *
    * A contributing bundle loads whenever its plugin is active, which is a different question from
-   * whether its licence currently allows the capability. Read the entitlement here, via
+   * whether its license currently allows the capability. Read the entitlement here, via
    * {@link commitNavEntitlements}, so a lapsed install stops behaving as though it were paid
    * without needing anything deactivated.
    */
@@ -76,7 +76,7 @@ export function commitNavEntitlements(): Record<string, boolean> {
  *
  * **The base registers nothing.** Unlike the queue's sort — where the base contributes its own
  * rules through the same `register()` an add-on uses — there is no base commit-navigation
- * behaviour to contribute: an unextended grid moves the way the editor asked. An empty registry is
+ * behavior to contribute: an unextended grid moves the way the editor asked. An empty registry is
  * the whole of the base's answer.
  *
  * Membership is read at commit time, not captured, so a rule registered by a bundle that evaluates

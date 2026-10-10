@@ -190,7 +190,7 @@ const TEXT_SIZE_CLASS: Record<GridTextSize, string> = {
   large: 'text-base',
 };
 // One step down from the cell size, for a wrapped header. A column name is read once and then
-// recognised by shape; the rows under it are read continuously — so the two lines a wrapped name
+// recognized by shape; the rows under it are read continuously — so the two lines a wrapped name
 // costs should be cheaper than two lines of data, not the same price.
 const TEXT_SIZE_CLASS_SMALLER: Record<GridTextSize, string> = {
   small: 'text-2xs',
@@ -342,7 +342,7 @@ export interface DataGridProps<TRow> {
   resolveClearedValue?: (row: TRow, meta: GridColumnMeta) => { ok: boolean; value: unknown };
   /** Per-row editor-meta tweak (e.g. inject the "Same as parent" inherit option on variations). */
   resolveEditorMeta?: (meta: GridColumnMeta, row: TRow) => GridColumnMeta;
-  /** Whether a cell's `<td>` renders faded ("inherited from parent") — the per-cell italic-grey
+  /** Whether a cell's `<td>` renders faded ("inherited from parent") — the per-cell italic-gray
    *  wash (was `row.inherited?.includes(columnId)`). */
   isInherited?: (row: TRow, columnId: string) => boolean;
   /** Whether a GENERIC (datatype-view) column's value renders faded inside its own span — the
@@ -466,7 +466,7 @@ export interface DataGridProps<TRow> {
    * choice — unlike {@link DataGridProps.lockedPinnedColumnIds}, which is a requirement and wins.
    *
    * `defaultColumnOrder` is the canonical order a new column is also slotted into, beside its
-   * neighbour rather than at the far end; see `mergeColumnOrder`. Omit it and the server's column
+   * neighbor rather than at the far end; see `mergeColumnOrder`. Omit it and the server's column
    * order plays that role.
    */
   defaultColumnOrder?: string[];
@@ -744,7 +744,7 @@ export function ColumnManagerModal<TRow>(props: {
   };
 
   /**
-   * Cancel by putting the pristine value back, rather than by raising a "cancelled" flag.
+   * Cancel by putting the pristine value back, rather than by raising a "canceled" flag.
    *
    * Escape blurs, and blur commits — so a flag only works if it is set before blur fires, which is
    * a race with an input that may unmount first and never fire blur at all. Restoring the value
@@ -1362,7 +1362,7 @@ interface ContextMenuItem {
   run?: () => void;
   /** Present ⇒ this item is a submenu parent (hover-opens a flyout of `children`); `run` is ignored. */
   children?: ContextMenuItem[];
-  /** Disabled items render greyed, don't run, and show `title` as a tooltip (e.g. a Pro upgrade hint). */
+  /** Disabled items render grayed, don't run, and show `title` as a tooltip (e.g. a Pro upgrade hint). */
   disabled?: boolean;
   title?: string;
 }
@@ -1507,7 +1507,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
   };
   /**
    * A column's SHIPPED name — the picker's filter matches that even on a renamed column, and it is
-   * the name the operator will recognise from the header they just right-clicked.
+   * the name the operator will recognize from the header they just right-clicked.
    */
   const shippedNameOf = (columnId: string): string => {
     const meta = columnMetaById().get(columnId);
@@ -1629,7 +1629,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
         ? TEXT_SIZE_CLASS_SMALLER[gridSettings().textSize]
         : TEXT_SIZE_CLASS[gridSettings().textSize]
     }`;
-  // Centred when wrapping, matching the single-line case (a table cell's default) and the sort
+  // Centered when wrapping, matching the single-line case (a table cell's default) and the sort
   // affordance, so a one-line name beside a two-line one reads as one row of labels rather than as
   // text at two different heights. `hyphens-auto` first and `break-words` only as the fallback: a
   // column narrower than its own one-word name is common here ("Disponible", "Réservé"), and a
@@ -1833,7 +1833,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
    * Pin a column, optionally at a position within the group, and make sure it is visible.
    *
    * Visibility comes with it because the merchant's intent is "keep this in front of me", and a
-   * pinned-but-hidden column honours the letter of that and none of it. The width budget is enforced
+   * pinned-but-hidden column honors the letter of that and none of it. The width budget is enforced
    * here too, not only in the affordances: a keyboard path or a host call reaches this directly.
    */
   function pinColumnId(columnId: string, atIndex?: number): void {
@@ -1871,7 +1871,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
    * A shadow and nothing else. The separators themselves are ordinary cell borders, which is only
    * true because the table is `border-separate`: under `collapse` the borders belong to the table
    * rather than the cells, so a sticky cell moves and its border stays, leaving a transparent 1px at
-   * every pinned boundary. That same model also hid this shadow — the neighbouring cell painted over
+   * every pinned boundary. That same model also hid this shadow — the neighboring cell painted over
    * it — which is why the edge once needed a drawn line to be visible at all. With cell-owned
    * borders the shadow lands, and a rule on top of it would only compete.
    */
@@ -1906,7 +1906,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
    * `left` is cumulative over the pinned columns before this one — asked of the table rather than
    * summed here, so a resize moves the offsets with it. The z-indices are the load-bearing part: the
    * header (`thead`, z-10) and the totals row (z-10) must stay above a pinned *body* cell while it
-   * scrolls under them, and a pinned *header* cell must sit above its unpinned neighbours inside the
+   * scrolls under them, and a pinned *header* cell must sit above its unpinned neighbors inside the
    * header's own stacking context. Anything else and cells slide over each other mid-scroll.
    */
   const pinnedCellStyle = (
@@ -2028,7 +2028,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
   // ─── Footer totals ────────────────────────────────────────────────────────
   // Columns whose meta declares aggregate "sum" are totalled in a sticky footer row. The sum spans
   // the LOADED rows only (the grid is virtualised + server-paginated), so it's a running subtotal —
-  // labelled with the loaded-row count, not a server grand total.
+  // labeled with the loaded-row count, not a server grand total.
   const hasFooter = createMemo(() =>
     table.getVisibleLeafColumns().some((c) => columnMetaById().get(c.id)?.aggregate === 'sum'),
   );
@@ -2437,7 +2437,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
     const anchor = bounds !== null ? { row: bounds.r1, col: bounds.c1 } : active;
 
     // Clipboard bigger than a multi-cell selection → confirm before overflowing it (LibreOffice Calc
-    // behaviour + wording). A 1×1 clipboard fills the range and is never "bigger"; a single-cell
+    // behavior + wording). A 1×1 clipboard fills the range and is never "bigger"; a single-cell
     // selection is the normal "paste a block here" case and isn't gated.
     if (bounds !== null) {
       const selRows = bounds.r2 - bounds.r1 + 1;
@@ -3041,7 +3041,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
   function handleCellContextMenu(event: MouseEvent, rowIndex: number, colIndex: number): void {
     event.preventDefault();
     const coord = { row: rowIndex, col: colIndex };
-    // Right-clicking outside the current selection selects just that cell (Excel behaviour);
+    // Right-clicking outside the current selection selects just that cell (Excel behavior);
     // right-clicking inside it keeps the range but moves the active cell to the target.
     if (cellIsSelected(props.cellSelection(), rowIndex, colIndex)) {
       props.setCellSelection((s) => ({
@@ -3592,7 +3592,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
     // Dirty cells keep their amber background even inside a multi-cell selection
     // (they don't get the light-blue selection wash).
     //
-    // A read-only cell never loses its own colour to an interaction state — the
+    // A read-only cell never loses its own color to an interaction state — the
     // hue *mixes* instead. Read-only is red and selection is blue, so a selected
     // read-only cell is purple, which is legible as "both of those at once"
     // rather than as a third arbitrary status. Row hover, which is transient and
@@ -3655,9 +3655,9 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
         /*
                                 Cell state, published as attributes rather than left to be read off
                                 the Tailwind classes below. A test asserting `bg-blue-100` is
-                                asserting a colour and inferring a state from it: the assertion
-                                breaks on a restyle while the behaviour is fine, and — worse — it
-                                keeps passing if the state is right but the colour token changes
+                                asserting a color and inferring a state from it: the assertion
+                                breaks on a restyle while the behavior is fine, and — worse — it
+                                keeps passing if the state is right but the color token changes
                                 meaning. These names say what is true; the classes stay free to
                                 express it however the design wants.
 
@@ -3735,7 +3735,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
           />
         </Show>
         {/* In-flight overlay: a translucent wash mutes the (still-shown) staged value
-                                  and a centred spinner signals "submitted, awaiting server". */}
+                                  and a centered spinner signals "submitted, awaiting server". */}
         <Show when={pending()}>
           <span
             class="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-gray-100/60"
@@ -4035,7 +4035,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
           class="min-h-0 flex-1 select-none overflow-auto rounded border border-border bg-surface shadow-sm outline-none"
           onWheel={(event) => {
             // Shift+wheel → horizontal scroll. Browsers vary: some report it on deltaY, others remap to
-            // deltaX; notched mice report line/page deltaMode. Take the dominant axis, normalise, consume.
+            // deltaX; notched mice report line/page deltaMode. Take the dominant axis, normalize, consume.
             if (!event.shiftKey) return;
             const raw =
               Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
@@ -4058,7 +4058,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
               // `table-fixed` treats per-cell widths as *ratios* of the table's own width, so without an
               // explicit table width the browser squeezes every column into the container and lets content
               // stretch them. Pinning the table width to the exact sum of column widths makes each column
-              // honour its px width and lets the scroll container overflow horizontally.
+              // honor its px width and lets the scroll container overflow horizontally.
               <table
                 class="table-fixed border-collapse text-left text-sm"
                 style={{
@@ -4189,7 +4189,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
               class="table-fixed border-separate border-spacing-0 text-left text-sm"
               style={{ width: `${table.getTotalSize()}px`, 'min-width': '100%' }}
             >
-              {/* Column widths (table-fixed honours these); getSize() is live during a resize. */}
+              {/* Column widths (table-fixed honors these); getSize() is live during a resize. */}
               <colgroup>
                 <For each={table.getVisibleLeafColumns()}>
                   {(col) => <col style={{ width: `${col.getSize()}px` }} />}
@@ -4393,13 +4393,13 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
                                     // off it and off the name. Logical `end-0`, so it stays where the
                                     // name runs out rather than sitting over its start under RTL.
                                     //
-                                    // `inset-y-0` + `justify-center` rather than a centred glyph:
+                                    // `inset-y-0` + `justify-center` rather than a centered glyph:
                                     // the occluder has to span the FULL cell height or a two- and
                                     // three-line name shows above and below a band-shaped ground.
-                                    // Spanning it also centres the glyphs for free, at every
+                                    // Spanning it also centers the glyphs for free, at every
                                     // density, with no offset to keep in step with the padding.
                                     // Not <Button>/<IconButton>: this sits on the header's own ground
-                                    // and inherits its colour, where every Button variant commits to
+                                    // and inherits its color, where every Button variant commits to
                                     // one. It still owes the suite's rules, so the pointer and the
                                     class="absolute inset-y-0 end-0 inline-flex shrink-0 cursor-pointer flex-col items-center justify-center bg-surface-raised pe-1 ps-0.5 leading-none focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                                   >
@@ -4595,7 +4595,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
   );
 }
 
-/** A labelled row of mutually-exclusive choices — the shared control plus its caption. */
+/** A labeled row of mutually-exclusive choices — the shared control plus its caption. */
 function Segmented<T extends string>(props: {
   label: string;
   value: T;

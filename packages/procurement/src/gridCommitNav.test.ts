@@ -55,7 +55,7 @@ describe('commit-navigation registry', () => {
     expect(resolveCommitNav(ctx())).toBe(false);
 
     // The same rule object, re-asked: `enabled` is evaluated per commit, not captured at
-    // registration — which is what lets a lapsed licence stop behaving as though it were paid.
+    // registration — which is what lets a lapsed license stop behaving as though it were paid.
     licensed = true;
     expect(resolveCommitNav(ctx())).toBe(true);
 

@@ -43,7 +43,7 @@ const FIELDS: { key: keyof OrderAddressFields; label: () => string; wide?: boole
  * merchant never touched is not rewritten with a value the form happened to render.
  *
  * Who receives the edit is a control in the footer rather than a property of which link was
- * clicked. That is what lets an operator change their mind here instead of cancelling and coming
+ * clicked. That is what lets an operator change their mind here instead of canceling and coming
  * back through a different door — and it is why the form needs no banner explaining an effect it
  * did not ask for.
  *

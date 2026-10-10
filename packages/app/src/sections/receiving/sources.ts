@@ -22,7 +22,7 @@ export interface ReceivingSourceProps {
 
 export interface ReceivingSource extends SlotContribution<ReceivingSourceProps> {
   /**
-   * One line telling this source apart from its neighbours, in the operator's terms — "a delivery
+   * One line telling this source apart from its neighbors, in the operator's terms — "a delivery
    * against an order you raised" reads differently from "goods nobody ordered".
    *
    * A getter, like `label`, so the `__()` resolves at render time under the active locale.

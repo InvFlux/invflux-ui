@@ -5,7 +5,7 @@ import type { PickableColumn } from '@invflux/ui';
  * The purchase order's read-only lines table: which columns exist, and which may be turned off.
  *
  * **Visibility only — this table does not reorder.** Its cells are a hand-written template rather
- * than a column model, so an order could be stored and never honoured. {@link ColumnPicker} takes
+ * than a column model, so an order could be stored and never honored. {@link ColumnPicker} takes
  * that as the absence of an `onMove`, and drops its drag handles accordingly. Reordering becomes
  * available the day the table renders from this list instead of alongside it.
  *

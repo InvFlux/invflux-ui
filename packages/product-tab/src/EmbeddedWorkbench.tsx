@@ -31,6 +31,8 @@ export interface EmbeddedWorkbenchProps {
    *  payload reflect grid-owned sku/gtin/threshold changes (which would otherwise be reverted by
    *  WC autosave posting stale page-load values). */
   onApplied?: () => void;
+  /** A correction review opened a goods-receiving session (see the shared grid's `onOpenReceipt`). */
+  onOpenReceipt?: (sessionId: number) => void;
   /** Toolbar content rendered after the grid's layout toggle — the "manage variations" link. */
   toolbarExtra?: JSX.Element;
   /** Hands the grid's imperative handles to the host. The form calls `refreshLiveUpdates()` after a
@@ -77,6 +79,7 @@ export function EmbeddedWorkbench(props: EmbeddedWorkbenchProps) {
             props.pollIntervalMs !== undefined ? { intervalMs: props.pollIntervalMs } : undefined
           }
           onApplied={props.onApplied}
+          onOpenReceipt={props.onOpenReceipt}
           toolbarExtra={props.toolbarExtra}
           apiRef={props.apiRef}
           // We're already on WooCommerce's product-edit page, so an "Edit in WooCommerce"

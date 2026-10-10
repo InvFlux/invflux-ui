@@ -27,7 +27,13 @@ import {
 } from '../correctionChoice';
 import { netUnitPrice, refundFor } from '../lineRefund';
 import { useCreateCorrectionMutation } from '../queries';
-import type { CorrectionReason, CorrectionType, DispatchOrderLine } from '../types';
+import { correctableQty, correctionSides } from '../correctability';
+import type {
+  CorrectionReason,
+  CorrectionType,
+  DispatchOrderLine,
+  DispatchOrderSummary,
+} from '../types';
 import { SegmentedChoice } from './SegmentedChoice';
 
 /**
@@ -42,7 +48,7 @@ import { SegmentedChoice } from './SegmentedChoice';
  * known: which side of shipment (asked only once something has shipped), whose fault, why, and where
  * the stock goes. The correction type follows from them ({@see deriveType}) — the type still decides
  * what the engine does, and the reason still records whose fault it was, but an operator asked to
- * pick "cancelled by merchant" had to translate their answer into it. Each answer narrows the next:
+ * pick "canceled by merchant" had to translate their answer into it. Each answer narrows the next:
  * the carrier is responsible only after shipment, the reasons are the party's and the side's, and
  * goods are never written off on the customer's account. Before shipment the reason also answers
  * the last question, so the stock control shows that answer rather than asking; and a reason that
@@ -63,6 +69,8 @@ import { SegmentedChoice } from './SegmentedChoice';
  */
 export function CorrectionModal(props: {
   orderHexId: string;
+  /** Decides, with the types, which sides of shipment are open — see {@link correctionSides}. */
+  order: Pick<DispatchOrderSummary, 'workflowState'>;
   lines: DispatchOrderLine[];
   types: CorrectionType[];
   reasons: CorrectionReason[];
@@ -72,13 +80,11 @@ export function CorrectionModal(props: {
 }) {
   const createMutation = useCreateCorrectionMutation(() => props.orderHexId);
 
-  function shippable(line: DispatchOrderLine): number {
-    return Math.max(0, line.qtyOrdered - line.qtyCorrected - line.qtyShipped);
-  }
+  const sides = createMemo(() => correctionSides(props.order, props.types));
 
-  /** What can be corrected on this line on the given side of shipment. */
+  /** What can be corrected on this line on the given side of shipment — the panel's own rule. */
   function correctable(line: DispatchOrderLine, side: Timing): number {
-    return side === 'pre' ? shippable(line) : line.qtyShipped;
+    return correctableQty(line, side, sides());
   }
 
   const lineStock = (line: DispatchOrderLine | undefined): LineStock => ({
@@ -89,8 +95,8 @@ export function CorrectionModal(props: {
 
   // Timing is asked only once something has shipped: before then there is one side to be on.
   const anyShipped = createMemo(() => props.lines.some((l) => l.qtyShipped > 0));
-  const canCorrectBefore = createMemo(() => props.lines.some((l) => shippable(l) > 0));
-  const canCorrectAfter = createMemo(() => props.types.some((t) => !t.preDispatch));
+  const canCorrectBefore = createMemo(() => props.lines.some((l) => correctable(l, 'pre') > 0));
+  const canCorrectAfter = createMemo(() => props.lines.some((l) => correctable(l, 'post') > 0));
 
   // The opening side, read once: after that the operator owns the answer.
   const [timing, setTiming] = createSignal<Timing>(
@@ -235,7 +241,7 @@ export function CorrectionModal(props: {
             readout.qty,
           )
         : sprintf(
-            /* translators: 1: units put back on sale; 2: units cancelled. */
+            /* translators: 1: units put back on sale; 2: units canceled. */
             __('Back on sale: %1$d of %2$d — other orders are waiting for the rest'),
             readout.shelved,
             readout.qty,
@@ -335,6 +341,9 @@ export function CorrectionModal(props: {
                   type="number"
                   min="1"
                   max={maxQty()}
+                  // With `max` below `min` a browser still lets the stepper reach `min`, offering a
+                  // quantity that is not there.
+                  disabled={maxQty() < 1}
                   class="w-full text-sm border border-gray-300 rounded pl-2 pr-4 py-1 bg-surface tabular-nums"
                   value={qty()}
                   onInput={(e) => setQty(Number(e.currentTarget.value) || 0)}
@@ -545,7 +554,7 @@ export function CorrectionModal(props: {
             <Button variant="secondary" onClick={props.onClose}>
               {__('Cancel')}
             </Button>
-            <Button type="submit" disabled={createMutation.isPending}>
+            <Button type="submit" disabled={createMutation.isPending || maxQty() < 1}>
               {createMutation.isPending ? __('Adding…') : __('Add correction')}
             </Button>
           </ModalFooter>

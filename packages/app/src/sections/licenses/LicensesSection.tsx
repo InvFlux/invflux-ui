@@ -40,7 +40,12 @@ function stateMeta(state: string): { label: string; class: string } {
       return { label: __('Active'), class: 'bg-green-100 text-green-800' };
     case 'lapsed':
       return { label: __('Lapsed'), class: 'bg-amber-100 text-amber-800' };
-    case 'cancelled':
+    // The spellings differ on purpose and neither is a typo: `canceled` is the value the licensing
+    // service stores and signs, while the label a merchant reads matches WooCommerce's own order
+    // status, which is "Cancelled". Respelling the label would make this screen the only place in
+    // the admin that disagrees with the host; respelling the value would make a canceled licence
+    // unrecognisable to the enum that parses it.
+    case 'canceled':
       return { label: __('Cancelled'), class: 'bg-slate-200 text-slate-700' };
     case 'revoked':
       return { label: __('Revoked'), class: 'bg-red-100 text-red-800' };
@@ -248,7 +253,7 @@ export default function LicensesSection(): JSX.Element {
   const deactivate = createMutation(() => ({
     mutationFn: (activationId: string) => api.deactivateSeat(activationId),
     onSuccess: () => {
-      toast.success(__('Seat released. You can activate the licence on another site.'));
+      toast.success(__('Seat released. You can activate the license on another site.'));
       void queryClient.invalidateQueries({ queryKey: ['account'] });
       void queryClient.invalidateQueries({ queryKey: ['license', 'site'] });
     },
@@ -387,7 +392,7 @@ export default function LicensesSection(): JSX.Element {
     mutationFn: (seat: SiteSeat) =>
       seat.is_current ? api.deactivateThisSite() : api.releaseSiteSeat(seat.activation_id),
     onSuccess: () => {
-      toast.success(__('Released. That licence no longer names this site.'));
+      toast.success(__('Released. That license no longer names this site.'));
       void queryClient.invalidateQueries({ queryKey: ['license', 'site-seats'] });
       void queryClient.invalidateQueries({ queryKey: ['account'] });
       void queryClient.invalidateQueries({ queryKey: ['license', 'site'] });
@@ -564,7 +569,7 @@ export default function LicensesSection(): JSX.Element {
           <strong>{serviceDownMessage()}</strong>
           <p class="mt-1">
             {__(
-              'Your licence and every paid feature keep working — this page just can’t show your account until the service is back.',
+              'Your license and every paid feature keep working — this page just can’t show your account until the service is back.',
             )}
           </p>
         </div>
@@ -598,7 +603,7 @@ export default function LicensesSection(): JSX.Element {
             {__('Your licenses')}
           </h2>
           <p class="mb-3 text-sm text-slate-500">
-            {__('What this account owns, and the sites each licence is activated on.')}
+            {__('What this account owns, and the sites each license is activated on.')}
           </p>
           <div class="grid grid-cols-2 gap-3">
             <For each={licenses()}>
@@ -632,7 +637,7 @@ export default function LicensesSection(): JSX.Element {
             <p class="font-medium">{__('One-time setup for your first paid plugin')}</p>
             <p class="mt-1">
               {__(
-                'This site can’t fetch a paid plugin on its own — that ability arrives inside the plugin itself. Download it from your account page (your licence key is already embedded, so there is nothing to type in), then add it under Plugins → Add New → Upload Plugin.',
+                'This site can’t fetch a paid plugin on its own — that ability arrives inside the plugin itself. Download it from your account page (your license key is already embedded, so there is nothing to type in), then add it under Plugins → Add New → Upload Plugin.',
               )}
             </p>
             <p class="mt-1">
@@ -664,7 +669,7 @@ export default function LicensesSection(): JSX.Element {
                   noAccountHint={
                     awaitingConfirmation()
                       ? __('Confirm your email address first.')
-                      : __('Activate or register a licence first.')
+                      : __('Activate or register a license first.')
                   }
                   buyPending={checkout.isPending && pendingPlan() === row.sku.sku}
                   onBuy={() => checkout.mutate(row.sku.sku)}
@@ -718,12 +723,12 @@ export default function LicensesSection(): JSX.Element {
       <Show when={seatToReject()}>
         {(seat) => (
           <ConfirmModal
-            title={__('Release this licence from this site?')}
+            title={__('Release this license from this site?')}
             message={
               <span>
                 {sprintf(
                   /* translators: %s = the account email the licence belongs to. */
-                  __('The licence held by %s will no longer name this site.'),
+                  __('The license held by %s will no longer name this site.'),
                   seat().email,
                 )}{' '}
                 {/* The two cases differ in what happens *here*, which is the part a merchant is
@@ -732,16 +737,16 @@ export default function LicensesSection(): JSX.Element {
                 <Show
                   when={seat().is_current}
                   fallback={__(
-                    'Nothing changes on this site — it is not the licence this install uses.',
+                    'Nothing changes on this site — it is not the license this install uses.',
                   )}
                 >
                   {__(
-                    'This is the licence this install uses, so it becomes un-registered straight away. It will keep checking for a licence, so you can register or activate another one here whenever you like — to stop the daily check as well, use “Un-register this site”.',
+                    'This is the license this install uses, so it becomes un-registered straight away. It will keep checking for a license, so you can register or activate another one here whenever you like — to stop the daily check as well, use “Un-register this site”.',
                   )}
                 </Show>{' '}
                 <Show when={seat().paid}>
                   {__(
-                    'This is a paid licence — whoever pays for it will have to activate it again to use it here.',
+                    'This is a paid license — whoever pays for it will have to activate it again to use it here.',
                   )}
                 </Show>
               </span>
@@ -786,7 +791,7 @@ export default function LicensesSection(): JSX.Element {
                 {sprintf(
                   /* translators: %s = the site URL of the seat being freed. */
                   __(
-                    'This releases the activation on %s so you can activate the licence on another site. The site there will fall back to Essentials until re-activated.',
+                    'This releases the activation on %s so you can activate the license on another site. The site there will fall back to Essentials until re-activated.',
                   ),
                   seat().site_url,
                 )}
@@ -841,19 +846,33 @@ function RegisterCard(props: {
       {/* Named, not generic: "your free licence" reads as a formality, while the product's own name
           is the thing the merchant already knows they are running. */}
       <h2 class="text-base font-semibold text-slate-900">
-        {__('Register your free Essentials licence')}
+        {__('Register your free Essentials license')}
       </h2>
       <p class="mt-1 text-sm text-slate-600">
         {__(
-          'Free and permanent. It links this site to an account, which is what a licence — free or paid — is held against.',
+          'Free and permanent. It links this site to an account, which is what a license — free or paid — is held against.',
         )}
       </p>
 
-      <ul class="mt-2 space-y-1 text-sm text-slate-600">
-        <li>· {__('The public roadmap: what’s being built, and in what order.')}</li>
-        <li>· {__('A vote on what gets built next.')}</li>
-        <li>· {__('The suggestion box — ask for the thing your shop actually needs.')}</li>
-      </ul>
+      {/* The roadmap is public, so registering does not buy it. It is linked from this card anyway,
+          because the merchant reading a registration prompt is exactly the one who wants to know
+          what is coming — and they should not have to register to find out.
+          A vote on what gets built next IS what registering buys, and this card names a benefit
+          only while the surface for it exists: copy here is read as a promise, and a promise the
+          build cannot keep costs more than a line of text.
+          buys the right to read it. */}
+      <p class="mt-2 text-sm text-slate-600">
+        {__('The roadmap is public — no registration needed:')}{' '}
+        <a
+          href="https://invflux.com/roadmap"
+          target="_blank"
+          rel="noreferrer noopener"
+          class="underline hover:no-underline"
+        >
+          {__('see what’s being built, and in what order')}
+        </a>
+        .
+      </p>
 
       <form class="mt-3 flex flex-wrap items-end gap-2" onSubmit={submit}>
         <label class="sr-only" for="invflux-register-email">
@@ -887,7 +906,7 @@ function RegisterCard(props: {
           refresh); it is the sentence a reviewer checks against the code. */}
       <p class="mt-3 text-xs text-slate-500">
         {__(
-          'Pressing Register sends your email address, this site’s address and the plugin version to the InvFlux licensing service. After that it checks your licence status once a day, sending the site address and whether WordPress reports this site as debug or staging. Your products, stock and orders are never sent.',
+          'Pressing Register sends your email address, this site’s address and the plugin version to the InvFlux licensing service. After that it checks your license status once a day, sending the site address and whether WordPress reports this site as debug or staging. Your products, stock and orders are never sent.',
         )}{' '}
         <a
           href={PRIVACY_URL}
@@ -959,7 +978,7 @@ function ThisSitePanel(props: {
           two are describing different things. */}
       <dl class="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-sm text-slate-600">
         <div>
-          <dt class="inline text-text-muted">{__('Licence check')}: </dt>
+          <dt class="inline text-text-muted">{__('License check')}: </dt>
           <dd class="inline">
             <Show when={props.site.next_check_at} fallback={__('stopped')}>
               {(next) => (
@@ -988,7 +1007,7 @@ function ThisSitePanel(props: {
           fallback={
             <p class="mt-2 text-sm text-slate-500">
               {__(
-                'Un-registering is unavailable while this site uses a paid licence — the daily check is how that licence stays verified. Release it below first.',
+                'Un-registering is unavailable while this site uses a paid license — the daily check is how that license stays verified. Release it below first.',
               )}
             </p>
           }
@@ -1011,7 +1030,7 @@ function ThisSitePanel(props: {
       <Show when={props.seatOrphaned}>
         <p class="mt-2 rounded border border-amber-200 bg-amber-50 p-2 text-sm text-amber-900">
           {__(
-            'This install’s licence no longer exists — its seat was released, from here or from another site. Nothing stops working right now: at its next licence check this install will become un-registered, and you can register or activate one again whenever you like.',
+            'This install’s license no longer exists — its seat was released, from here or from another site. Nothing stops working right now: at its next license check this install will become un-registered, and you can register or activate one again whenever you like.',
           )}
         </p>
       </Show>
@@ -1024,7 +1043,7 @@ function ThisSitePanel(props: {
             {sprintf(
               /* translators: 1: product name, 2: the account email holding that licence. */
               __(
-                'This site runs %1$s on a licence held by %2$s — a different account from the one signed in here. That is fine: what runs on a site comes from the licence it is activated on, while this page shows the account the site registered with.',
+                'This site runs %1$s on a license held by %2$s — a different account from the one signed in here. That is fine: what runs on a site comes from the license it is activated on, while this page shows the account the site registered with.',
               ),
               seat().name,
               seat().email,
@@ -1039,7 +1058,7 @@ function ThisSitePanel(props: {
       <Show when={props.siteSeats.length > 0}>
         <div class="mt-3 border-t border-slate-200 pt-3">
           <h3 class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
-            {__('Licences registered to this site')}
+            {__('Licenses registered to this site')}
           </h3>
           <ul class="mt-1 space-y-1 text-sm">
             <For each={props.siteSeats}>
@@ -1259,7 +1278,7 @@ function LicenseCard(props: {
           {(pt) => (
             <div>
               <dt class="inline text-text-muted">
-                {l().state === 'cancelled' ? __('Access until') : __('Renews')}:{' '}
+                {l().state === 'canceled' ? __('Access until') : __('Renews')}:{' '}
               </dt>
               <dd class="inline">{formatDate(pt())}</dd>
             </div>
@@ -1313,7 +1332,7 @@ function LicenseCard(props: {
         </ul>
       </Show>
 
-      <Show when={l().cancellable && l().state !== 'cancelled'}>
+      <Show when={l().cancelable && l().state !== 'canceled'}>
         <div class="mt-3 border-t border-slate-100 pt-3">
           <Button
             variant="danger"
@@ -1369,7 +1388,7 @@ function addonVersionLine(a: AddonState): string {
  * change what a row offers without touching this file; an entitled plugin with nothing able to
  * fetch it simply shows no button, which is the honest rendering of that situation.
  *
- * A lapsed/cancelled entitlement is surfaced with the licence pill; the server still enforces it
+ * A lapsed/canceled entitlement is surfaced with the license pill; the server still enforces it
  * (the action then fails with a clear message), so buttons stay enabled.
  */
 function CatalogCard(props: {
@@ -1404,7 +1423,7 @@ function CatalogCard(props: {
     return a === null ? '' : addonVersionLine(a);
   };
 
-  /** The entitling licence, when it is in a state worth showing (lapsed, cancelled, revoked). */
+  /** The entitling licence, when it is in a state worth showing (lapsed, canceled, revoked). */
   const licenseState = (): string | null => {
     const a = addon();
 
@@ -1556,7 +1575,7 @@ function addonErrorMessage(err: unknown): string {
       case 'not_activated':
         return __('Link this site to an account before installing add-ons.');
       case 'not_entitled':
-        return __('Your licence doesn’t cover this add-on, or it has lapsed.');
+        return __('Your license doesn’t cover this add-on, or it has lapsed.');
       case 'not_found':
         return __('This add-on isn’t available to download yet.');
       case 'checksum_mismatch':
@@ -1573,7 +1592,7 @@ function addonErrorMessage(err: unknown): string {
 function checkoutErrorMessage(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.unreachable) return serviceDownMessage();
-    if (err.code === 'not_activated') return __('Activate or register a licence before buying.');
+    if (err.code === 'not_activated') return __('Activate or register a license before buying.');
   }
   return __('Could not start checkout. Please try again.');
 }
@@ -1582,7 +1601,7 @@ function checkoutErrorMessage(err: unknown): string {
 function cancelErrorMessage(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.unreachable) return serviceDownMessage();
-    if (err.code === 'no_subscription') return __('This licence has no subscription to cancel.');
+    if (err.code === 'no_subscription') return __('This license has no subscription to cancel.');
   }
   return __('Could not request cancellation. Please try again.');
 }
@@ -1633,7 +1652,7 @@ function claimErrorMessage(err: unknown): string {
 function withdrawErrorMessage(err: unknown): string {
   if (err instanceof ApiError && err.code === 'paid_entitlement_held') {
     return __(
-      'This site is using a paid licence, which is checked with the licensing service. Release this site’s seat from the licence first, then un-register.',
+      'This site is using a paid license, which is checked with the licensing service. Release this site’s seat from the license first, then un-register.',
     );
   }
 
