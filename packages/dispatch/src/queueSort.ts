@@ -13,8 +13,9 @@ export interface QueueSortRule {
   /** Identifier for override — re-registering it replaces this rule in place. */
   name: string;
   /**
-   * Ascending position within the contributed middle; ties break on registration order. Use the
-   * same number as the server fragment it mirrors, or the two orderings diverge under load.
+   * Ascending position within the contributed middle; ties break on registration order. It sets the
+   * built-in order only — once the server sends the shop's order ({@link publishQueueRank}) that list
+   * decides. Use the same number as the server fragment it mirrors, so the two built-in orders agree.
    */
   order?: number;
   /**
@@ -50,6 +51,24 @@ export function queueSortEntitlements(): Record<string, boolean> {
 }
 
 /**
+ * The shop's queue order, as the server resolved it: the names of the rules that rank, first
+ * first, the switched-off ones left out. Null until the dispatch context provides it, and then the
+ * registry's own `order` decides — the built-in order the server would also use.
+ *
+ * The server decides the order and the client follows it, so the two halves of the queue cannot
+ * disagree about which rule comes first; what has to match is only the set of names.
+ */
+let rankSource: () => readonly string[] | null | undefined = () => null;
+
+/** Host-only. Called once the dispatch context is available; see `OrderList`. */
+export function publishQueueRank(source: () => readonly string[] | null | undefined): void {
+  rankSource = source;
+}
+
+/** Names already reported as unknown, so a development console says it once per name. */
+const warnedUnknown = new Set<string>();
+
+/**
  * How the queue ranks rows client-side, and what may contribute a rule.
  *
  * **The base registers its own through the same `register()` an add-on uses**, so there is no
@@ -73,6 +92,11 @@ class QueueSortRegistry {
     const key = rule.name.toLowerCase();
     if (!this.registeredAt.has(key)) this.registeredAt.set(key, this.sequence++);
     this.byName.set(key, rule);
+  }
+
+  /** Resolve one rule by name, case-insensitively. */
+  get(name: string): QueueSortRule | undefined {
+    return this.byName.get(name.trim().toLowerCase());
   }
 
   /** Every rule, ascending by `order` then registration order. */
@@ -173,7 +197,31 @@ queueSortRegistry.register({
 });
 
 /**
- * The queue order, client-side: the two fixed ends, with every registered rule between them.
+ * The rules to rank by, in order: the shop's order when the server sent one, otherwise the
+ * registry's built-in order. A name the server ranks by but no client rule implements is skipped —
+ * the server's own pages still rank by it — and reported once in development, because it means an
+ * add-on's browser half is missing.
+ */
+function rankedRules(): QueueSortRule[] {
+  const names = rankSource();
+  if (!Array.isArray(names)) return queueSortRegistry.all();
+
+  const rules: QueueSortRule[] = [];
+  for (const name of names) {
+    const rule = queueSortRegistry.get(name);
+    if (rule !== undefined) {
+      rules.push(rule);
+    } else if (import.meta.env.DEV && !warnedUnknown.has(name)) {
+      warnedUnknown.add(name);
+      console.warn(`[dispatch] The queue ranks by "${name}", which no client rule implements.`);
+    }
+  }
+
+  return rules;
+}
+
+/**
+ * The queue order, client-side: the two fixed ends, with the ranking rules between them.
  *
  * Sorting here is what makes a delta honest. Splicing a changed row in place would leave an order
  * that just became urgent sitting at row 40 until someone reloaded — the row would be *correct* and
@@ -183,7 +231,7 @@ export function sortQueue(
   orders: readonly DispatchOrderSummary[],
   now: number = Date.now(),
 ): DispatchOrderSummary[] {
-  const rules = queueSortRegistry.all();
+  const rules = rankedRules();
 
   return [...orders].sort((a, b) => {
     // Lifecycle leads: a closed order never outranks an open one. The working set holds none, but

@@ -203,7 +203,7 @@ function stateGloss(state: string): string | null {
       );
     case 'res':
       return _x(
-        'reserved — held by a cart or checkout, released if it expires',
+        'reserved — held while the customer pays, released if it expires',
         'stock slot state res, explained in a tooltip',
       );
     case 'ctd':

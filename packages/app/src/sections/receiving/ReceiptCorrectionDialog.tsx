@@ -10,6 +10,7 @@ import {
   mintReceiptKey,
   Textarea,
 } from '@invflux/ui';
+import { qk, STOCK_MOVED } from '@invflux/ui/api';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
 import {
   createEffect,
@@ -174,6 +175,11 @@ export function ReceiptCorrectionDialog(props: {
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['receiving'] });
+      // A correction is not Receiving's alone. It changes what the order says arrived — its lines'
+      // received and open quantities, and the receipts it lists — and it moves stock, so the order's
+      // page, the Workbench and the Dispatch queue in this same client are stale until told.
+      void queryClient.invalidateQueries({ queryKey: qk.procurement.purchaseOrders() });
+      for (const key of STOCK_MOVED) void queryClient.invalidateQueries({ queryKey: key });
       props.onClose();
     },
   }));
@@ -436,8 +442,8 @@ function consequence(
       sprintf(
         /* translators: %d is a number of units. */
         _n(
-          '%d unit held in a cart is released.',
-          '%d units held in carts are released.',
+          '%d unit held for a customer who is paying is released.',
+          '%d units held for customers who are paying are released.',
           p.fromHeld,
         ),
         p.fromHeld,

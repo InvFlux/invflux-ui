@@ -4,7 +4,10 @@ import {
   COMMON_ALIASES,
   DataGrid,
   EMPTY_SELECTION,
+  FieldError,
+  focusFirstInvalid,
   ImportWizard,
+  inputClass,
   fetchImportAliases,
   learnImportAlias,
   parseImportFile,
@@ -180,8 +183,21 @@ export function PoInvoiceCapture(props: {
     return Math.abs(Number(stated) - computedTotal()) >= 0.005;
   };
 
-  const canSave = (): boolean =>
-    '' !== reference().trim() && billedLines().length > 0 && 0 === unpricedLines().length;
+  // What is missing is marked from the first attempt on; "Record invoice" stays enabled, since
+  // pressing it is how the operator learns what is still needed. An unpriced line is already said
+  // in words below the fields as soon as it exists.
+  const [tried, setTried] = createSignal(false);
+  const referenceMissing = (): boolean => tried() && '' === reference().trim();
+  const nothingBilled = (): boolean => tried() && 0 === billedLines().length;
+  let barEl: HTMLDivElement | undefined;
+  const submit = (): void => {
+    setTried(true);
+    if ('' === reference().trim() || 0 === billedLines().length || unpricedLines().length > 0) {
+      focusFirstInvalid(barEl);
+      return;
+    }
+    save.mutate();
+  };
 
   // ── Bulk entry off the document (shared ImportWizard) ─────────────────────────────────────────
   // An invoice arrives as a spreadsheet often enough to be the ordinary case, so its lines are
@@ -652,12 +668,12 @@ export function PoInvoiceCapture(props: {
   const [rowSelection, setRowSelection] = createSignal<RowSelectionState>({});
   const [cellSelection, setCellSelection] = createSignal<SelectionState>(EMPTY_SELECTION);
 
-  const FIELD =
-    'min-w-0 rounded border border-slate-300 bg-surface px-2 py-1 text-sm focus:border-primary focus:outline-none';
+  // The shared field skin, so a missing value can show as invalid like everywhere else.
+  const FIELD = inputClass('sm', false, 'min-w-0');
 
   return (
     <div>
-      <div class="mb-3 rounded border border-slate-200 bg-slate-50 p-2.5">
+      <div ref={barEl} class="mb-3 rounded border border-slate-200 bg-slate-50 p-2.5">
         {/* The heading names the document rather than the category — the kind was chosen at the
             entry button, and nothing else in this bar would say which one. */}
         <h3 class="text-sm font-medium text-slate-600">{supplierDocHeading('invoice')}</h3>
@@ -670,7 +686,14 @@ export function PoInvoiceCapture(props: {
               value={reference()}
               onInput={(e) => setReference(e.currentTarget.value)}
               placeholder={__('As printed by the supplier')}
-              class={`${FIELD} w-56`}
+              class={inputClass('sm', referenceMissing(), 'min-w-0 w-56')}
+              aria-required="true"
+              aria-invalid={referenceMissing() || undefined}
+              data-testid="invoice-reference"
+            />
+            <FieldError
+              message={referenceMissing() && __('Enter the supplier’s invoice number.')}
+              testId="invoice-reference-error"
             />
           </label>
           <label class="flex flex-col gap-1">
@@ -724,7 +747,7 @@ export function PoInvoiceCapture(props: {
             <Button variant="ghost" size="sm" onClick={() => props.onDone()}>
               {__('Cancel')}
             </Button>
-            <Button size="sm" disabled={!canSave() || save.isPending} onClick={() => save.mutate()}>
+            <Button size="sm" disabled={save.isPending} onClick={submit}>
               {save.isPending ? __('Saving…') : __('Record invoice')}
             </Button>
           </div>
@@ -746,6 +769,11 @@ export function PoInvoiceCapture(props: {
               )}
             </span>
           </Show>
+          <Show when={nothingBilled()}>
+            <span class="text-red-700" data-testid="invoice-nothing-billed">
+              {__('Enter a billed quantity on at least one line.')}
+            </span>
+          </Show>
           <Show when={unpricedLines().length > 0}>
             <span class="text-red-600">
               {sprintf(
@@ -758,7 +786,8 @@ export function PoInvoiceCapture(props: {
               )}
             </span>
           </Show>
-          <Show when={'' === reference().trim()}>
+          {/* The standing reason the number is asked for, until a refused attempt marks the field. */}
+          <Show when={'' === reference().trim() && !referenceMissing()}>
             <span class="text-slate-500">
               {__(
                 'The supplier’s invoice number is required — it is how this document is found again.',

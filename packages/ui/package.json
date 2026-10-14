@@ -10,6 +10,7 @@
     "./src/filters-builtins.tsx",
     "./src/settings/controls.tsx",
     "./src/settings/presetNumberControl.tsx",
+    "./src/settings/orderedTogglesControl.tsx",
     "./src/datatypes/views.tsx",
     "./src/datatypes/codecs.ts",
     "./src/datatypes/editors.tsx",

@@ -70,7 +70,7 @@ export function LockupLauncher(): JSX.Element {
     <Popover.Root open={open()} onOpenChange={setOpen} placement="bottom-start" gutter={4}>
       <Popover.Trigger
         class="flex cursor-pointer items-center rounded px-2 py-1.5 hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-        aria-label={__('Open a surface')}
+        aria-label={__('Open a screen')}
       >
         <span
           class="inline-flex items-center [&_svg]:h-5 [&_svg]:w-auto"

@@ -236,7 +236,7 @@ export default function WelcomeSection(props: WelcomeProps): JSX.Element {
                 <div data-testid="first-run-stock-management-off" class="space-y-3">
                   <p>
                     {__(
-                      'InvFlux also needs WooCommerce stock management, which is turned off. While it is off, the cart accepts any quantity and checkout holds no stock, so an order for more than you have is only caught after payment, when it is cancelled or split.',
+                      'InvFlux also needs WooCommerce stock management, which is turned off. While it is off, the cart accepts any quantity and no stock is held while the customer pays, so an order for more than you have is only caught after payment, when it is cancelled or split.',
                     )}
                   </p>
                   <p class="text-slate-600">

@@ -23,6 +23,12 @@ export interface SearchSelectProps {
   ariaLabel?: string;
   /** Extra classes on the control (the select-like box). */
   class?: string;
+  /**
+   * Mark the control as holding a missing or wrong value: red border and pink fill, like the text
+   * field primitives, and `aria-invalid` on its input so `focusFirstInvalid` lands on it. The message
+   * is the caller's ({@link FieldError}). Ignored with {@link SearchSelectProps.controlClass}.
+   */
+  invalid?: boolean;
   /** Replace the control box styling entirely (e.g. a borderless variant when embedded in a grid
    *  cell). When omitted, the default select-like control is used. */
   controlClass?: string;
@@ -64,9 +70,13 @@ export interface SearchSelectProps {
   mount?: HTMLElement;
 }
 
-const CONTROL =
-  'flex h-9 w-full items-center gap-1 rounded border border-border bg-surface px-2 text-sm shadow-sm ' +
-  'focus-within:ring-2 focus-within:ring-primary/40 data-[disabled]:cursor-not-allowed data-[disabled]:opacity-60';
+// One border/fill pair per state, never both: two `bg-*` utilities on one element resolve by
+// stylesheet order, not class order (see primitives' fieldTone).
+const CONTROL_BASE =
+  'flex h-9 w-full items-center gap-1 rounded border px-2 text-sm shadow-sm ' +
+  'focus-within:ring-2 data-[disabled]:cursor-not-allowed data-[disabled]:opacity-60';
+const CONTROL = `${CONTROL_BASE} border-border bg-surface focus-within:ring-primary/40`;
+const CONTROL_INVALID = `${CONTROL_BASE} border-red-400 bg-red-50 focus-within:ring-red-400/40`;
 
 // `group` so the match highlight (HighlightMatch) can flip styling on the highlighted row.
 const ITEM =
@@ -153,11 +163,12 @@ export function SearchSelect(props: SearchSelectProps): JSX.Element {
       </Show>
       <Combobox.Control
         aria-label={props.ariaLabel}
-        class={`${props.controlClass ?? CONTROL} ${props.class ?? ''}`}
+        class={`${props.controlClass ?? (props.invalid ? CONTROL_INVALID : CONTROL)} ${props.class ?? ''}`}
       >
         <Combobox.Input
           ref={inputRef}
           aria-label={props.ariaLabel}
+          aria-invalid={props.invalid || undefined}
           class="h-7 min-w-0 flex-1 border-0 bg-transparent p-0 text-sm outline-none placeholder:text-text-muted focus:ring-0"
         />
         <Combobox.Trigger aria-label={props.ariaLabel} class="shrink-0 text-text-muted">

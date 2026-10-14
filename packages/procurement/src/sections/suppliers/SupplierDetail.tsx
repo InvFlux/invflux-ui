@@ -1,8 +1,18 @@
-import { __, _x, sprintf } from '@invflux/i18n';
-import { Button, ErrorBanner, SearchSelect, toast, Hint } from '@invflux/ui';
+import { __, _x, formatMoney, sprintf } from '@invflux/i18n';
+import {
+  Button,
+  ErrorBanner,
+  FieldError,
+  focusFirstInvalid,
+  inputClass,
+  SearchSelect,
+  selectClass,
+  toast,
+  Hint,
+} from '@invflux/ui';
 import { A, useLocation, useNavigate } from '@solidjs/router';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
-import { createSignal, For, type JSX, Match, Show, Switch } from 'solid-js';
+import { createSignal, For, type JSX, Match, Show, Switch, untrack } from 'solid-js';
 import { StatusPill } from '../../components/StatusPill';
 import { useProcurement } from '../../context';
 import { createApi } from '../../lib/api';
@@ -16,6 +26,7 @@ import {
 import { usePortalRoot } from '../../portal';
 import type { ProcurementContext } from '../../types';
 import { PoList } from '../purchase-orders/PoList';
+import { thresholdError, thresholdValue } from './orderThresholds';
 import { SupplierContacts } from './SupplierContacts';
 import { SupplierProducts } from './SupplierProducts';
 import type { Supplier } from './types';
@@ -23,8 +34,10 @@ import { storeTermsLabel, useTermsSets } from '../terms/useTermsSets';
 import { TermsModal, type TermsModalTarget } from '../terms/TermsModal';
 import type { TermsPlace } from '../terms/types';
 
-const INPUT =
-  'mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 bg-surface';
+const INPUT = inputClass('sm', false, 'mt-1 w-full');
+const SELECT = selectClass('sm', false, 'mt-1 w-full');
+const field = (invalid: boolean, extra = ''): string =>
+  inputClass('sm', invalid, `mt-1 w-full ${extra}`);
 const FIELD = 'block text-sm text-slate-700';
 
 /**
@@ -330,6 +343,16 @@ function ReadView(props: { supplier: Supplier; onEdit: () => void }): JSX.Elemen
         <Row label={__('Lead time')}>
           {null === s().leadTimeDays ? dash(null) : <>{s().leadTimeDays} d</>}
         </Row>
+        <Row label={__('Minimum order value')}>
+          {null === s().minOrderValue
+            ? dash(null)
+            : formatMoney(Number(s().minOrderValue), s().currency)}
+        </Row>
+        <Row label={__('Free freight from')}>
+          {null === s().freeFreightFrom
+            ? dash(null)
+            : formatMoney(Number(s().freeFreightFrom), s().currency)}
+        </Row>
         <Row label={__('Email')}>{dash(s().email)}</Row>
         <Row label={__('Phone')}>{dash(s().phone)}</Row>
         <Row label={__('Website')}>{dash(s().website)}</Row>
@@ -447,6 +470,10 @@ function EditForm(props: { supplier: Supplier; onDone: () => void }): JSX.Elemen
     null === s.leadTimeDays ? '' : String(s.leadTimeDays),
   );
   const [costDecimals, setCostDecimals] = createSignal(String(s.costDecimals));
+  // Shown as stored, without the column's trailing zeros: "500", not "500.0000".
+  const trimAmount = (v: string | null): string => (null === v ? '' : String(Number(v)));
+  const [minOrder, setMinOrder] = createSignal(trimAmount(s.minOrderValue));
+  const [freeFreight, setFreeFreight] = createSignal(trimAmount(s.freeFreightFrom));
   const [email, setEmail] = createSignal(s.email ?? '');
   const [phone, setPhone] = createSignal(s.phone ?? '');
   const [website, setWebsite] = createSignal(s.website ?? '');
@@ -539,10 +566,29 @@ function EditForm(props: { supplier: Supplier; onDone: () => void }): JSX.Elemen
     onError: (err: unknown) => toast.error(err instanceof Error ? err.message : String(err)),
   }));
 
+  // A cleared name is marked from the first save attempt on, never while it is being retyped.
+  const [tried, setTried] = createSignal(false);
+  const nameError = (): string | null =>
+    tried() && '' === name().trim() ? __('Enter the supplier’s legal name.') : null;
+  let formEl: HTMLFormElement | undefined;
+
   const submit = (e: Event): void => {
     e.preventDefault();
-    if ('' === name().trim()) return;
-    const body: Record<string, unknown> = {
+    setTried(true);
+    const min = thresholdValue(minOrder());
+    const freight = thresholdValue(freeFreight());
+    if ('' === name().trim() || undefined === min || undefined === freight) {
+      focusFirstInvalid(formEl);
+      return;
+    }
+    mutation.mutate(body());
+  };
+
+  /** What a save sends, from the fields as they stand. */
+  const body = (): Record<string, unknown> => {
+    const min = thresholdValue(minOrder());
+    const freight = thresholdValue(freeFreight());
+    return {
       name: name().trim(),
       nickname: nickname().trim() || null,
       code: code().trim() || null,
@@ -550,6 +596,8 @@ function EditForm(props: { supplier: Supplier; onDone: () => void }): JSX.Elemen
       currency: currency(),
       payment_terms: paymentTerms().trim() || null,
       lead_time_days: '' === leadTime().trim() ? null : Number(leadTime()),
+      min_order_value: min,
+      free_freight_from: freight,
       cost_decimals: Number(costDecimals()),
       email: email().trim() || null,
       phone: phone().trim() || null,
@@ -570,8 +618,11 @@ function EditForm(props: { supplier: Supplier; onDone: () => void }): JSX.Elemen
       quotes_include_tax: quotesIncludeTax(),
       status: status(),
     };
-    mutation.mutate(body);
   };
+  // An existing supplier: Save waits for a change. Compared on what a save would send, so
+  // retyping a value back to what it was leaves nothing to save.
+  const saved = untrack(() => JSON.stringify(body()));
+  const dirty = (): boolean => JSON.stringify(body()) !== saved;
 
   return (
     <>
@@ -579,16 +630,20 @@ function EditForm(props: { supplier: Supplier; onDone: () => void }): JSX.Elemen
       <Show when={termsModal()}>
         {(target) => <TermsModal target={target()} onClose={() => setTermsModal(null)} />}
       </Show>
-      <form class="max-w-lg" onSubmit={submit}>
+      {/* noValidate: the fields say what is wrong themselves, not the browser's bubble. */}
+      <form ref={formEl} class="max-w-lg" onSubmit={submit} noValidate>
         <div class="grid grid-cols-2 gap-3">
           <label class={FIELD}>
             {__('Legal name')} <span class="text-red-600">*</span>
             <input
-              class={INPUT}
+              class={field(null !== nameError())}
               value={name()}
               onInput={(e) => setName(e.currentTarget.value)}
-              required
+              aria-required="true"
+              aria-invalid={null !== nameError()}
+              data-testid="supplier-name"
             />
+            <FieldError message={nameError()} testId="supplier-name-error" />
           </label>
           <label class={FIELD}>
             {__('Nickname')}{' '}
@@ -642,24 +697,25 @@ function EditForm(props: { supplier: Supplier; onDone: () => void }): JSX.Elemen
             </div>
           </div>
           <label class={FIELD}>
-            {__('Lead time (days)')}
-            <input
-              class={INPUT}
-              type="number"
-              min="0"
-              value={leadTime()}
-              onInput={(e) => setLeadTime(e.currentTarget.value)}
-            />
-          </label>
-          <label class={FIELD}>
             {__('Cost decimals')}
+            {/* Next to the currency it qualifies: how many decimals this supplier's costs carry. */}
             <select
-              class={INPUT}
+              class={`${SELECT} text-right tabular-nums [text-align-last:right]`}
               value={costDecimals()}
               onChange={(e) => setCostDecimals(e.currentTarget.value)}
             >
               <For each={['0', '1', '2', '3', '4']}>{(d) => <option value={d}>{d}</option>}</For>
             </select>
+          </label>
+          <label class={FIELD}>
+            {__('Lead time (days)')}
+            <input
+              class={`${INPUT} text-right tabular-nums`}
+              type="number"
+              min="0"
+              value={leadTime()}
+              onInput={(e) => setLeadTime(e.currentTarget.value)}
+            />
           </label>
         </div>
         <label class={`${FIELD} mt-3`}>
@@ -670,6 +726,38 @@ function EditForm(props: { supplier: Supplier; onDone: () => void }): JSX.Elemen
             onInput={(e) => setPaymentTerms(e.currentTarget.value)}
           />
         </label>
+        {/* Two of the supplier's commercial terms, in its currency and net of tax. Shown against a
+            draft and warned about on sending; never a gate. */}
+        <div class="mt-3 grid grid-cols-2 gap-3">
+          <label class={FIELD}>
+            <span>
+              {__('Minimum order value')} <span class="text-text-muted">({currency()})</span>
+            </span>
+            <input
+              class={field(null !== thresholdError(minOrder()), 'text-right tabular-nums')}
+              inputmode="decimal"
+              value={minOrder()}
+              onInput={(e) => setMinOrder(e.currentTarget.value)}
+              aria-invalid={null !== thresholdError(minOrder())}
+              data-testid="supplier-min-order-value"
+            />
+            <FieldError message={thresholdError(minOrder())} />
+          </label>
+          <label class={FIELD}>
+            <span>
+              {__('Free freight from')} <span class="text-text-muted">({currency()})</span>
+            </span>
+            <input
+              class={field(null !== thresholdError(freeFreight()), 'text-right tabular-nums')}
+              inputmode="decimal"
+              value={freeFreight()}
+              onInput={(e) => setFreeFreight(e.currentTarget.value)}
+              aria-invalid={null !== thresholdError(freeFreight())}
+              data-testid="supplier-free-freight-from"
+            />
+            <FieldError message={thresholdError(freeFreight())} />
+          </label>
+        </div>
 
         <h3 class={SECTION}>{__('Contact')}</h3>
         <div class="grid grid-cols-2 gap-3">
@@ -813,7 +901,7 @@ function EditForm(props: { supplier: Supplier; onDone: () => void }): JSX.Elemen
           <div class={FIELD}>
             {__('Tax treatment')} <Hint text={taxTreatmentHint()} />
             <select
-              class={INPUT}
+              class={SELECT}
               aria-label={__('Tax treatment')}
               value={taxTreatment()}
               onChange={(e) => setTaxTreatment(e.currentTarget.value)}
@@ -861,7 +949,7 @@ function EditForm(props: { supplier: Supplier; onDone: () => void }): JSX.Elemen
             )}
           />
           <select
-            class={INPUT}
+            class={SELECT}
             value={termsLineageId()}
             onChange={(e) => setTermsLineageId(e.currentTarget.value)}
           >
@@ -914,7 +1002,7 @@ function EditForm(props: { supplier: Supplier; onDone: () => void }): JSX.Elemen
             )}
           />
           <select
-            class={INPUT}
+            class={SELECT}
             value={documentLanguage()}
             onChange={(e) => setDocumentLanguage(e.currentTarget.value)}
           >
@@ -955,7 +1043,11 @@ function EditForm(props: { supplier: Supplier; onDone: () => void }): JSX.Elemen
 
         <label class={`${FIELD} mt-6`}>
           {__('Status')}
-          <select class={INPUT} value={status()} onChange={(e) => setStatus(e.currentTarget.value)}>
+          <select
+            class={SELECT}
+            value={status()}
+            onChange={(e) => setStatus(e.currentTarget.value)}
+          >
             <option value="active">{__('Active')}</option>
             <option value="inactive">{__('Inactive')}</option>
           </select>
@@ -966,7 +1058,7 @@ function EditForm(props: { supplier: Supplier; onDone: () => void }): JSX.Elemen
         </Show>
 
         <div class="mt-5 flex gap-2">
-          <Button type="submit" disabled={mutation.isPending || '' === name().trim()}>
+          <Button type="submit" disabled={mutation.isPending || !dirty()}>
             {mutation.isPending ? __('Saving…') : __('Save')}
           </Button>
           <Button variant="ghost" onClick={props.onDone}>

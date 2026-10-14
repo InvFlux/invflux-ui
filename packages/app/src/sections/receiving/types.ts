@@ -121,6 +121,11 @@ export interface ReceiptSummary {
   lineCount: number;
   qty: number;
   damagedQty: number;
+  /** What the receipt totals now, after corrections; null when it was never corrected. */
+  correctedQty: number | null;
+  correctedDamagedQty: number | null;
+  /** `reversed` is a correction that left every quantity at zero; the receipt stays on file. */
+  state: 'posted' | 'corrected' | 'reversed';
   note: string | null;
 }
 
@@ -194,6 +199,11 @@ export interface PoReceptionResponse {
     /** Not yet marked as shipped — the one case the count asks to be unlocked. */
     awaitingDispatch: boolean;
     expectedAt: string | null;
+    /** The order's currency and the store's: a count of a foreign order asks for the rate. */
+    currency: string;
+    baseCurrency: string;
+    /** The last rate a receipt in this currency was converted at, offered to confirm; null if none. */
+    suggestedFxRate: string | null;
   };
   lines: PoReceptionLine[];
   sessionOpen: boolean;

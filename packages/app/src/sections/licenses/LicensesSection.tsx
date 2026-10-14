@@ -76,8 +76,49 @@ function StatePill(props: { state: string }): JSX.Element {
  * A direct route (like Settings / Ledger), so it mounts on visit — its refocus-poll listeners are
  * scoped to while the page is open. After a checkout hands off to the MoR in a new tab, returning to
  * this tab re-reads owned state (the webhook already minted; no activate step).
+ *
+ * On a public demo the section shows {@link DemoNotice} instead, and none of its reads run: the
+ * server answers every licensing call from a demo as unreachable, so the full panel could only show
+ * a page of failures.
  */
 export default function LicensesSection(): JSX.Element {
+  const app = useApp();
+  return (
+    <Show when={!app.demo} fallback={<DemoNotice />}>
+      <LicensesPanel />
+    </Show>
+  );
+}
+
+/**
+ * What the section says on a public demo, in place of the whole licence lifecycle.
+ *
+ * Says what is missing and why, so a visitor evaluating the product does not read the absence as a
+ * fault, and points at the one thing that would bring it back: installing on their own store.
+ */
+function DemoNotice(): JSX.Element {
+  return (
+    <div class="mx-auto max-w-4xl p-4">
+      <h1 class="mb-4 text-lg font-semibold text-slate-900">{__('Licenses & Add-ons')}</h1>
+      <section
+        class="rounded border border-slate-200 bg-slate-50 p-4"
+        data-testid="licenses-demo-notice"
+      >
+        <h2 class="text-base font-semibold text-slate-900">
+          {__('Licensing is turned off in this demo')}
+        </h2>
+        <p class="mt-1 text-sm text-slate-600">
+          {__(
+            'Nothing you do in this demo reaches the licensing service, so registration, licenses and add-on purchases are not available here. Install InvFlux on your own store to register it for free.',
+          )}
+        </p>
+      </section>
+    </div>
+  );
+}
+
+/** The full section for a real install: everything described on {@link LicensesSection}. */
+function LicensesPanel(): JSX.Element {
   const app = useApp();
   const api = createLicensesApi(app);
   const queryClient = useQueryClient();

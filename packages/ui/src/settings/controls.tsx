@@ -7,7 +7,7 @@ import { Input } from '../Input';
 import { Select } from '../Select';
 import { Textarea } from '../Textarea';
 import type { SettingControlProps } from './registry';
-import { settingControlRegistry } from './registry';
+import { registerSettingSummary, settingControlRegistry } from './registry';
 import { ErrorBanner } from '../ErrorBanner';
 
 /**
@@ -360,4 +360,14 @@ settingControlRegistry.register('number', 'core.number', NumberControl, { defaul
 settingControlRegistry.register('text', 'core.text', TextControl, { default: true });
 settingControlRegistry.register('text:long', 'core.text-long', TextLongControl, { default: true });
 settingControlRegistry.register('enum', 'core.enum', EnumControl, { default: true });
+
+/** An enum reads as its option's label, not its stored slug; a value no option names reads as itself. */
+registerSettingSummary('enum', (value, definition) => {
+  const options = Array.isArray(definition.config.options)
+    ? (definition.config.options as Array<{ value: unknown; label: string }>)
+    : [];
+  const match = options.find((opt) => String(opt.value) === String(value));
+
+  return match?.label ?? null;
+});
 settingControlRegistry.register('json', 'core.json', JsonControl, { default: true });

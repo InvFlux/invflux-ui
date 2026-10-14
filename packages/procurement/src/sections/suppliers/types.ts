@@ -33,6 +33,10 @@ export interface Supplier {
   currency: string | null;
   paymentTerms: string | null;
   leadTimeDays: number | null;
+  /** The smallest order they accept, by value — in {@link currency}, net of tax. Null: none stated. */
+  minOrderValue: string | null;
+  /** The order value from which they ship free, in {@link currency}, net of tax. Null: none stated. */
+  freeFreightFrom: string | null;
   costDecimals: number;
   /** *Our* account number with them — their customer reference for us (the mirror of {@link code}). */
   accountNumber: string | null;

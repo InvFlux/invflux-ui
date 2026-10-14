@@ -46,4 +46,9 @@ export interface AppContext {
   workbench?: { applyConcurrency?: number };
   /** Whether the install holds the Pro SKU — display affordances only, never gating. */
   hasPro: boolean;
+  /**
+   * A public, throwaway demo. The server never contacts the licensing service from one, so the
+   * licensing surfaces explain that rather than load. Absent on an older bootstrap: not a demo.
+   */
+  demo?: boolean;
 }

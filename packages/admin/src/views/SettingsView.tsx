@@ -17,6 +17,7 @@ import {
   fetchImportAliases,
   Modal,
   resolveSettingControl,
+  summarizeSettingValue,
   type SettingMeta,
   ModalFooter,
   ModalHeader,
@@ -1408,7 +1409,11 @@ interface SummaryModalProps {
   onCancel: () => void;
 }
 
-function display(value: unknown): string {
+function display(value: unknown, row?: SettingRow): string {
+  // What the value means, when its control says (an enum's label, a priority list numbered);
+  // otherwise the raw value.
+  const summary = row === undefined ? null : summarizeSettingValue(row, value);
+  if (summary !== null) return summary;
   if (value === null || value === undefined) return '—';
   if (typeof value === 'string') return value === '' ? '""' : value;
 
@@ -1452,9 +1457,9 @@ function SummaryModal(props: SummaryModalProps) {
                       </Show>
                     </div>
                     <div class="mt-1 text-xs text-text-muted">
-                      <span class="line-through">{display(props.oldValue(row))}</span>
+                      <span class="line-through">{display(props.oldValue(row), row)}</span>
                       {' → '}
-                      <span class="text-text">{display(props.newValue(row))}</span>
+                      <span class="text-text">{display(props.newValue(row), row)}</span>
                     </div>
                   </li>
                 );

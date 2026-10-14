@@ -1,7 +1,10 @@
-import { __ } from '@invflux/i18n';
+import { __, _x } from '@invflux/i18n';
 import {
   Button,
   ErrorBanner,
+  FieldError,
+  focusFirstInvalid,
+  inputClass,
   Modal,
   SearchSelect,
   toast,
@@ -13,14 +16,16 @@ import {
 import { useNavigate } from '@solidjs/router';
 import { createMutation, useQueryClient } from '@tanstack/solid-query';
 import { createSignal, type JSX, Show } from 'solid-js';
+import { thresholdError, thresholdValue } from './orderThresholds';
 import { useProcurement } from '../../context';
 import { createApi } from '../../lib/api';
 import { currencyOptions } from '../../lib/geo';
 import { usePortalRoot } from '../../portal';
 import type { Supplier } from './types';
 
-const INPUT =
-  'mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40';
+const INPUT = inputClass('sm', false, 'mt-1 w-full');
+const field = (invalid: boolean, extra = ''): string =>
+  inputClass('sm', invalid, `mt-1 w-full ${extra}`);
 const FIELD = 'block text-sm text-slate-700';
 
 /**
@@ -40,8 +45,15 @@ export function AddSupplierModal(props: { onClose: () => void }): JSX.Element {
   const [currency, setCurrency] = createSignal(ctx.geo.baseCurrency || 'EUR');
   const [paymentTerms, setPaymentTerms] = createSignal('');
   const [leadTime, setLeadTime] = createSignal('');
+  const [minOrder, setMinOrder] = createSignal('');
+  const [freeFreight, setFreeFreight] = createSignal('');
   const [email, setEmail] = createSignal('');
   const [phone, setPhone] = createSignal('');
+  // A missing name is marked from the first attempt on, never before: the form opens empty.
+  const [tried, setTried] = createSignal(false);
+  const nameError = (): string | null =>
+    tried() && '' === name().trim() ? __('Enter the supplier’s name.') : null;
+  let formEl: HTMLFormElement | undefined;
 
   const mutation = createMutation(() => ({
     mutationFn: (body: Record<string, unknown>) =>
@@ -59,14 +71,22 @@ export function AddSupplierModal(props: { onClose: () => void }): JSX.Element {
 
   const submit = (e: Event): void => {
     e.preventDefault();
+    setTried(true);
     const trimmed = name().trim();
-    if ('' === trimmed) return;
+    const min = thresholdValue(minOrder());
+    const freight = thresholdValue(freeFreight());
+    if ('' === trimmed || undefined === min || undefined === freight) {
+      focusFirstInvalid(formEl);
+      return;
+    }
     mutation.mutate({
       name: trimmed,
       nickname: nickname().trim() || null,
       currency: currency(),
       payment_terms: paymentTerms().trim() || null,
       lead_time_days: '' === leadTime().trim() ? null : Number(leadTime()),
+      min_order_value: min,
+      free_freight_from: freight,
       email: email().trim() || null,
       phone: phone().trim() || null,
     });
@@ -76,17 +96,21 @@ export function AddSupplierModal(props: { onClose: () => void }): JSX.Element {
     <Modal onClose={props.onClose} label={__('Add supplier')} align="top">
       <ModalPanel size="md" class="mt-12">
         <ModalHeader title={__('Add supplier')} />
-        <form onSubmit={submit}>
+        {/* noValidate: the fields say what is wrong themselves, not the browser's bubble. */}
+        <form ref={formEl} onSubmit={submit} noValidate>
           <div class="p-4">
             <label class={FIELD}>
               {__('Name')} <span class="text-red-600">*</span>
               <input
-                class={INPUT}
+                class={field(null !== nameError())}
                 value={name()}
                 onInput={(e) => setName(e.currentTarget.value)}
-                required
+                aria-required="true"
+                aria-invalid={null !== nameError()}
                 autofocus
+                data-testid="supplier-name"
               />
+              <FieldError message={nameError()} testId="supplier-name-error" />
             </label>
 
             <label class={`${FIELD} mt-3`}>
@@ -121,7 +145,7 @@ export function AddSupplierModal(props: { onClose: () => void }): JSX.Element {
               <label class={FIELD}>
                 {__('Lead time (days)')}
                 <input
-                  class={INPUT}
+                  class={`${INPUT} text-right tabular-nums`}
                   type="number"
                   min="0"
                   value={leadTime()}
@@ -136,9 +160,45 @@ export function AddSupplierModal(props: { onClose: () => void }): JSX.Element {
                 class={INPUT}
                 value={paymentTerms()}
                 onInput={(e) => setPaymentTerms(e.currentTarget.value)}
-                placeholder="Net 30"
+                placeholder={_x(
+                  'Net 30',
+                  'example payment terms: pay within 30 days of the invoice, as the supplier writes it',
+                )}
               />
             </label>
+
+            {/* Two of the supplier's commercial terms, in its currency and net of tax. Shown
+                against a draft and warned about on sending; never a gate. */}
+            <div class="mt-3 grid grid-cols-2 gap-3">
+              <label class={FIELD}>
+                <span>
+                  {__('Minimum order value')} <span class="text-text-muted">({currency()})</span>
+                </span>
+                <input
+                  class={field(null !== thresholdError(minOrder()), 'text-right tabular-nums')}
+                  inputmode="decimal"
+                  value={minOrder()}
+                  onInput={(e) => setMinOrder(e.currentTarget.value)}
+                  aria-invalid={null !== thresholdError(minOrder())}
+                  data-testid="supplier-min-order-value"
+                />
+                <FieldError message={thresholdError(minOrder())} />
+              </label>
+              <label class={FIELD}>
+                <span>
+                  {__('Free freight from')} <span class="text-text-muted">({currency()})</span>
+                </span>
+                <input
+                  class={field(null !== thresholdError(freeFreight()), 'text-right tabular-nums')}
+                  inputmode="decimal"
+                  value={freeFreight()}
+                  onInput={(e) => setFreeFreight(e.currentTarget.value)}
+                  aria-invalid={null !== thresholdError(freeFreight())}
+                  data-testid="supplier-free-freight-from"
+                />
+                <FieldError message={thresholdError(freeFreight())} />
+              </label>
+            </div>
 
             <div class="mt-3 grid grid-cols-2 gap-3">
               <label class={FIELD}>
@@ -168,7 +228,7 @@ export function AddSupplierModal(props: { onClose: () => void }): JSX.Element {
             <Button variant="ghost" onClick={props.onClose}>
               {__('Cancel')}
             </Button>
-            <Button type="submit" disabled={mutation.isPending || '' === name().trim()}>
+            <Button type="submit" disabled={mutation.isPending}>
               {mutation.isPending ? __('Creating…') : __('Create supplier')}
             </Button>
           </ModalFooter>

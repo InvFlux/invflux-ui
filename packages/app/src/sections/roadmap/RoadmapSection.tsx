@@ -1,7 +1,8 @@
-import { __ } from '@invflux/i18n';
+import { __, _x } from '@invflux/i18n';
 import { createResource, createSignal, For, Show, type JSX } from 'solid-js';
 import { useApp } from '../../context';
 import { createRoadmapApi, isNotRegistered } from './api';
+import { statusLabel, statusPillClass } from './statusPresentation';
 import type { RoadmapItem, RoadmapStatus } from './types';
 
 /**
@@ -59,7 +60,9 @@ export default function RoadmapSection(): JSX.Element {
 
   return (
     <section class="p-4" data-testid="roadmap-section">
-      <h1 class="text-lg font-semibold text-slate-900">{__('Roadmap')}</h1>
+      <h1 class="text-lg font-semibold text-slate-900">
+        {_x('Roadmap', 'roadmap: the section title')}
+      </h1>
       <p class="mt-1 max-w-2xl text-sm text-slate-600">
         {__(
           'What is being built, and in what order. Vote for a whole area or for one feature — we read it when we decide what comes next.',
@@ -121,7 +124,7 @@ export default function RoadmapSection(): JSX.Element {
         <p class="mt-4 text-sm text-slate-600" data-testid="roadmap-error">
           {__('The roadmap could not be loaded.')}{' '}
           <button type="button" class="underline" onClick={() => void refetch()}>
-            {__('Try again')}
+            {_x('Try again', 'roadmap: retry loading the board')}
           </button>
         </p>
       </Show>
@@ -176,7 +179,9 @@ function Node(props: {
             data-testid={`roadmap-vote-${props.item.slug}`}
             onClick={() => void props.onToggle(props.item)}
           >
-            {props.item.voted ? __('Voted') : __('Vote')}
+            {props.item.voted
+              ? _x('Voted', 'roadmap: button state when this account has already voted')
+              : _x('Vote', 'roadmap: button to cast a vote for an item')}
           </button>
         </Show>
         <div class="min-w-0">
@@ -214,30 +219,12 @@ function Node(props: {
 
 /** Status is a word rather than a date, so the pill says the word. */
 function StatusPill(props: { status: RoadmapStatus }): JSX.Element {
-  const label = (): string => {
-    switch (props.status) {
-      case 'shipped':
-        return __('Shipped');
-      case 'in_progress':
-        return __('In progress');
-      case 'planned':
-        return __('Planned');
-      default:
-        return props.status;
-    }
-  };
-
   return (
     <span
-      class="rounded px-1.5 py-0.5 text-xs"
-      classList={{
-        'bg-green-100 text-green-800': props.status === 'shipped',
-        'bg-blue-100 text-blue-800': props.status === 'in_progress',
-        'bg-slate-200 text-slate-700': props.status !== 'shipped' && props.status !== 'in_progress',
-      }}
+      class={`rounded px-1.5 py-0.5 text-xs ${statusPillClass(props.status)}`}
       data-testid="roadmap-status"
     >
-      {label()}
+      {statusLabel(props.status)}
     </span>
   );
 }

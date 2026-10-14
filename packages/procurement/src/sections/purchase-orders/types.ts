@@ -85,6 +85,9 @@ export interface PurchaseOrder {
   /** The supplier's set — what applies when the order chooses nothing. */
   supplierTermsLineageId: number | null;
   total: string | null;
+  /** The supplier's minimum order value and free-freight threshold, in this order's currency, net of
+   *  tax. Null when the supplier states neither, or the order is in another currency than theirs. */
+  orderThresholds?: { minOrderValue: string | null; freeFreightFrom: string | null } | null;
   costDecimals: number;
   exceptionFlag: boolean;
   /** Per-PO delivery-discrepancy rollup for the list badge (over/finalized-short line counts,
@@ -233,9 +236,33 @@ export interface PoTimelineEvent {
    *  it means exactly its characters, so it is never formatted). Null when `%s` is something else. */
   emphasis?: string | null;
   note: string | null;
+  /** The goods receipt a `receipt.logged` or `receipt.corrected` row opens on; null on every other
+   *  event, and on a receipt logged before its event recorded which receipt it was. */
+  receiptId?: number | null;
 }
 
 /** `GET /procurement/purchase-orders/{id}/events` response envelope. */
 export interface PoEventsResponse {
   events: PoTimelineEvent[];
+}
+
+/** One receipt posted against an order — `GET /receiving/purchase-orders/{id}/receipts`. */
+export interface PoReceipt {
+  id: number;
+  receivedAt: string | null;
+  receivedBy: string | null;
+  lineCount: number;
+  /** Good units, as posted. */
+  qty: number;
+  damagedQty: number;
+  /** What the receipt totals now, after corrections; null when it was never corrected. */
+  correctedQty: number | null;
+  correctedDamagedQty: number | null;
+  /** `reversed` is a correction that left every quantity at zero; the receipt stays on file. */
+  state: 'posted' | 'corrected' | 'reversed';
+  note: string | null;
+}
+
+export interface PoReceiptsResponse {
+  receipts: PoReceipt[];
 }

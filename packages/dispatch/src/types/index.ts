@@ -840,6 +840,11 @@ export interface DispatchEntitlements {
 export interface DispatchSettings {
   /** Store-level default for the Pro-tier auto-validation checkbox. */
   autoValidationDefault: boolean;
+  /**
+   * The shop's queue order: the names of the ranking rules in effect, first first. Absent or null
+   * means the built-in order. Resolved by the server, which ranks its own pages by the same list.
+   */
+  queueRank?: string[] | null;
 }
 
 /**

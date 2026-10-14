@@ -50,7 +50,7 @@ import {
   needsServerMode,
   pendingActionsOf,
 } from '../workingSet';
-import { publishQueueSortEntitlements, sortQueue } from '../queueSort';
+import { publishQueueRank, publishQueueSortEntitlements, sortQueue } from '../queueSort';
 import { useListStore } from '../listStore';
 import {
   BulkTagAssign,
@@ -600,6 +600,9 @@ export function OrderList() {
   // copied, because the context is fetched lazily and a snapshot taken here would freeze the
   // pre-fetch defaults.
   publishQueueSortEntitlements(() => ctx.entitlements as unknown as Record<string, boolean>);
+  // And the shop's queue order, read the same way: the server resolved it, and the local sort
+  // follows it so a polled row lands where the server's own page would put it.
+  publishQueueRank(() => ctx.settings?.queueRank);
 
   const allOrders = createMemo<DispatchOrderSummary[]>(() => {
     if (serverMode()) return (query.data?.pages ?? []).flatMap((p) => p.orders);

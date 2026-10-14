@@ -1,12 +1,14 @@
 import { __, _x, formatDateTime, sprintf } from '@invflux/i18n';
 import { type ReadColumn, ReadLinesTable } from '@invflux/procurement/src/grid/ReadLinesTable';
 import { Button, ErrorBanner, Pill } from '@invflux/ui';
+import { A } from '@solidjs/router';
 import { createQuery } from '@tanstack/solid-query';
 import { createSignal, For, type JSX, Show } from 'solid-js';
 import { useApp } from '../../context';
 import { createApi } from '../../lib/api';
 import { costText, currencyDecimals, derivedCostText, fullPrecision } from './costText';
 import { ReceiptCorrectionDialog } from './ReceiptCorrectionDialog';
+import { purchaseOrderHref, sourceLabel } from './procurementLink';
 import { ReceivingCrumbs } from './ReceivingCrumbs';
 import type {
   ReceiptCorrection,
@@ -263,6 +265,29 @@ export function ReceiptView(props: { id: number }): JSX.Element {
               <Show when={null !== r().reasonLabel}>
                 <dt class="text-text-muted">{__('Reason')}</dt>
                 <dd>{r().reasonLabel}</dd>
+              </Show>
+              {/* What the receipt answers, and the way back to it. Plain text for a viewer who
+                  cannot open Procurement, and for a document type this build cannot name. */}
+              <Show when={r().source}>
+                {(source) => (
+                  <>
+                    <dt class="text-text-muted">{__('Against')}</dt>
+                    <dd data-testid="receipt-source">
+                      <Show
+                        when={
+                          'purchase_order' === source().type ? purchaseOrderHref(source().id) : null
+                        }
+                        fallback={sourceLabel(source())}
+                      >
+                        {(href) => (
+                          <A href={href()} class="text-primary hover:underline">
+                            {sourceLabel(source())} →
+                          </A>
+                        )}
+                      </Show>
+                    </dd>
+                  </>
+                )}
               </Show>
               <Show when={r().supplier}>
                 {(s) => (

@@ -83,3 +83,39 @@ export function resolveSettingControl(
 ): SettingControl | null {
   return registry.resolve(dataType, chosenId) ?? registry.resolve(SETTING_CONTROL_FALLBACK);
 }
+
+/**
+ * One line saying what a setting's value *means*, for places that show a value rather than edit it
+ * — the review-before-save modal above all. Returns null to let the caller fall back to its raw
+ * rendering.
+ *
+ * Registered per datatype beside the control, because the control is what knows how its value
+ * reads: an enum's label rather than its slug, a priority list as "1. …, 2. …" rather than JSON.
+ */
+export type SettingSummary = (
+  value: unknown,
+  definition: Pick<SettingMeta, 'dataType' | 'config'>,
+) => string | null;
+
+const settingSummaries = new Map<string, SettingSummary>();
+
+/** Register how a datatype's value reads in one line. Re-registering a datatype replaces it. */
+export function registerSettingSummary(dataType: string, summarize: SettingSummary): void {
+  settingSummaries.set(dataType, summarize);
+}
+
+/**
+ * A value in one line, through the summary registered for its datatype — or, for a `base:variant`
+ * slug with none of its own, its base's. Null when neither has one.
+ */
+export function summarizeSettingValue(
+  definition: Pick<SettingMeta, 'dataType' | 'config'>,
+  value: unknown,
+): string | null {
+  const own = settingSummaries.get(definition.dataType);
+  const base = definition.dataType.includes(':')
+    ? settingSummaries.get(definition.dataType.split(':')[0]!)
+    : undefined;
+
+  return (own ?? base)?.(value, definition) ?? null;
+}

@@ -1,5 +1,7 @@
+import { __, sprintf } from '@invflux/i18n';
 import { hasCapability } from '../../capabilities';
 import { surfaceEnabled } from '../../surfaces';
+import type { ReceivingSource } from './types';
 
 /**
  * Whether this viewer can be sent into Procurement at all — the capability that mounts the surface,
@@ -18,4 +20,19 @@ export function procurementReachable(): boolean {
 /** Where a purchase order lives in Procurement, or null when this viewer cannot open it. */
 export function purchaseOrderHref(id: number): string | null {
   return procurementReachable() ? `/procurement/purchase-orders/${id}` : null;
+}
+
+/** A document label an operator can read: its number, or its id when it has none yet. */
+export function sourceLabel(source: ReceivingSource | null): string {
+  if (null === source) return __('No document');
+  if ('purchase_order' !== source.type) return __('Another document');
+  return '' === source.label
+    ? sprintf(
+        /* translators: %d is an internal purchase-order id. */ __('Draft order #%d'),
+        source.id,
+      )
+    : sprintf(
+        /* translators: %s is a purchase order number. */ __('Purchase order %s'),
+        source.label,
+      );
 }

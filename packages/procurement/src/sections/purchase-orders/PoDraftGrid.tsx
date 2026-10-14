@@ -1,5 +1,7 @@
 import { __, _n, _x, sprintf } from '@invflux/i18n';
 import {
+  Button,
+  ColumnsSettingsIcon,
   BulkEditModal,
   type BulkEditColumn,
   type BulkEditResult,
@@ -13,6 +15,7 @@ import {
   type StagedCell,
   createViewportFill,
 } from '@invflux/ui';
+import { PoWorkbenchLink } from './PoWorkbenchLink';
 import { type ColumnDef, createColumnHelper } from '@tanstack/solid-table';
 import type { RowSelectionState, SortingState } from '@tanstack/solid-table';
 import { createEffect, createMemo, createSignal, type JSX, Show } from 'solid-js';
@@ -99,7 +102,33 @@ const PATCH_FIELD: Record<string, keyof DraftLinePatch | undefined> = {
   note: 'note',
 };
 
-/** GridColumnMeta with draft-editor defaults filled in; all columns share the one "Procurement" group. */
+/**
+ * Which section of the column manager each column is listed under. A group is named for what its
+ * columns tell the buyer: the product, how it is identified to us and to the supplier, where its stock
+ * stands, and the line being ordered.
+ */
+const COLUMN_GROUP: Record<string, 'product' | 'identifiers' | 'stock' | 'order_line'> = {
+  image: 'product',
+  product: 'product',
+  sku: 'identifiers',
+  supplier_sku: 'identifiers',
+  available: 'stock',
+  on_order: 'stock',
+  reorder: 'stock',
+};
+
+/** The column manager's section titles, by {@link COLUMN_GROUP} key. Built per call: translated text. */
+const columnGroupLabels = (): Record<string, string> => ({
+  product: __('Product'),
+  identifiers: _x('Identifiers', 'column group: a product’s SKU and the supplier’s code for it'),
+  stock: _x('Stock', 'column group: available, on order and reorder point'),
+  order_line: _x(
+    'Order line',
+    'column group: quantity, price and terms of one purchase-order line',
+  ),
+});
+
+/** GridColumnMeta with draft-editor defaults filled in, listed under its {@link COLUMN_GROUP}. */
 function colMeta(
   over: Partial<GridColumnMeta> & { id: string; label: string; dataType: string },
 ): GridColumnMeta {
@@ -113,7 +142,7 @@ function colMeta(
     hasDrilldown: false,
     dispositionOptions: null,
     discoveryContextOptions: null,
-    group: 'po-draft',
+    group: COLUMN_GROUP[over.id] ?? 'order_line',
     priority: 0,
     visibleByDefault: true,
     defaultWidth: 110,
@@ -973,6 +1002,23 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
         <Show when={props.toolbarEnd}>
           <div class="flex items-center gap-3">{props.toolbarEnd}</div>
         </Show>
+        {/* The grid's own controls, right-aligned like every grid's: the workbench hand-off, then
+            the column picker last, where the other grids keep it. */}
+        <div class="ml-auto flex items-center gap-2">
+          <PoWorkbenchLink
+            subjectIds={props.lines.filter((l) => !isDraft(l)).map((l) => l.subjectId)}
+          />
+          <Button
+            variant="secondary"
+            class="h-8 shrink-0 px-2!"
+            aria-label={`${__('Columns')} (Ctrl+M)`}
+            title={`${__('Columns')} (Ctrl+M)`}
+            onClick={() => gridApi?.openColumnManager()}
+            data-testid="po-columns"
+          >
+            <ColumnsSettingsIcon class="h-5 w-5" />
+          </Button>
+        </div>
       </div>
 
       {/* Measured, not a viewport fraction. `70vh` was 594px of a 848px window while the grid
@@ -996,6 +1042,7 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
           getRowId={(l) => String(l.subjectId)}
           rowAttrs={(l) => (isDraft(l) ? { class: 'bg-primary/5' } : {})}
           columnMetas={columnMetas}
+          groupLabels={columnGroupLabels}
           getValue={getValue}
           bespokeColumns={bespokeColumns}
           fetchDrilldown={fetchDrilldown}
@@ -1015,7 +1062,7 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
           onSortingChange={(next) => setSorting(() => next)}
           scope="po-draft"
           defaultColumnOrder={COLUMN_ORDER}
-          defaultExpandedSections={['po-draft']}
+          defaultExpandedSections={['product', 'identifiers', 'stock', 'order_line']}
           rowSelection={rowSelection}
           setRowSelection={(updater) => setRowSelection(updater)}
           cellSelection={cellSelection}

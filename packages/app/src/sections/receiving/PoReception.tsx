@@ -1,35 +1,29 @@
 import { __, _n, sprintf } from '@invflux/i18n';
-import {
-  Checkbox,
-  ConfirmModal,
-  ErrorBanner,
-  mintReceiptKey,
-  Select,
-  Textarea,
-  toast,
-} from '@invflux/ui';
+import { Checkbox, ConfirmModal, ErrorBanner, mintReceiptKey, toast } from '@invflux/ui';
 import { ApiError } from '@invflux/ui/api';
 import {
   PoReceiveForm,
   type ReceiveRow,
 } from '@invflux/procurement/src/sections/purchase-orders/PoReceiveForm';
-import { SHORT_REASONS } from '@invflux/procurement/src/sections/purchase-orders/shortReasons';
+import { ShortfallFields } from '@invflux/procurement/src/sections/purchase-orders/ShortfallFields';
+import {
+  createShortfallState,
+  partsPresent,
+  projectedSplit,
+  type ShortfallLine,
+  type ShortfallSplit,
+  type ShortfallVocabulary,
+} from '@invflux/procurement/src/sections/purchase-orders/shortfall';
 import type { PoLine } from '@invflux/procurement/src/sections/purchase-orders/types';
 import { useNavigate, useSearchParams } from '@solidjs/router';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
-import { createEffect, createSignal, For, type JSX, onCleanup, Show } from 'solid-js';
+import { createEffect, createSignal, type JSX, onCleanup, Show } from 'solid-js';
 import { hasCapability } from '../../capabilities';
 import { useApp } from '../../context';
 import { createApi } from '../../lib/api';
 import { surfaceEnabled } from '../../surfaces';
 import { type Crumb, ReceivingCrumbs } from './ReceivingCrumbs';
 import type { PoReceptionResponse, PoReceptionLine } from './types';
-
-/**
- * Passed as both currencies so the form asks for no exchange rate. The value is never displayed —
- * the FX block it would label is the only thing that reads it, and that block never renders.
- */
-const NO_FX = '';
 
 /** How often a worker says they are still here. Well inside the server's presence window. */
 const HEARTBEAT_MS = 45_000;
@@ -98,8 +92,8 @@ export function PoReception(props: { poId: number }): JSX.Element {
   const [unlocked, setUnlocked] = createSignal('1' === params.unlocked);
 
   const [shortModal, setShortModal] = createSignal(false);
-  const [shortReason, setShortReason] = createSignal('supplier_oos');
-  const [shortNote, setShortNote] = createSignal('');
+  // Why each part of what is closed out did not come — the close-short prompt's state.
+  const shortfall = createShortfallState();
   // A receipt staged behind the reason modal: committed only once the reason is confirmed, so
   // nothing is irreversible on the click that opens it.
   const [pendingReceipt, setPendingReceipt] = createSignal<{
@@ -123,6 +117,39 @@ export function PoReception(props: { poId: number }): JSX.Element {
     queryKey: key(),
     queryFn: () => api.get<PoReceptionResponse>(`/receiving/purchase-orders/${props.poId}`),
   }));
+
+  // The close-short prompt's vocabulary (causes per part, each one's default party under this
+  // order's Incoterm). Asked for when the prompt opens.
+  const shortfallVocab = createQuery(() => ({
+    queryKey: ['receiving', 'purchase-order', props.poId, 'shortfall'],
+    queryFn: () =>
+      api.get<ShortfallVocabulary>(`/receiving/purchase-orders/${props.poId}/shortfall`),
+    enabled: shortModal(),
+  }));
+  const shortfallLines = (): ShortfallLine[] =>
+    (query.data?.lines ?? []).map((l) => ({
+      subjectId: l.subjectId,
+      qtyRequested: l.qtyRequested,
+      qtyExpected: l.qtyExpected,
+      qtyDamagedSoFar: l.qtyDamagedSoFar,
+      qtyOpen: l.qtyOpen,
+    }));
+  // What the remainder will split into once the staged count is posted.
+  const pendingSplit = (): ShortfallSplit =>
+    projectedSplit(shortfallLines(), pendingReceipt()?.rows ?? []);
+  // Everything the supplier confirmed is in by the saved count, and what is left was never
+  // confirmed: the order is done in all but the buyer's say-so, which is the close-short.
+  const onlyUnconfirmedLeft = (): number => {
+    const saved = (query.data?.lines ?? [])
+      .filter((l) => null !== l.staged)
+      .map((l) => ({
+        subjectId: l.subjectId,
+        received: l.staged?.received ?? 0,
+        damaged: l.staged?.damaged ?? 0,
+      }));
+    const parts = partsPresent(projectedSplit(shortfallLines(), saved));
+    return (parts.undelivered ?? 0) + (parts.damaged ?? 0) > 0 ? 0 : (parts.unconfirmed ?? 0);
+  };
 
   const invalidate = (): void => {
     void queryClient.invalidateQueries({ queryKey: key() });
@@ -200,7 +227,7 @@ export function PoReception(props: { poId: number }): JSX.Element {
         note: p.note,
         fxRate: p.fxRate,
         remainder: p.remainder,
-        reason: shortReason(),
+        ...('close_short' === p.remainder ? { shortfall: shortfall.body(pendingSplit()) } : {}),
         idempotencyKey: currentReceiptKey(),
       }),
     onSuccess: (_data: unknown, variables) => {
@@ -208,7 +235,7 @@ export function PoReception(props: { poId: number }): JSX.Element {
       setReceiptKey(null); // landed — the next receipt is a new intent
       setPendingReceipt(null);
       setShortModal(false);
-      setShortNote('');
+      shortfall.reset();
       toast.success(
         'short' === variables.intent
           ? __('Received, and the order is closed on what arrived.')
@@ -257,14 +284,14 @@ export function PoReception(props: { poId: number }): JSX.Element {
   const closeShortOnly = createMutation(() => ({
     mutationFn: (note: string) =>
       api.post(`/receiving/purchase-orders/${props.poId}/close-short`, {
-        reason: shortReason(),
+        shortfall: shortfall.body(pendingSplit()),
         note: '' === note.trim() ? null : note.trim(),
       }),
     onSuccess: () => {
       invalidate();
       setShortModal(false);
       setPendingReceipt(null);
-      setShortNote('');
+      shortfall.reset();
       toast.success(__('The order is closed on what arrived.'));
       navigate('/receiving');
     },
@@ -348,15 +375,32 @@ export function PoReception(props: { poId: number }): JSX.Element {
                 </Show>
               }
             >
+              <Show when={onlyUnconfirmedLeft() > 0 && hasCapability('grCloseShort')}>
+                <p
+                  class="mb-3 rounded border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900"
+                  data-testid="reception-only-unconfirmed"
+                >
+                  {sprintf(
+                    /* translators: %d is a number of units the supplier never confirmed. */
+                    _n(
+                      'Everything the supplier confirmed has arrived; %d unit was never confirmed. "Close short" finishes the order and records it as not confirmed.',
+                      'Everything the supplier confirmed has arrived; %d units were never confirmed. "Close short" finishes the order and records them as not confirmed.',
+                      onlyUnconfirmedLeft(),
+                    ),
+                    onlyUnconfirmedLeft(),
+                  )}
+                </p>
+              </Show>
               <PoReceiveForm
                 poId={props.poId}
                 lines={lines()}
-                // Deliberately equal, which is what switches the exchange-rate field off. This
-                // surface is never told the order's currency or its prices, and a rate is only
-                // meaningful applied to a figure — so a foreign-currency delivery is valued by
-                // whoever holds the invoice, on the order's own page, not at the dock.
-                currency={NO_FX}
-                baseCurrency={NO_FX}
+                // An order in another currency is received at an exchange rate, which this count
+                // asks for, offering the last one recorded for that currency. A rate is not a
+                // price: what the goods cost stays off this surface. Without it the delivery would
+                // be valued as if its prices were in the store's currency, so the server refuses.
+                currency={query.data?.purchaseOrder.currency ?? ''}
+                baseCurrency={query.data?.purchaseOrder.baseCurrency ?? ''}
+                initialFxRate={query.data?.purchaseOrder.suggestedFxRate ?? null}
                 hasPro={app.hasPro}
                 pending={receive.isPending || abandon.isPending || closeShortOnly.isPending}
                 initial={(query.data?.lines ?? [])
@@ -398,30 +442,24 @@ export function PoReception(props: { poId: number }): JSX.Element {
             <div>
               <p class="mb-3 text-sm">
                 {__(
-                  'The units still outstanding will be cancelled and the order finished. Say why, so the record shows it.',
+                  'The units still outstanding will be cancelled and the order finished. Say why, part by part, so the record shows it.',
                 )}
               </p>
-              <label class="block text-sm">
-                <span class="mb-1 block font-medium">{__('Reason')}</span>
-                <Select
-                  class="w-full"
-                  value={shortReason()}
-                  onChange={(e) => setShortReason(e.currentTarget.value)}
-                >
-                  <For each={SHORT_REASONS()}>
-                    {(reason) => <option value={reason.value}>{reason.label}</option>}
-                  </For>
-                </Select>
-              </label>
-              <label class="mt-3 block text-sm">
-                <span class="mb-1 block font-medium">{__('Note (optional)')}</span>
-                <Textarea
-                  rows="2"
-                  class="w-full"
-                  value={shortNote()}
-                  onInput={(e) => setShortNote(e.currentTarget.value)}
-                />
-              </label>
+              <Show
+                when={shortfallVocab.data}
+                fallback={<p class="text-sm text-text-muted">{__('Loading…')}</p>}
+              >
+                {(vocab) => (
+                  <ShortfallFields
+                    vocab={vocab()}
+                    split={pendingSplit()}
+                    state={shortfall}
+                    lineLabel={(id) =>
+                      (query.data?.lines ?? []).find((l) => l.subjectId === id)?.name ?? `#${id}`
+                    }
+                  />
+                )}
+              </Show>
             </div>
           }
           confirmLabel={__('Finish the order')}
@@ -429,13 +467,22 @@ export function PoReception(props: { poId: number }): JSX.Element {
           onConfirm={() => {
             const staged = pendingReceipt();
             if (null === staged) return setShortModal(false);
+            // The prompt stays open until every part says why: the record is the point.
+            if (!shortfall.attempt(pendingSplit())) return;
+            const note = shortfall.state.note.trim();
             // A count of zeroes receives nothing: the write-off is the whole of it.
-            if (0 === staged.rows.length) return closeShortOnly.mutate(shortNote() || staged.note);
-            receive.mutate({ ...staged, remainder: 'close_short', intent: 'short' });
+            if (0 === staged.rows.length) return closeShortOnly.mutate(note || staged.note);
+            receive.mutate({
+              ...staged,
+              note: note || staged.note,
+              remainder: 'close_short',
+              intent: 'short',
+            });
           }}
           onCancel={() => {
             setShortModal(false);
             setPendingReceipt(null);
+            shortfall.reset();
           }}
         />
       </Show>

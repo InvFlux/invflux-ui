@@ -69,6 +69,7 @@ import {
   type CellCoord,
 } from './grid/cellSelection';
 import { workbenchValueFor, applyRowPatch } from './grid/workbenchValueFor';
+import { workbenchFooterSum } from './grid/workbenchFooterSum';
 import { buildWorkbenchColumns, buildStockColumns } from './grid/workbenchColumns';
 import { useHostNav } from './hostNav';
 import { applyColumnOverrides, columnOverridesForSave } from './columnLabels';
@@ -218,7 +219,8 @@ export interface WorkbenchGridProps {
    *  variation's name (the common "Parent - Attribute" case) so read mode shows just the
    *  distinguishing part. Edit mode always shows the full name, and so does a variation whose parent
    *  is not in the loaded set. A DEFAULT only — the merchant switches it from the Product column's
-   *  header menu, and their choice persists per surface. */
+   *  header menu (or a host control wired to the `compactVariationNames` handles), and their choice
+   *  persists per surface. */
   compactVariationNames?: boolean;
   /**
    * Initial table/record layout. `"auto"` (default) flips to the transposed record view for a small
@@ -573,17 +575,22 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   // Variation names: full `Parent - Attribute` or just the distinguishing part. The prop is the
   // surface's DEFAULT (the product tab embeds one family, where the parent's name on every row is
   // pure noise); a merchant's own choice from the Product column's header menu overrides it and
-  // persists, the same way stored visibility beats `defaultVisibleColumnIds`.
-  const [compactVariations, setCompactVariations] = createSignal<boolean>(
+  // persists, the same way stored visibility beats `defaultVisibleColumnIds`. Only an explicit choice
+  // is stored: writing the seed back at mount would freeze today's default into every browser that
+  // ever opened the grid, so a later change of default could never reach them.
+  const [compactVariations, setCompactVariationsSignal] = createSignal<boolean>(
     // Read once, at mount, like every other seed above it: this is the initial value of a signal the
     // merchant then owns, so tracking the prop would let a re-render overwrite their choice.
     // eslint-disable-next-line solid/reactivity -- one-shot seed for a user-owned signal.
-    readJson(key('varnames_compact'), props.compactVariationNames ?? false, isBoolean),
+    readJson(key('varnames_choice'), props.compactVariationNames ?? false, isBoolean),
   );
+  const setCompactVariations = (compact: boolean): void => {
+    setCompactVariationsSignal(compact);
+    writeJson(key('varnames_choice'), compact);
+  };
   const [rowSelection, setRowSelection] = createSignal<RowSelectionState>({});
   const [cellSelection, setCellSelection] = createSignal<SelectionState>(EMPTY_SELECTION);
 
-  createEffect(() => writeJson(key('varnames_compact'), compactVariations()));
   createEffect(() => writeJson(gridStorageKey(props.storageKeyPrefix, 'cols'), columnVisibility()));
 
   // ── Fetch: infinite query over the paged products endpoint ──
@@ -2064,6 +2071,8 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
       });
     },
     toggleLayout: () => toggleLayout(),
+    compactVariationNames: () => compactVariations(),
+    setCompactVariationNames: (compact) => setCompactVariations(compact),
   };
   props.apiRef?.(handles);
 
@@ -2199,6 +2208,7 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
           columnMetas={() => stableColumns()}
           groupLabels={stableGroupLabels}
           getValue={workbenchValueFor}
+          footerSum={workbenchFooterSum}
           bespokeColumns={bespokeColumns()}
           leadingColumnIds={props.showRowSelection === false ? [] : ['select']}
           trailingColumnIds={['orders']}

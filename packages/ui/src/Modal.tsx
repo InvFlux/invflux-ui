@@ -132,8 +132,11 @@ function makeBackgroundInert(
   portalRoots: (HTMLElement | undefined)[],
 ): () => void {
   const marked: HTMLElement[] = [];
+  // The portal root is the mount element *inside* the portal host's own shadow root, so the sibling
+  // that holds it is the host — which `Node.contains` cannot see into. `containsAcrossShadow` climbs
+  // from the mount element out through the host, and also answers true for the element itself.
   const isPortalRoot = (el: HTMLElement): boolean =>
-    portalRoots.some((root) => root !== undefined && (el === root || el.contains(root)));
+    portalRoots.some((root) => root !== undefined && containsAcrossShadow(el, root));
 
   // `parentNode` + an explicit hop from a ShadowRoot to its host, NOT `parentElement`.
   //

@@ -1,12 +1,17 @@
-import { __, _n, formatDateTime, sprintf } from '@invflux/i18n';
-import { Button, ErrorBanner, Hint } from '@invflux/ui';
+import { __, _n, _x, formatDateTime, sprintf } from '@invflux/i18n';
+import { Button, ErrorBanner, Hint, Pill } from '@invflux/ui';
 import { StatusPill } from '@invflux/procurement/src/components/StatusPill';
+import { CorrectedFigure } from '@invflux/procurement/src/sections/purchase-orders/CorrectedFigure';
+import {
+  damagedCorrected,
+  receivedCorrected,
+} from '@invflux/procurement/src/sections/purchase-orders/PoReceiptsList';
 import { A, useNavigate } from '@solidjs/router';
 import { createQuery } from '@tanstack/solid-query';
 import { For, type JSX, Show } from 'solid-js';
 import { useApp } from '../../context';
 import { createApi } from '../../lib/api';
-import { purchaseOrderHref } from './procurementLink';
+import { purchaseOrderHref, sourceLabel } from './procurementLink';
 import type {
   OpenReceivingSession,
   OpenSessionsResponse,
@@ -21,21 +26,6 @@ const CARD = 'rounded border border-border bg-surface';
 const TH = 'p-2 text-nowrap pr-4 text-left text-xs font-medium uppercase text-text-muted';
 const TD = 'p-2 pr-4';
 const TD_NOWRAP = TD + ' text-nowrap';
-
-/** A document label an operator can read: its number, or its id when it has none yet. */
-const sourceLabel = (source: ReceivingSource | null): string => {
-  if (null === source) return __('No document');
-  if ('purchase_order' !== source.type) return __('Another document');
-  return '' === source.label
-    ? sprintf(
-        /* translators: %d is an internal purchase-order id. */ __('Draft order #%d'),
-        source.id,
-      )
-    : sprintf(
-        /* translators: %s is a purchase order number. */ __('Purchase order %s'),
-        source.label,
-      );
-};
 
 // `formatDateTime`, not `toLocaleString`: the latter takes the *browser's* locale, which has nothing
 // to do with the language WordPress resolved for this user — so it renders US-ordered dates beside
@@ -260,6 +250,48 @@ export function ReceivingHome(): JSX.Element {
                           </A>
                         )}
                       </Show>
+                      {/* A receipt against a document opens on its own page too — the one place
+                          any receipt is read and corrected, whatever it answers. */}
+                      <Show when={null !== receipt.source}>
+                        <span class="text-text-muted">{' · '}</span>
+                        <A
+                          href={`/receiving/receipts/${receipt.id}`}
+                          data-testid="receipt-link"
+                          class="text-primary hover:underline"
+                        >
+                          {sprintf(
+                            /* translators: %d is a goods receipt's internal id. */
+                            __('Receipt #%d'),
+                            receipt.id,
+                          )}
+                        </A>
+                      </Show>
+                      <Show when={'posted' !== receipt.state}>
+                        <Pill
+                          class="ml-2"
+                          tone={'reversed' === receipt.state ? 'neutral' : 'info'}
+                          title={
+                            'reversed' === receipt.state
+                              ? __(
+                                  'Every quantity was corrected to zero. The receipt stays on file.',
+                                )
+                              : __(
+                                  'Figures were corrected after posting. The receipt lists the corrections.',
+                                )
+                          }
+                          data-testid="receipt-state"
+                        >
+                          {'reversed' === receipt.state
+                            ? _x(
+                                'Reversed',
+                                'goods receipt status: every quantity corrected to zero',
+                              )
+                            : _x(
+                                'Corrected',
+                                'goods receipt status: figures corrected after posting',
+                              )}
+                        </Pill>
+                      </Show>
                       <Show when={null !== receipt.note && '' !== receipt.note}>
                         <span class="ml-2 text-xs text-text-muted">{receipt.note}</span>
                       </Show>
@@ -276,14 +308,26 @@ export function ReceivingHome(): JSX.Element {
                     </td>
                     <td class={`${TD} text-right tabular-nums`}>{receipt.lineCount}</td>
                     <td class={`${TD} text-right tabular-nums`}>
-                      {receipt.qty}
-                      <Show when={receipt.damagedQty > 0}>
+                      <CorrectedFigure
+                        posted={receipt.qty}
+                        current={receipt.correctedQty}
+                        format={(n) => n}
+                        title={receivedCorrected}
+                      />
+                      <Show when={receipt.damagedQty > 0 || (receipt.correctedDamagedQty ?? 0) > 0}>
                         <span class="ml-1 text-xs text-amber-600">
-                          {sprintf(
-                            /* translators: %d is a count of damaged units, recorded beside the good ones. */
-                            _n('+%d damaged', '+%d damaged', receipt.damagedQty),
-                            receipt.damagedQty,
-                          )}
+                          <CorrectedFigure
+                            posted={receipt.damagedQty}
+                            current={receipt.correctedDamagedQty}
+                            format={(n) =>
+                              sprintf(
+                                /* translators: %d is a count of damaged units, recorded beside the good ones. */
+                                _n('+%d damaged', '+%d damaged', n),
+                                n,
+                              )
+                            }
+                            title={damagedCorrected}
+                          />
                         </span>
                       </Show>
                     </td>

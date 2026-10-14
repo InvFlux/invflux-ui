@@ -1,7 +1,14 @@
 /** Shapes of `GET|POST /invflux/v1/account/roadmap*`, which proxies the licensing service. */
 
-/** `shipped` | `in_progress` | `planned` — a word, never a date. */
-export type RoadmapStatus = 'shipped' | 'in_progress' | 'planned' | (string & {});
+/**
+ * `shipped` | `in_progress` | `planned` | `considering` — a word, never a date.
+ *
+ * `considering` is not a commitment: it marks an area the service is asking about, so that a board
+ * can put a question rather than only announce. It must never read as a weaker `planned`, which IS
+ * a commitment. The open end of the union is deliberate — the service may serve a status this build
+ * has no label for, and that degrades to the raw word rather than to a crash.
+ */
+export type RoadmapStatus = 'shipped' | 'in_progress' | 'planned' | 'considering' | (string & {});
 
 /**
  * One node of the board: a bundle heading or a feature under one.

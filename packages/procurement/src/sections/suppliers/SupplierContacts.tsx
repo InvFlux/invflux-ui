@@ -1,14 +1,21 @@
 import { __ } from '@invflux/i18n';
-import { Button, IconButton, toast } from '@invflux/ui';
+import {
+  Button,
+  FieldError,
+  focusFirstInvalid,
+  IconButton,
+  inputClass,
+  textareaClass,
+  toast,
+} from '@invflux/ui';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
-import { createSignal, For, type JSX, Show } from 'solid-js';
+import { createSignal, For, type JSX, Show, untrack } from 'solid-js';
 import { StatusPill } from '../../components/StatusPill';
 import { useProcurement } from '../../context';
 import { createApi } from '../../lib/api';
 import type { SupplierContact, SupplierContactsResponse } from './types';
 
-const INPUT =
-  'mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40';
+const INPUT = inputClass('sm', false, 'mt-1 w-full');
 const FIELD = 'block text-sm text-slate-700';
 
 /**
@@ -171,32 +178,57 @@ function ContactForm(props: {
     onError: (e: unknown) => toast.error(e instanceof Error ? e.message : String(e)),
   }));
 
+  // A missing name is marked from the first save attempt on, never before: a new contact opens empty.
+  const [tried, setTried] = createSignal(false);
+  const nameError = (): string | null =>
+    tried() && '' === name().trim() ? __('Enter the contact’s name.') : null;
+  let formEl: HTMLFormElement | undefined;
+
   const submit = (e: Event): void => {
     e.preventDefault();
-    if ('' === name().trim()) return;
-    mutation.mutate({
-      name: name().trim(),
-      role: role().trim() || null,
-      email: email().trim() || null,
-      phone: phone().trim() || null,
-      notes: notes().trim() || null,
-      po_recipient: poRecipient(),
-      status: status(),
-    });
+    setTried(true);
+    if ('' === name().trim()) {
+      focusFirstInvalid(formEl);
+      return;
+    }
+    mutation.mutate(body());
   };
 
+  /** What a save sends, from the fields as they stand. */
+  const body = (): Record<string, unknown> => ({
+    name: name().trim(),
+    role: role().trim() || null,
+    email: email().trim() || null,
+    phone: phone().trim() || null,
+    notes: notes().trim() || null,
+    po_recipient: poRecipient(),
+    status: status(),
+  });
+  // Editing a contact, Save waits for a change; adding one, it is always there to press.
+  const saved = untrack(() => JSON.stringify(body()));
+  const nothingToSave = (): boolean => undefined !== existing && JSON.stringify(body()) === saved;
+
   return (
-    <form class="rounded border border-slate-200 bg-slate-50/60 p-3" onSubmit={submit}>
+    // noValidate: the fields say what is wrong themselves, not the browser's bubble.
+    <form
+      ref={formEl}
+      class="rounded border border-slate-200 bg-slate-50/60 p-3"
+      onSubmit={submit}
+      noValidate
+    >
       <div class="grid grid-cols-2 gap-3">
         <label class={FIELD}>
           {__('Name')} <span class="text-red-600">*</span>
           <input
-            class={INPUT}
+            class={inputClass('sm', null !== nameError(), 'mt-1 w-full')}
             value={name()}
             onInput={(e) => setName(e.currentTarget.value)}
-            required
+            aria-required="true"
+            aria-invalid={null !== nameError()}
             autofocus
+            data-testid="contact-name"
           />
+          <FieldError message={nameError()} testId="contact-name-error" />
         </label>
         <label class={FIELD}>
           {__('Role')}
@@ -224,7 +256,7 @@ function ContactForm(props: {
       <label class={`${FIELD} mt-3`}>
         {__('Notes')}
         <textarea
-          class={INPUT}
+          class={textareaClass('sm', false, 'mt-1 w-full')}
           rows="2"
           value={notes()}
           onInput={(e) => setNotes(e.currentTarget.value)}
@@ -253,7 +285,7 @@ function ContactForm(props: {
       </div>
 
       <div class="mt-3 flex gap-2">
-        <Button type="submit" disabled={mutation.isPending || '' === name().trim()}>
+        <Button type="submit" disabled={mutation.isPending || nothingToSave()}>
           {mutation.isPending ? __('Saving…') : __('Save')}
         </Button>
         <Button variant="ghost" onClick={props.onDone}>

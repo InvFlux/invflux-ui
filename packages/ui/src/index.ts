@@ -14,6 +14,7 @@ import './datatypes/drilldowns';
 import './filters-builtins';
 import './settings/controls';
 import './settings/presetNumberControl';
+import './settings/orderedTogglesControl';
 
 export type { StageCode, StockConcerns, DispatchUser, OrderViewer } from './types';
 export { StockConcernBits } from './types';
@@ -176,6 +177,7 @@ export { Checkbox } from './Checkbox';
 export type { CheckboxProps } from './Checkbox';
 export { ErrorBanner } from './ErrorBanner';
 export type { ErrorBannerProps } from './ErrorBanner';
+export { FieldError, focusFirstInvalid } from './FieldError';
 export { Pill } from './Pill';
 export type { PillProps, PillTone, PillVariant, PillSize, PillShape } from './Pill';
 export { Spinner } from './Spinner';
@@ -303,8 +305,15 @@ export {
   settingControlRegistry,
   resolveSettingControl,
   SETTING_CONTROL_FALLBACK,
+  registerSettingSummary,
+  summarizeSettingValue,
 } from './settings/registry';
-export type { SettingControl, SettingControlProps, SettingMeta } from './settings/registry';
+export type {
+  SettingControl,
+  SettingControlProps,
+  SettingMeta,
+  SettingSummary,
+} from './settings/registry';
 
 // UI slots (§3.4) + the shared plug-in API installer (§3.3) — the extension seams every SPA
 // (workbench, dispatch, procurement) builds over.
@@ -481,3 +490,5 @@ export type {
 export { workbenchValueFor, applyRowPatch } from './grid/workbenchValueFor';
 export { buildWorkbenchColumns, buildStockColumns, stockSlotOf } from './grid/workbenchColumns';
 export type { WorkbenchColumnDeps, StockColumnDeps, StockSlot } from './grid/workbenchColumns';
+export { decimalOrNull, parseDecimal } from './parseDecimal';
+export type { ParseDecimalOptions, ParsedDecimal } from './parseDecimal';

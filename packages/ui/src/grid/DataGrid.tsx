@@ -314,6 +314,12 @@ export interface DataGridProps<TRow> {
   groupLabels?: () => Record<string, string>;
   /** THE value seam (replaces the direct valueFor import): column id → cell value. */
   getValue: (row: TRow, columnId: string) => unknown;
+  /**
+   * The footer total of a summed column over the displayed rows. Omit for a plain sum of every row.
+   * A host whose rows nest (a parent row that already rolls up its children) supplies it so each
+   * unit is counted once; `numberOf` is the grid's own reading of a cell as a number (NaN when blank).
+   */
+  footerSum?: (rows: readonly TRow[], columnId: string, numberOf: (row: TRow) => number) => number;
 
   // ── Bespoke (host-rendered) columns ─────────────────────────────────────────
   /** Host-owned ColumnDefs by id — the checkbox, name+fold, image, stock cells, ledger/orders.
@@ -1029,24 +1035,44 @@ export function ColumnManagerModal<TRow>(props: {
         <div class="flex-1 overflow-auto p-3">
           {/* ── Select: quick filter + foldable per-source sections ── */}
           <Show when={tab() === 'select'}>
-            <input
-              type="text"
-              value={query()}
-              ref={(el) => {
-                filterInputRef = el;
-                queueMicrotask(() => {
-                  el.focus();
-                  // Selected, not just focused: a preloaded filter has to be dismissable with one
-                  // Backspace. Harmless when the field is empty.
-                  el.select();
-                });
-              }}
-              placeholder={__('Filter columns…')}
-              aria-label={__('Filter columns')}
-              data-testid="column-manager-filter"
-              class="mb-2 w-full rounded border border-border bg-surface px-2 py-1 text-sm"
-              onInput={(e) => setQuery(e.currentTarget.value)}
-            />
+            <div class="relative mb-2">
+              <input
+                type="text"
+                value={query()}
+                ref={(el) => {
+                  filterInputRef = el;
+                  queueMicrotask(() => {
+                    el.focus();
+                    // Selected, not just focused: a preloaded filter has to be dismissable with one
+                    // Backspace. Harmless when the field is empty.
+                    el.select();
+                  });
+                }}
+                placeholder={__('Filter columns…')}
+                aria-label={__('Filter columns')}
+                data-testid="column-manager-filter"
+                // Right padding leaves room for the clear button so typed text never runs under it.
+                class="w-full rounded border border-border bg-surface py-1 pl-2 pr-7 text-sm"
+                onInput={(e) => setQuery(e.currentTarget.value)}
+              />
+              {/* Only while there is something to clear. It hands focus back to the input, so
+                  clearing and typing the next filter is one continuous motion. */}
+              <Show when={query() !== ''}>
+                <button
+                  type="button"
+                  class="absolute right-1 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 cursor-pointer items-center justify-center rounded text-lg leading-none text-slate-500 hover:text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                  aria-label={_x('Clear filter', 'column manager: empties the filter box')}
+                  title={_x('Clear filter', 'column manager: empties the filter box')}
+                  data-testid="column-manager-filter-clear"
+                  onClick={() => {
+                    setQuery('');
+                    filterInputRef?.focus();
+                  }}
+                >
+                  ×
+                </button>
+              </Show>
+            </div>
             <For
               each={filteredSections()}
               fallback={
@@ -2041,10 +2067,15 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
         .find((c) => c.id !== 'select' && columnMetaById().get(c.id)?.aggregate !== 'sum')?.id,
   );
   const columnSum = (columnId: string): number => {
+    const numberOf = (row: TRow): number => {
+      const v = props.getValue(row, columnId);
+      return typeof v === 'number' ? v : typeof v === 'string' && v !== '' ? Number(v) : NaN;
+    };
+    const displayed = visibleRows().map((row) => row.original);
+    if (props.footerSum) return props.footerSum(displayed, columnId, numberOf);
     let sum = 0;
-    for (const row of visibleRows()) {
-      const v = props.getValue(row.original, columnId);
-      const n = typeof v === 'number' ? v : typeof v === 'string' && v !== '' ? Number(v) : NaN;
+    for (const row of displayed) {
+      const n = numberOf(row);
       if (Number.isFinite(n)) sum += n;
     }
     return sum;

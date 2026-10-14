@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { queueSortRegistry, sortQueue } from './queueSort';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { publishQueueRank, queueSortRegistry, sortQueue } from './queueSort';
 import type { DispatchOrderSummary, TagSummary } from './types';
 
 const order = (over: Partial<DispatchOrderSummary> & { id: string }): DispatchOrderSummary =>
@@ -177,5 +177,75 @@ describe('the contribution seam', () => {
     queueSortRegistry.register({ name: 'tag_priority', order: 10, compare: () => 0 });
 
     expect(sortQueue([plainReady, urgentNotReady]).map((o) => o.id)).toEqual(['b', 'a']);
+  });
+});
+
+describe("the shop's queue order", () => {
+  afterEach(() => publishQueueRank(() => null));
+
+  // The owner's case: a staged order due tomorrow above an unstaged one due today is the built-in
+  // order; a shop that puts the ship date first reverses it.
+  const now = Date.parse('2026-03-10T08:00:00.000Z');
+  const stagedTomorrow = order({
+    id: 'a',
+    lineCount: 1,
+    stagedCount: 1,
+    estDispatch: '2026-03-11T00:00:00.000Z',
+  });
+  const unstagedToday = order({
+    id: 'b',
+    lineCount: 1,
+    stagedCount: 0,
+    estDispatch: '2026-03-10T00:00:00.000Z',
+  });
+
+  it('keeps the built-in order while the server sends none', () => {
+    publishQueueRank(() => undefined);
+
+    expect(sortQueue([unstagedToday, stagedTomorrow], now).map((o) => o.id)).toEqual(['a', 'b']);
+  });
+
+  it("follows the server's list, first rule first", () => {
+    publishQueueRank(() => ['edt', 'readiness', 'shippable']);
+
+    expect(sortQueue([stagedTomorrow, unstagedToday], now).map((o) => o.id)).toEqual(['b', 'a']);
+  });
+
+  it('does not rank by a rule the list leaves out', () => {
+    // Readiness switched off, and both orders due the same day: nothing left decides between them
+    // but the id, so the ready one no longer floats.
+    publishQueueRank(() => ['shippable', 'edt']);
+    const readyLater = order({
+      id: 'z',
+      lineCount: 1,
+      stagedCount: 1,
+      estDispatch: '2026-03-10T00:00:00.000Z',
+    });
+    const notReady = order({
+      id: 'c',
+      lineCount: 1,
+      stagedCount: 0,
+      estDispatch: '2026-03-10T00:00:00.000Z',
+    });
+
+    expect(sortQueue([readyLater, notReady], now).map((o) => o.id)).toEqual(['c', 'z']);
+  });
+
+  it('skips a name no client rule implements, and says so once in development', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    publishQueueRank(() => ['margin_from_an_addon', 'edt', 'readiness']);
+
+    expect(sortQueue([stagedTomorrow, unstagedToday], now).map((o) => o.id)).toEqual(['b', 'a']);
+    sortQueue([stagedTomorrow, unstagedToday], now);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('still closes with the fixed ends when every rule is off', () => {
+    publishQueueRank(() => []);
+    const closed = order({ id: 'a', closedAt: '2026-03-01T00:00:00.000Z' });
+    const open = order({ id: 'b' });
+
+    expect(sortQueue([closed, open], now).map((o) => o.id)).toEqual(['b', 'a']);
   });
 });

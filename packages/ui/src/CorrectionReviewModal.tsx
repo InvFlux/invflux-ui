@@ -787,9 +787,7 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
                       {/* Boundary warnings (negative cascade reaching cart-reserved / paid-committed). */}
                       <Show when={warnRes()}>
                         <div class="m-3 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                          {__(
-                            "This removes stock that's currently in customers' carts / checkout.",
-                          )}
+                          {__('This removes stock that customers are paying for right now.')}
                         </div>
                       </Show>
                       <Show when={warnCtd()}>

@@ -25,6 +25,9 @@ export interface IssueDraftModalProps {
   costDecimals: number;
   currency: string;
   supplierLabel: string;
+  /** The supplier's minimum order value in this order's currency, or null when there is none to
+   *  compare with. Below it the modal warns; it never blocks — suppliers waive minimums. */
+  minOrderValue: number | null;
   /** Stage qty fixes (parallel PATCH + invalidate). The modal stays open and recomputes from the reload. */
   onFixQtys: (patches: Array<{ subjectId: number; qty: number }>) => void;
   /** A fix round-trip is in flight — disables the Fix buttons + the confirm while it settles. */
@@ -174,6 +177,26 @@ export function IssueDraftModal(props: IssueDraftModalProps): JSX.Element {
             </span>
           </div>
 
+          {/* The supplier's minimum order value, against what will actually go on the order. A
+              warning beside the total it is about, never a gate. */}
+          <Show when={null !== props.minOrderValue && totalValue() < (props.minOrderValue ?? 0)}>
+            <p
+              class="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-amber-800"
+              data-testid="issue-below-minimum"
+            >
+              ⚠️{' '}
+              {sprintf(
+                /* translators: 1: the amount still to order; 2: the supplier's minimum order value; 3: the supplier's name. The order's total is stated just above. */
+                __(
+                  '%1$s short of the %2$s minimum order value %3$s states. Suppliers often waive it, so you can still go ahead.',
+                ),
+                money((props.minOrderValue ?? 0) - totalValue()),
+                money(props.minOrderValue ?? 0),
+                props.supplierLabel,
+              )}
+            </p>
+          </Show>
+
           {/* MOQ / case-pack quantity warnings (kept lines) + one-click fix to the next valid value. */}
           <Show when={invalidQtyLines().length > 0}>
             <div class="space-y-1.5 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-amber-800">
@@ -289,6 +312,15 @@ export function IssueDraftModal(props: IssueDraftModalProps): JSX.Element {
                 </div>
               </Show>
             </div>
+          </Show>
+          {/* Confirm waits for a line to number, and says so in words beside it: the fix is on the
+              order's lines, not in this dialog, so there is no field here to mark. */}
+          <Show when={0 === kept().length}>
+            <p class="text-sm font-medium text-red-700" data-testid="issue-nothing-to-number">
+              {__(
+                'No line has a quantity to order, so there is nothing to number. Enter quantities on the order first.',
+              )}
+            </p>
           </Show>
         </div>
 

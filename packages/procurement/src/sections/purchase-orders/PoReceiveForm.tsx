@@ -36,6 +36,8 @@ export function PoReceiveForm(props: {
   /** PO transaction currency + the store base — an FX-rate field shows only when they differ. */
   currency: string;
   baseCurrency: string;
+  /** A rate to start the FX field from (the last one recorded for this currency), to confirm. */
+  initialFxRate?: string | null;
   pending: boolean;
   /** Persisted WIP to rehydrate from (survives a page reload). */
   initial?: ReceiveRow[];
@@ -81,7 +83,10 @@ export function PoReceiveForm(props: {
   // assumption (a reference-rate pre-fill can populate it later) — and REQUIRED before a foreign receipt
   // commits. The committed rate converts line costs to base at the WAC boundary.
   const needsFx = (): boolean => props.currency.toUpperCase() !== props.baseCurrency.toUpperCase();
-  const [fxRate, setFxRate] = createSignal('');
+  // Offered, not imposed: the last rate recorded for this currency, shown as such until changed.
+  const offeredRate = (): string =>
+    null === (props.initialFxRate ?? null) ? '' : String(Number(props.initialFxRate));
+  const [fxRate, setFxRate] = createSignal(offeredRate());
   const [fxError, setFxError] = createSignal(false);
   let fxEl: HTMLInputElement | undefined;
   // Resolve the rate to commit, or block the commit: null when no rate is needed (identity currency), the
@@ -316,6 +321,15 @@ export function PoReceiveForm(props: {
             <Show when={fxError()}>
               <p class="text-right text-xs text-red-600">
                 {__('Enter the FX rate for this delivery before confirming.')}
+              </p>
+            </Show>
+            <Show when={!fxError() && '' !== offeredRate() && fxRate() === offeredRate()}>
+              <p class="text-right text-xs text-text-muted" data-testid="gr-fx-offered">
+                {sprintf(
+                  /* translators: %s is a currency code, e.g. "USD". */
+                  __('The last rate recorded for %s. Check it against today’s before confirming.'),
+                  props.currency,
+                )}
               </p>
             </Show>
           </div>

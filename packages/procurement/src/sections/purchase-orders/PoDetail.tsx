@@ -18,9 +18,7 @@ import {
   FoldingSection,
   type PickableColumn,
   SegmentedControl,
-  Select,
   SplitActionButton,
-  Textarea,
   toast,
   useHostNav,
   PencilIcon,
@@ -54,14 +52,24 @@ import { useTermsSets } from '../terms/useTermsSets';
 import { refusalBody, refusalMessage } from '../terms/errors';
 import { TermsModal, type TermsModalTarget } from '../terms/TermsModal';
 import type { NumberingBreak, TermsPlace } from '../terms/types';
+import { PoWorkbenchLink } from './PoWorkbenchLink';
+import { PoReceiptsList } from './PoReceiptsList';
 import { PoLinesEditor } from './PoLinesEditor';
 import { availablePoLineColumns, type PoLineColumnId } from './poLineColumns';
-import { SHORT_REASONS } from './shortReasons';
+import { ShortfallFields } from './ShortfallFields';
+import {
+  createShortfallState,
+  type RecordedShortfall,
+  type ShortfallSplit,
+  type ShortfallVocabulary,
+} from './shortfall';
 import { pruneReason, submittableLines } from './submissionRules';
 import { IssueDraftModal } from './IssueDraftModal';
 import type { SupplierProductsResponse } from '../suppliers/types';
 import type {
   PoEventsResponse,
+  PoReceipt,
+  PoReceiptsResponse,
   PoLine,
   PoLinesResponse,
   PoTimelineEvent,
@@ -143,6 +151,9 @@ registerPoDetailActions();
  */
 const READ_FOOTER_GUTTER = '3.25rem';
 
+/** The same with `extra` more section header rows above Activity's (Receipts, Shortfall): 2.75rem each. */
+const readFooterGutter = (extra: number): string => `${3.25 + 2.75 * extra}rem`;
+
 /**
  * Purchase-order detail (#/purchase-orders/:id) — the lifecycle view. This first slice is the
  * read surface (header + qty-progression lines) for any status; a Draft (in_prep) shows the
@@ -179,10 +190,10 @@ export function PoDetail(props: { id: string }): JSX.Element {
   // once it lands: ending an order that took goods in is a close-short, with its own reason.
   let closeShortAfterRefusal = false;
   const [archiving, setArchiving] = createSignal(false);
-  // Finishing a partially-received order on what has arrived — the reason prompt's state.
+  // Finishing an order on what has arrived — or, on a received order, writing off what a corrected
+  // receipt left open: the shortfall prompt's state, one cause per part of what is closed out.
   const [closingShort, setClosingShort] = createSignal(false);
-  const [shortReason, setShortReason] = createSignal('supplier_oos');
-  const [shortNote, setShortNote] = createSignal('');
+  const shortfall = createShortfallState();
   // A real nonce'd link (not window.open) → never popup-blocked. Opens an auto-printing HTML page
   // in a new tab for browser "Save as PDF". rest_route apiRoot already has `?`, so append with `&`.
   const printHref = (): string => {
@@ -211,18 +222,31 @@ export function PoDetail(props: { id: string }): JSX.Element {
     refetchInterval: () => (paneActive() && countingNow() ? POLL_MS : false),
   }));
 
-  // The rest is not coming: write off what is still outstanding and finish the order. The same
+  // The rest is not coming: close out what is still outstanding and finish the order. The same
   // write-off a count can end with, taken here without one — an earlier delivery already settled the
   // order, and this records only the decision that no further one is expected.
+  // The prompt's vocabulary, each open line's split, and the shortfall already recorded. Asked for
+  // once the order can have one: before goods were taken in there is nothing to close out.
+  const shortfallQuery = createQuery(() => ({
+    queryKey: ['procurement', 'purchase-orders', props.id, 'shortfall'],
+    queryFn: () => api.get<ShortfallVocabulary>(`/receiving/purchase-orders/${props.id}/shortfall`),
+    enabled:
+      closingShort() ||
+      ['partially_received', 'received'].includes(query.data?.purchaseOrder.stage ?? ''),
+  }));
+  const openSplit = (): ShortfallSplit =>
+    Object.fromEntries((shortfallQuery.data?.open ?? []).map((l) => [l.subjectId, l.parts]));
+  const recordedShortfall = (): RecordedShortfall[] => shortfallQuery.data?.recorded ?? [];
+
   const closeShort = createMutation(() => ({
     mutationFn: () =>
       api.post(`/receiving/purchase-orders/${props.id}/close-short`, {
-        reason: shortReason(),
-        note: '' === shortNote().trim() ? null : shortNote().trim(),
+        shortfall: shortfall.body(openSplit()),
+        note: '' === shortfall.state.note.trim() ? null : shortfall.state.note.trim(),
       }),
     onSuccess: () => {
       setClosingShort(false);
-      setShortNote('');
+      shortfall.reset();
       void queryClient.invalidateQueries({ queryKey: ['procurement', 'purchase-orders'] });
       toast.success(__('The order is closed on what arrived.'));
     },
@@ -243,6 +267,15 @@ export function PoDetail(props: { id: string }): JSX.Element {
     enabled: activityWanted(),
   }));
   const events = (): PoTimelineEvent[] => eventsQuery.data?.events ?? [];
+
+  // The receipts posted against this order, each opening on its own page in Receiving. Not asked for
+  // before the order can have one: a draft or an unsent order has received nothing.
+  const receiptsQuery = createQuery(() => ({
+    queryKey: ['procurement', 'purchase-orders', props.id, 'receipts'],
+    queryFn: () => api.get<PoReceiptsResponse>(`/receiving/purchase-orders/${props.id}/receipts`),
+    enabled: !['in_prep', 'submitted'].includes(query.data?.purchaseOrder.stage ?? 'in_prep'),
+  }));
+  const receipts = (): PoReceipt[] => receiptsQuery.data?.receipts ?? [];
   /**
    * The number on the fold's header: the server's count until the events themselves arrive, then
    * their own length. Both count timeline rows, so the label does not jump when the section opens —
@@ -434,6 +467,18 @@ export function PoDetail(props: { id: string }): JSX.Element {
     },
   }));
 
+  // A received order with units open again, whose supplier is still sending them: back to receiving.
+  // The server picks where it lands (partially received, or in transit when nothing stays received).
+  const reopen = createMutation(() => ({
+    mutationFn: () => api.post(`/procurement/purchase-orders/${props.id}/reopen`, {}),
+    onSuccess: () => {
+      invalidate();
+      toast.success(__('Reopened for receiving. Count the rest when it arrives.'));
+    },
+    onError: (e: unknown) =>
+      toast.error(e instanceof Error ? e.message : __('Could not reopen the purchase order.')),
+  }));
+
   /**
    * File the order out of the working lists, or put it back.
    *
@@ -476,12 +521,67 @@ export function PoDetail(props: { id: string }): JSX.Element {
   const fmt = (v: string | null): string => (null === v ? '—' : Number(v).toFixed(decimals()));
   // The Activity section's own box — scrolled into view when it opens.
   let activityEl: HTMLDivElement | undefined;
+  // The Receipts section's own box — scrolled into view when it opens, as Activity's is.
+  let receiptsEl: HTMLDivElement | undefined;
 
   const grandTotal = createMemo(() =>
     lines().reduce((sum, l) => sum + (null === l.lineTotal ? 0 : Number(l.lineTotal)), 0),
   );
   // Received / Open only make sense once the PO is past draft; a draft shows Qty + cost only.
   const isDraft = (): boolean => 'in_prep' === po()?.stage;
+
+  // The supplier's order thresholds against this draft's total — information and a soft warning,
+  // never a gate: suppliers waive minimums, and an urgent order is worth sending below one.
+  const thresholds = () => po()?.orderThresholds ?? null;
+  const minimumShort = (): number | null => {
+    const min = thresholds()?.minOrderValue;
+    return null === min || undefined === min || grandTotal() >= Number(min)
+      ? null
+      : Number(min) - grandTotal();
+  };
+  // The quiet line beside the total while the order is being prepared: how far it is from the
+  // supplier's minimum and from free freight, in the order's currency. Null when neither is set.
+  const thresholdLine = (): string | null => {
+    const t = thresholds();
+    if (null === t || !isDraft()) return null;
+    const currency = po()?.currency;
+    const money = (v: number): string => formatMoney(v, currency);
+    const parts: string[] = [];
+    if (null !== t.minOrderValue) {
+      parts.push(
+        null === minimumShort()
+          ? __('Order minimum reached')
+          : sprintf(
+              /* translators: 1: the order's total so far; 2: the supplier's minimum order value. */
+              __('%1$s of %2$s order minimum'),
+              money(grandTotal()),
+              money(Number(t.minOrderValue)),
+            ),
+      );
+    }
+    if (null !== t.freeFreightFrom) {
+      const toGo = Number(t.freeFreightFrom) - grandTotal();
+      parts.push(
+        toGo <= 0
+          ? __('Free freight reached')
+          : sprintf(
+              /* translators: %s is the amount still to order before the supplier ships for free. */
+              __('%s to free freight'),
+              money(toGo),
+            ),
+      );
+    }
+    return 0 === parts.length ? null : parts.join(' · ');
+  };
+  const minimumWarning = (): string =>
+    sprintf(
+      /* translators: 1: the amount still to order; 2: the supplier's minimum order value. */
+      __('%1$s short of the %2$s minimum order value'),
+      formatMoney(minimumShort() ?? 0, po()?.currency),
+      formatMoney(Number(thresholds()?.minOrderValue ?? 0), po()?.currency),
+    );
+  // "Mark as sent" below the minimum asks first; numbering warns inside its own review instead.
+  const [minimumGate, setMinimumGate] = createSignal(false);
 
   // Supplier catalog — only needed by the submit modal (MOQ / case-pack checks + [Fix all quantities]);
   // fetched once the PO is a draft. Same queryKey as PoLinesEditor's, so TanStack de-dupes the request.
@@ -794,6 +894,10 @@ export function PoDetail(props: { id: string }): JSX.Element {
   // receipts committed — the form counts the new delivery against the remaining qty_open.)
   const isReceiving = (): boolean => 'in_reception' === po()?.stage;
   const isPartiallyReceived = (): boolean => 'partially_received' === po()?.stage;
+  // A received order with units still open: what a receipt corrected down left behind. It can be
+  // closed out in place; the order stays received.
+  const remainderOpen = (): boolean =>
+    'received' === po()?.stage && lines().some((l) => l.qtyOpen > 0);
   // A count is open against this order — the buyer joins it rather than starting a second one, which
   // the database refuses anyway (one session per document).
   const receivingOpen = (): boolean => po()?.receivingOpen ?? false;
@@ -854,7 +958,10 @@ export function PoDetail(props: { id: string }): JSX.Element {
     workbenchHref: workbenchHref(),
     transitionTo: (slug) => transition.mutate(slug),
     openIssue: () => setConfirming(true),
-    markSent: () => markSent.mutate({ confirm: false, adopt: false }),
+    markSent: () =>
+      null === minimumShort()
+        ? markSent.mutate({ confirm: false, adopt: false })
+        : setMinimumGate(true),
     exportXlsx: () => exportXlsx.mutate(),
     copyToDraft: () => copyToDraft.mutate(),
     print: () => window.open(printHref(), '_blank', 'noopener'),
@@ -1548,6 +1655,70 @@ export function PoDetail(props: { id: string }): JSX.Element {
                 the person who counts a pallet is routinely not the person who ordered it and does
                 not have this page at all. What they need is the link; what a buyer needs is to see
                 where it went. */}
+            {/* Received, with units open again: a receipt corrected down after the order completed.
+                The buyer says which: the rest is still coming (reopen for receiving), or it is not
+                (close it out, with why; the order stays received). Never decided for them. */}
+            <Show when={remainderOpen()}>
+              <div
+                class="mb-3 flex flex-wrap items-center gap-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm"
+                data-testid="po-remainder-open"
+              >
+                <span class="text-amber-900">
+                  {sprintf(
+                    /* translators: %d is a number of units still open on a received order. */
+                    _n(
+                      'Received, with %d unit still open after a receipt was corrected. Reopen the order if the supplier is still sending it; close it out if not.',
+                      'Received, with %d units still open after a receipt was corrected. Reopen the order if the supplier is still sending them; close them out if not.',
+                      outstandingUnits(),
+                    ),
+                    outstandingUnits(),
+                  )}
+                </span>
+                <div class="flex-1" />
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  data-testid="po-reopen"
+                  disabled={!ctx.capabilities.managePurchaseOrders || reopen.isPending}
+                  title={__('The rest is still coming: receive it against this order')}
+                  onClick={() => reopen.mutate()}
+                >
+                  {__('Reopen for receiving')}
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  data-testid="po-close-remaining-short"
+                  disabled={!ctx.capabilities.closeShort || closeShort.isPending}
+                  title={
+                    ctx.capabilities.closeShort
+                      ? __('Close out what is still open, saying why; the order stays received')
+                      : __(
+                          'Finishing an order on less than was ordered needs permission you do not have.',
+                        )
+                  }
+                  onClick={() => setClosingShort(true)}
+                >
+                  {__('Close remaining short')}
+                </Button>
+                {/* A button disabled for want of permission says so in words, not only on hover. */}
+                <Show when={!ctx.capabilities.managePurchaseOrders}>
+                  <span class="basis-full text-xs text-amber-800">
+                    {__(
+                      'Reopening an order needs permission to manage purchase orders, which you do not have.',
+                    )}
+                  </span>
+                </Show>
+                <Show when={!ctx.capabilities.closeShort}>
+                  <span class="basis-full text-xs text-amber-800">
+                    {__(
+                      'Finishing an order on less than was ordered needs permission you do not have.',
+                    )}
+                  </span>
+                </Show>
+              </div>
+            </Show>
+
             <Show when={isReceiving() || isPartiallyReceived()}>
               <div class="mb-3 flex flex-wrap items-center gap-3 rounded border border-teal-200 bg-teal-50 px-3 py-2 text-sm">
                 <span class="text-teal-800">
@@ -1584,6 +1755,7 @@ export function PoDetail(props: { id: string }): JSX.Element {
                   <Button
                     variant="secondary"
                     size="sm"
+                    data-testid="po-close-short"
                     disabled={!ctx.capabilities.closeShort || closeShort.isPending}
                     title={
                       ctx.capabilities.closeShort
@@ -1608,41 +1780,57 @@ export function PoDetail(props: { id: string }): JSX.Element {
 
             <Show when={closingShort()}>
               <ConfirmModal
-                title={__('Finish on what arrived?')}
+                title={
+                  remainderOpen()
+                    ? __('Close out what is still open?')
+                    : __('Finish on what arrived?')
+                }
                 message={
                   <div>
                     <p class="mb-3 text-sm">
-                      {__(
-                        'The units still outstanding will be cancelled and the order finished. Say why, so the record shows it.',
-                      )}
+                      {remainderOpen()
+                        ? __(
+                            'The order stays received; the units still open on it are closed out. Say why, part by part, so the record shows it.',
+                          )
+                        : __(
+                            'The units still outstanding will be cancelled and the order finished. Say why, part by part, so the record shows it.',
+                          )}
                     </p>
-                    <label class="block text-sm">
-                      <span class="mb-1 block font-medium">{__('Reason')}</span>
-                      <Select
-                        class="w-full"
-                        value={shortReason()}
-                        onChange={(e) => setShortReason(e.currentTarget.value)}
-                      >
-                        <For each={SHORT_REASONS()}>
-                          {(reason) => <option value={reason.value}>{reason.label}</option>}
-                        </For>
-                      </Select>
-                    </label>
-                    <label class="mt-3 block text-sm">
-                      <span class="mb-1 block font-medium">{__('Note (optional)')}</span>
-                      <Textarea
-                        rows="2"
-                        class="w-full"
-                        value={shortNote()}
-                        onInput={(e) => setShortNote(e.currentTarget.value)}
-                      />
-                    </label>
+                    <Show
+                      when={shortfallQuery.data}
+                      fallback={<p class="text-sm text-text-muted">{__('Loading…')}</p>}
+                    >
+                      {(vocab) => (
+                        <ShortfallFields
+                          vocab={vocab()}
+                          split={openSplit()}
+                          state={shortfall}
+                          lineLabel={(id) =>
+                            lines().find((l) => l.subjectId === id)?.productLabel ?? `#${id}`
+                          }
+                        />
+                      )}
+                    </Show>
                   </div>
                 }
-                confirmLabel={__('Finish the order')}
+                confirmLabel={
+                  remainderOpen()
+                    ? _x(
+                        'Close out',
+                        "close a received order's open units short — they never arrived, nothing is lost",
+                      )
+                    : __('Finish the order')
+                }
                 variant="warning"
-                onConfirm={() => closeShort.mutate()}
-                onCancel={() => setClosingShort(false)}
+                onConfirm={() => {
+                  // The prompt stays open until every part says why: the record is the point.
+                  if (!shortfall.attempt(openSplit())) return;
+                  closeShort.mutate();
+                }}
+                onCancel={() => {
+                  setClosingShort(false);
+                  shortfall.reset();
+                }}
               />
             </Show>
 
@@ -1718,6 +1906,7 @@ export function PoDetail(props: { id: string }): JSX.Element {
                             />
                           </div>
                         </Show>
+                        <PoWorkbenchLink subjectIds={lines().map((l) => l.subjectId)} />
                         <Button
                           variant="secondary"
                           class="h-8 shrink-0 px-2!"
@@ -1741,7 +1930,14 @@ export function PoDetail(props: { id: string }): JSX.Element {
                         columns={readColumns()}
                         rows={lines()}
                         empty={__('No lines on this purchase order.')}
-                        fillGutter={READ_FOOTER_GUTTER}
+                        fillGutter={
+                          receipts().length > 0 || recordedShortfall().length > 0
+                            ? readFooterGutter(
+                                (receipts().length > 0 ? 1 : 0) +
+                                  (recordedShortfall().length > 0 ? 1 : 0),
+                              )
+                            : READ_FOOTER_GUTTER
+                        }
                       />
                       {/* No totals row: the order total is on the Activity header, which is on
                           screen whether or not this table is scrolled to its end. A figure at
@@ -1796,6 +1992,107 @@ export function PoDetail(props: { id: string }): JSX.Element {
 
                 Opening it gives up the viewport fit, which is correct: someone reading history
                 wants the page to grow, not a second scroll region inside a fixed one. */}
+            {/* Shut on arrival like Activity below it, so the lines keep the viewport; its header
+                already says how many deliveries there were. Opening it scrolls it into view. */}
+            <Show when={receipts().length > 0}>
+              <div ref={(el) => (receiptsEl = el)}>
+                <FoldingSection
+                  title={__('Receipts')}
+                  onOpenChange={(open) => {
+                    if (!open) return;
+                    requestAnimationFrame(() =>
+                      receiptsEl?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+                    );
+                  }}
+                  aside={sprintf(
+                    /* translators: %d is a number of goods receipts posted against this order. */ _n(
+                      '%d receipt',
+                      '%d receipts',
+                      receipts().length,
+                    ),
+                    receipts().length,
+                  )}
+                  testId="po-receipts-section"
+                >
+                  <PoReceiptsList receipts={receipts()} />
+                </FoldingSection>
+              </div>
+            </Show>
+
+            {/* Why what was closed out did not come, part by part, as each close-short recorded
+                it. Shut on arrival like its neighbours. */}
+            <Show when={recordedShortfall().length > 0}>
+              <FoldingSection
+                title={_x(
+                  'Shortfall',
+                  'units closed out when an order was closed short: they never arrived, nothing left stock',
+                )}
+                aside={sprintf(
+                  /* translators: %d is a number of units closed out (never arrived, not a stock loss) when the order was closed short. */ _n(
+                    '%d unit closed out',
+                    '%d units closed out',
+                    recordedShortfall().reduce((n, r) => n + r.qty, 0),
+                  ),
+                  recordedShortfall().reduce((n, r) => n + r.qty, 0),
+                )}
+                testId="po-shortfall-section"
+              >
+                <table class="mt-2 w-full text-sm" data-testid="po-shortfall">
+                  <thead>
+                    <tr class="text-left text-xs text-text-muted">
+                      <th class="pb-1 pr-4 font-normal">{__('Product')}</th>
+                      <th class="pb-1 pr-4 font-normal">
+                        {_x(
+                          'Part',
+                          'shortfall: which share of the missing units (not confirmed, not delivered, damaged)',
+                        )}
+                      </th>
+                      <th class="pb-1 pr-4 text-right font-normal">{__('Qty')}</th>
+                      <th class="pb-1 pr-4 font-normal">
+                        {_x('Why', 'shortfall: the cause of a part not arriving')}
+                      </th>
+                      <th class="pb-1 pr-4 font-normal">
+                        {_x('Who answers for it', 'shortfall: the party responsible for a part')}
+                      </th>
+                      <th class="pb-1 font-normal">{__('Note')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <For each={recordedShortfall()}>
+                      {(r) => (
+                        <tr class="border-b border-border/60 last:border-b-0">
+                          <td class="py-1.5 pr-4">
+                            {lines().find((l) => l.subjectId === r.subjectId)?.productLabel ??
+                              `#${r.subjectId}`}
+                          </td>
+                          <td class="py-1.5 pr-4 whitespace-nowrap text-text-muted">
+                            {r.partLabel}
+                          </td>
+                          <td class="py-1.5 pr-4 text-right tabular-nums">{r.qty}</td>
+                          <td class="py-1.5 pr-4">{r.causeLabel}</td>
+                          {/* Whether the party was chosen or left at the suggestion stays on record
+                              for whoever disputes it, but is no headline here: a tooltip. */}
+                          <td
+                            class="py-1.5 pr-4 whitespace-nowrap"
+                            title={
+                              r.partyInferred
+                                ? __(
+                                    'Not chosen by hand: suggested from the cause and the delivery terms.',
+                                  )
+                                : undefined
+                            }
+                          >
+                            {r.partyLabel}
+                          </td>
+                          <td class="py-1.5 text-text-muted">{r.note ?? ''}</td>
+                        </tr>
+                      )}
+                    </For>
+                  </tbody>
+                </table>
+              </FoldingSection>
+            </Show>
+
             <div ref={(el) => (activityEl = el)}>
               <FoldingSection
                 title={__('Activity')}
@@ -1824,9 +2121,32 @@ export function PoDetail(props: { id: string }): JSX.Element {
                       rather than compared down a column — and 2643.92 against 26439.20 is a
                       glance away from a factor of ten. The cost decimals stay fixed so the
                       minor unit never collapses. */}
+                    <Show when={thresholdLine()}>
+                      {(line) => (
+                        <span
+                          class="mr-4 text-xs text-text-muted tabular-nums"
+                          data-testid="po-order-thresholds"
+                        >
+                          {line()}
+                        </span>
+                      )}
+                    </Show>
                     <span class="text-sm font-semibold tabular-nums">
                       {__('Total')}: {formatMoney(grandTotal(), p().currency, decimals())}
                     </span>
+                    {/* Below the supplier's minimum order value while the order is being prepared:
+                        a glyph beside the figure it is about, the detail on hover. */}
+                    <Show when={isDraft() && null !== minimumShort()}>
+                      <span
+                        class="ml-1 cursor-help text-amber-600"
+                        role="img"
+                        title={minimumWarning()}
+                        aria-label={minimumWarning()}
+                        data-testid="po-below-minimum"
+                      >
+                        ⚠
+                      </span>
+                    </Show>
                   </Show>
                 }
               >
@@ -1857,6 +2177,9 @@ export function PoDetail(props: { id: string }): JSX.Element {
             costDecimals={p().costDecimals}
             currency={p().currency}
             supplierLabel={p().supplierDisplay ?? p().supplierName ?? ''}
+            minOrderValue={
+              null == thresholds()?.minOrderValue ? null : Number(thresholds()?.minOrderValue)
+            }
             onFixQtys={(patches) => fixQtys.mutate(patches)}
             fixing={fixQtys.isPending}
             issuing={assignNumber.isPending}
@@ -1956,6 +2279,28 @@ export function PoDetail(props: { id: string }): JSX.Element {
             onCancel={() => setAdoptPreview(null)}
           />
         )}
+      </Show>
+
+      <Show when={minimumGate()}>
+        <ConfirmModal
+          title={__('Below the order minimum')}
+          message={sprintf(
+            /* translators: 1: the order's total; 2: the supplier's minimum order value; 3: the supplier's name. */
+            __(
+              'This order comes to %1$s, under the %2$s minimum order value %3$s states. Suppliers often waive it, so you can go ahead.',
+            ),
+            formatMoney(grandTotal(), po()?.currency, decimals()),
+            formatMoney(Number(thresholds()?.minOrderValue), po()?.currency, decimals()),
+            po()?.supplierDisplay ?? po()?.supplierName ?? '',
+          )}
+          confirmLabel={__('Mark as sent')}
+          cancelLabel={__('Keep editing')}
+          onConfirm={() => {
+            setMinimumGate(false);
+            markSent.mutate({ confirm: false, adopt: false });
+          }}
+          onCancel={() => setMinimumGate(false)}
+        />
       </Show>
 
       <Show when={canceling()}>
@@ -2206,6 +2551,7 @@ function EventDescription(props: {
  * A read-only vertical list; the Essentials basic surface. Pro will add documents, export, and cross-PO audit.
  */
 function PoTimeline(props: { events: PoTimelineEvent[]; loading: boolean }): JSX.Element {
+  const hostNav = useHostNav();
   const fmt = (iso: string | null): string => {
     if (null === iso) return '';
     const d = new Date(iso);
@@ -2234,6 +2580,25 @@ function PoTimeline(props: { events: PoTimelineEvent[]; loading: boolean }): JSX
                       date={e.date}
                       emphasis={e.emphasis}
                     />
+                    <Show when={e.receiptId}>
+                      {(id) => (
+                        <>
+                          {' · '}
+                          <a
+                            class="text-primary hover:underline"
+                            href={hostNav.routeHref(`/receiving/receipts/${id()}`)}
+                            target={hostNav.opensNewTab ? '_blank' : undefined}
+                            rel={hostNav.opensNewTab ? 'noopener' : undefined}
+                          >
+                            {sprintf(
+                              /* translators: %d is a goods receipt's internal id. */
+                              __('Receipt #%d'),
+                              id(),
+                            )}
+                          </a>
+                        </>
+                      )}
+                    </Show>
                   </div>
                   <div class="text-xs text-text-muted">{fmt(e.at)}</div>
                   <Show when={e.note}>

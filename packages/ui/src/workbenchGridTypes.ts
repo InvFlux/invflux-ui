@@ -272,4 +272,12 @@ export interface WorkbenchHandles {
   selectCells: (cells: readonly SelectedCellRef[], active?: SelectedCellRef | null) => void;
   /** Toggle the table ⇄ record layout (for a host rendering its own Record-view button). */
   toggleLayout: () => void;
+  /**
+   * Whether variation rows show only their attributes instead of the full product name. Reactive:
+   * read inside a tracked scope, it follows the Product column's header menu as well as
+   * {@link setCompactVariationNames}, so a host control (a settings panel) and the menu always agree.
+   */
+  compactVariationNames: () => boolean;
+  /** Set the variation-name form as the merchant's own choice; it persists like the header menu's. */
+  setCompactVariationNames: (compact: boolean) => void;
 }

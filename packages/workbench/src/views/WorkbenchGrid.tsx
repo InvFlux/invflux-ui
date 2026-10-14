@@ -55,6 +55,10 @@ import {
   ModalFooter,
   ModalHeader,
   ModalPanel,
+  Input,
+  FieldError,
+  focusFirstInvalid,
+  SegmentedControl,
 } from '@invflux/ui';
 import { __, _n, _x, formatNumber, sprintf } from '@invflux/i18n';
 import type { SelectedCellRef } from '@invflux/ui';
@@ -446,9 +450,13 @@ function GeneratePoModal(props: {
       // Cross-SPA hand-off: land on the new draft in the Procurement app for review + submit.
       // Cross-surface hand-off through the host port: a separate admin page standalone, an
       // in-app route when embedded (assigning a `#/…` href just moves the shell router).
-      window.location.href = hostNav.routeHref(
-        `/procurement/purchase-orders/${res.purchaseOrder.id}`,
-      );
+      //
+      // Close first. Embedded, the hand-off unloads nothing: this surface is kept alive, hidden,
+      // behind the destination, so a dialog left open stays mounted there and its inert background
+      // covers the whole page — the destination included — with nothing left to dismiss it.
+      const href = hostNav.routeHref(`/procurement/purchase-orders/${res.purchaseOrder.id}`);
+      props.onClose();
+      window.location.href = href;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setBusy(false);
@@ -680,6 +688,9 @@ function WorkbenchSettingsPanel(props: {
   loadSize: number;
   loadSizeOptions: number[];
   onLoadSize: (n: number) => void;
+  /** Variation rows show only their attributes. The Product column's header menu sets the same value. */
+  compactVariationNames: boolean;
+  onCompactVariationNames: (compact: boolean) => void;
 }) {
   const settingsSections = slotRegistry.get<WorkbenchSettingsSlotProps>('workbench.settings');
 
@@ -698,6 +709,27 @@ function WorkbenchSettingsPanel(props: {
             </For>
           </select>
         </label>
+        <div class="mt-3" data-testid="workbench-setting-variation-names">
+          <div class="mb-1 text-sm font-medium text-text">{__('Variation names')}</div>
+          <SegmentedControl
+            ariaLabel={__('Variation names')}
+            // Short labels: the gear panel is narrow, and the section title already says what they name.
+            options={[
+              {
+                value: 'attrs',
+                /* translators: gear-menu choice under "Variation names": show only a variation's attributes. Short, e.g. "Attributs". */
+                label: _x('Attributes', 'variation names: attributes only'),
+              },
+              {
+                value: 'full',
+                /* translators: gear-menu choice under "Variation names": show the full product name. Short, e.g. "Nom complet". */
+                label: _x('Full name', 'variation names: full product name'),
+              },
+            ]}
+            value={props.compactVariationNames ? 'attrs' : 'full'}
+            onChange={(v) => props.onCompactVariationNames(v === 'attrs')}
+          />
+        </div>
       </SettingsSection>
 
       {/* Add-on settings sections — each `workbench.settings` contribution gets its own foldable
@@ -805,6 +837,13 @@ function WorksheetsModal(props: {
 }) {
   const [worksheets, setWorksheets] = createSignal<WorkbenchWorksheet[]>([]);
   const [newName, setNewName] = createSignal('');
+  // The name is required, so it is marked only once a create has been attempted without one.
+  const [createAttempted, setCreateAttempted] = createSignal(false);
+  const nameError = (): string | null =>
+    createAttempted() && newName().trim() === ''
+      ? __('Enter a name for the new worksheet.')
+      : null;
+  let createRow: HTMLDivElement | undefined;
   const [filterText, setFilterText] = createSignal('');
   const [error, setError] = createSignal<string | null>(null);
   const [busy, setBusy] = createSignal(false);
@@ -857,7 +896,11 @@ function WorksheetsModal(props: {
 
   async function createWorksheet(): Promise<void> {
     const name = newName().trim();
-    if (name === '') return;
+    if (name === '') {
+      setCreateAttempted(true);
+      focusFirstInvalid(createRow);
+      return;
+    }
     await run(async () => {
       const res = await postJson<{ worksheet: WorkbenchWorksheet }>(
         props.ctx,
@@ -865,6 +908,7 @@ function WorksheetsModal(props: {
         { name },
       );
       setNewName('');
+      setCreateAttempted(false);
       if (createApplies()) {
         await postJson(props.ctx, `/workbench/worksheets/${res.worksheet.id}/items`, {
           subject_ids: props.subjectIds,
@@ -939,21 +983,26 @@ function WorksheetsModal(props: {
 
         {/* Create (top) + quick-filter, above the list. */}
         <div class="flex flex-col gap-3 border-b border-border p-4">
-          <div class="flex items-center gap-2">
-            <input
-              class="h-9 flex-1 rounded border border-border bg-surface px-3 text-sm shadow-sm"
-              placeholder={__('New worksheet name')}
-              value={newName()}
-              disabled={busy()}
-              onInput={(e) => setNewName(e.currentTarget.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void createWorksheet();
-              }}
-            />
-            <Button
-              disabled={busy() || newName().trim() === ''}
-              onClick={() => void createWorksheet()}
-            >
+          <div ref={createRow} class="flex items-start gap-2">
+            <div class="min-w-0 flex-1">
+              <Input
+                size="md"
+                class="w-full"
+                placeholder={__('New worksheet name')}
+                aria-label={__('New worksheet name')}
+                aria-required="true"
+                invalid={nameError() !== null}
+                value={newName()}
+                disabled={busy()}
+                onInput={(e) => setNewName(e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void createWorksheet();
+                }}
+                data-testid="worksheet-new-name"
+              />
+              <FieldError message={nameError()} testId="worksheet-new-name-error" />
+            </div>
+            <Button disabled={busy()} onClick={() => void createWorksheet()}>
               {createApplies() ? __('Create + add') : __('Create')}
             </Button>
           </div>
@@ -1095,6 +1144,9 @@ export function WorkbenchGrid(
   let focusGrid: () => void = () => {};
   let openColumnManager: () => void = () => {};
   let scrollGridToTop: () => void = () => {};
+  // The same handles as a signal, for the gear panel's reactive reads (the variation-name form): the
+  // panel can render before the grid has registered them.
+  const [gridHandles, setGridHandles] = createSignal<WorkbenchHandles | null>(null);
   // Reactive fetching mirror pushed from the base grid (onFetchingChange) — drives the Refresh spinner.
   const [isRefreshing, setIsRefreshing] = createSignal(false);
   // Reactive save-progress mirror (onSaveProgressChange) — drives the readout-row progress bar while a
@@ -1139,6 +1191,8 @@ export function WorkbenchGrid(
           loadSize={query().loadSize}
           loadSizeOptions={LOAD_SIZE_OPTIONS}
           onLoadSize={(n) => setQuery((q) => ({ ...q, loadSize: n }))}
+          compactVariationNames={gridHandles()?.compactVariationNames() ?? true}
+          onCompactVariationNames={(compact) => gridHandles()?.setCompactVariationNames(compact)}
         />
       ),
     }),
@@ -2375,6 +2429,9 @@ export function WorkbenchGrid(
           ctx={ctx}
           onOpenReceipt={props.onOpenReceipt}
           storageKeyPrefix="central-workbench"
+          // A variation row sits under its parent, whose name is right above it, so the attributes
+          // are what tells the rows apart. A variation shown without its parent keeps its full name.
+          compactVariationNames
           loadSize={query().loadSize}
           showRowSelection={true}
           showToolbar={false}
@@ -2480,6 +2537,7 @@ export function WorkbenchGrid(
             getActiveCell = h.getActiveCell;
             toggleLayout = h.toggleLayout;
             openSaveReview = h.openSaveReview;
+            setGridHandles(h);
           }}
           extraInGridKeyHandlers={[
             // `*` — expand/collapse the variable products in the selection (Windows-TreeView convention).
