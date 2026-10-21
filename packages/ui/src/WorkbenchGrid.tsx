@@ -47,6 +47,7 @@ import { TableViewIcon, RecordViewIcon, ColumnsSettingsIcon, GearIcon } from './
 import { useSurface } from './surfaceCtx';
 import {
   createInfiniteQuery,
+  keepPreviousData,
   createQuery,
   useQueryClient,
   type InfiniteData,
@@ -70,6 +71,7 @@ import {
 } from './grid/cellSelection';
 import { workbenchValueFor, applyRowPatch } from './grid/workbenchValueFor';
 import { workbenchFooterSum } from './grid/workbenchFooterSum';
+import { DEFAULT_SORT, sortToParams, type SortLevels } from './grid/sortLevels';
 import { buildWorkbenchColumns, buildStockColumns } from './grid/workbenchColumns';
 import { useHostNav } from './hostNav';
 import { applyColumnOverrides, columnOverridesForSave } from './columnLabels';
@@ -212,8 +214,13 @@ export interface WorkbenchGridProps {
   /** Columns this surface pins and the merchant may not unpin. Unlike `defaultVisibleColumnIds` a
    *  stored preference does NOT win here: the surface is asserting a requirement, not a default. */
   lockedPinnedColumnIds?: string[];
-  /** Surface-level default display settings (density / wrap / text size) applied when nothing is
-   *  stored. Stored user prefs still win. */
+  /** Columns pinned when no layout is stored yet; unlike `lockedPinnedColumnIds`, they may be
+   *  unpinned, and "Reset to default" pins them again. */
+  defaultPinnedColumnIds?: string[];
+  /** Columns that lead the default order, ahead of the server's; a stored order still wins. */
+  defaultColumnOrder?: string[];
+  /** Surface-level default display settings (density / wrap / text size / header lines) applied
+   *  when nothing is stored. Stored user prefs still win. */
   defaultGridSettings?: Partial<GridSettings>;
   /** Initial state of the variation-name form: strip the parent product's name prefix from a
    *  variation's name (the common "Parent - Attribute" case) so read mode shows just the
@@ -284,9 +291,12 @@ export interface WorkbenchGridProps {
    * Controlled sort. When provided the grid renders this sort and reports every change via
    * {@link onSortChange} (so the host can mirror it into the URL); omitted ⇒ the grid owns sort internally.
    */
-  sort?: () => SortState;
+  sort?: () => SortLevels;
   /** Fired whenever the sort changes (both controlled and internal modes) — for URL sync / derived state. */
-  onSortChange?: (sort: SortState) => void;
+  onSortChange?: (sort: SortLevels) => void;
+  /** Allow several sort levels (Shift+click a header to add one). The products endpoint reads them;
+   *  a host whose endpoint takes a single sort leaves this off. */
+  multiSort?: boolean;
   /**
    * Transform the fetched + live-merged rows before render. Lets a host insert a display layer — e.g. the
    * Central Workbench's variable-parent aggregation, collapse/expand fold, and brought-with hiding — while
@@ -389,17 +399,12 @@ const isVisibility = (v: unknown): v is VisibilityState =>
 // Fetch
 // ---------------------------------------------------------------------------
 
-interface SortState {
-  sortBy: string;
-  sortDir: 'asc' | 'desc';
-}
-
 function buildProductsUrl(
   ctx: WorkbenchGridContext,
   endpoint: string,
   presetParams: Record<string, string>,
   queryParams: Record<string, string | string[]>,
-  sort: SortState,
+  sort: SortLevels,
   loadSize: number,
   page: number,
   subscriptionId: string,
@@ -407,8 +412,9 @@ function buildProductsUrl(
   const url = new URL(`${ctx.apiRoot.replace(/\/$/, '')}/invflux/v1${endpoint}`);
   url.searchParams.set('page', String(page));
   url.searchParams.set('per_page', String(loadSize));
-  url.searchParams.set('sort_by', sort.sortBy);
-  url.searchParams.set('sort_dir', sort.sortDir);
+  const sortParams = sortToParams(sort);
+  url.searchParams.set('sort_by', sortParams.sort_by);
+  url.searchParams.set('sort_dir', sortParams.sort_dir);
   if (subscriptionId !== '') url.searchParams.set('subscription', subscriptionId);
   for (const [key, value] of Object.entries(presetParams)) url.searchParams.set(key, value);
   // Host-driven query (filter bar): scalars set, arrays append (repeated params), bracket keys verbatim.
@@ -553,15 +559,13 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
 
   // ── Sort (server-driven). Controlled when `props.sort` is provided (the host owns it, e.g. for URL
   // sync); otherwise internal. Either way every change is reported via `onSortChange`. ──
-  const [internalSort, setInternalSort] = createSignal<SortState>(
-    props.sort?.() ?? { sortBy: 'name', sortDir: 'asc' },
-  );
-  const sort = (): SortState => props.sort?.() ?? internalSort();
-  const setSort = (next: SortState): void => {
+  const [internalSort, setInternalSort] = createSignal<SortLevels>(props.sort?.() ?? DEFAULT_SORT);
+  const sort = (): SortLevels => props.sort?.() ?? internalSort();
+  const setSort = (next: SortLevels): void => {
     setInternalSort(next);
     props.onSortChange?.(next);
   };
-  const tableSorting = (): SortingState => [{ id: sort().sortBy, desc: sort().sortDir === 'desc' }];
+  const tableSorting = (): SortingState => sort();
 
   // ── Controlled DataGrid state (persisted per surface) ──
   // Only VISIBILITY is ours. This surface seeds an exhaustive visible/hidden map from
@@ -629,6 +633,9 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
     // Progress is counted in matched rows, not in rows received: brought-with context rows ride
     // along on the page that produced them and are not in `total`. See `grid/matchedPaging`.
     getNextPageParam: (lastPage, allPages) => nextPageParam(lastPage, allPages),
+    // A new sort or filter keeps the rows already on screen until its own first page arrives, rather
+    // than blanking the grid for the length of the request. The stale rows are dimmed meanwhile.
+    placeholderData: keepPreviousData,
   }));
 
   // Live-update overlay: subjectId → latest patched fields (keyed by column id). Folded onto the
@@ -832,19 +839,28 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
     appliedDefaultVisibility = true;
   });
 
-  // Parent product name by wcProductId — feeds the variation-name compaction (strip the parent prefix
-  // in read mode). Only variable parents contribute a name, which is also what keeps the compaction
-  // honest: a variation whose parent is NOT in the loaded set finds no entry and falls back to its
-  // full name, so an orphan row never loses the only context that identifies it. That is a structural
-  // guarantee, not a check to remember — nothing here has to ask whether the parent is on screen.
-  const parentNameByProductId = createMemo(() => {
+  // The parent's name for each variation row that is displayed inside its family — directly under
+  // its parent, or under a sibling that is — which is what lets that row drop the parent's name: the
+  // name it would repeat is in view just above. A variation displaced from its family (a sort by stock
+  // scatters a family across the grid, a hidden parent leaves its variations flat) finds no entry and
+  // keeps its full name, since there it is the only thing that says which product the row is.
+  const parentNameInFamilyRun = createMemo(() => {
     const map = new Map<number, string>();
-    for (const r of rows()) if (r.wcVariationId === null) map.set(r.wcProductId, r.name);
+    let family: { productId: number; name: string } | null = null;
+    for (const r of rows()) {
+      if (r.wcVariationId === null) {
+        family = r.role === 'parent' ? { productId: r.wcProductId, name: r.name } : null;
+      } else if (family !== null && family.productId === r.wcProductId) {
+        map.set(r.subjectId, family.name);
+      } else {
+        family = null;
+      }
+    }
     return map;
   });
   const displayName = (row: WorkbenchRow, full: string): string => {
     if (!compactVariations() || row.wcVariationId === null) return full;
-    const parent = parentNameByProductId().get(row.wcProductId);
+    const parent = parentNameInFamilyRun().get(row.subjectId);
     return parent ? stripParentPrefix(full, parent) : full;
   };
 
@@ -2021,7 +2037,9 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
     getVisibleColumnIds: () => apiSelectableColumnIds(),
     isDirty: () => dirty.isDirty(),
     loadAllPages: async () => {
-      while (query.hasNextPage && !query.isFetchingNextPage) await query.fetchNextPage();
+      while (!query.isPlaceholderData && query.hasNextPage && !query.isFetchingNextPage) {
+        await query.fetchNextPage();
+      }
     },
     getActiveCell: () => {
       const active = cellSelection().active;
@@ -2085,6 +2103,7 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
     stagedValue: dirty.stagedValue,
     isCellDirty: dirty.isCellDirty,
     displayName,
+    isInFamily: (row: WorkbenchRow) => parentNameInFamilyRun().has(row.subjectId),
     // The ▸/▾ caret is a transient affordance, not a destination. Its click stops propagation so
     // folding doesn't also move the cell selection — which leaves focus parked on the button, and
     // keyboard cell-nav dead until the user clicks a cell. Hand focus back on the way out, the same
@@ -2201,7 +2220,12 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
 
       {/* ── Grid ── (flex-col, not a bare block: the DataGrid root fills via flex-1, so the grid
           scrolls internally inside a bounded parent instead of growing the page.) */}
-      <div class="flex min-h-0 flex-1 flex-col">
+      <div
+        // The table dims, not the wrapper: the grid's own dialogs (the column manager) render inside
+        // this element, and a sort changed from one of them would fade the dialog in use.
+        class={`flex min-h-0 flex-1 flex-col [&_table]:transition-opacity ${query.isPlaceholderData ? '[&_table]:opacity-60' : ''}`}
+        aria-busy={query.isPlaceholderData || undefined}
+      >
         <DataGrid<WorkbenchRow>
           rows={rows}
           getRowId={(row) => String(row.subjectId)}
@@ -2213,6 +2237,8 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
           leadingColumnIds={props.showRowSelection === false ? [] : ['select']}
           trailingColumnIds={['orders']}
           defaultGridSettings={props.defaultGridSettings}
+          defaultPinnedColumns={props.defaultPinnedColumnIds}
+          defaultColumnOrder={props.defaultColumnOrder}
           layout={effectiveLayout}
           recordKeyLabel={(row) => `#${row.wcVariationId ?? row.wcProductId}`}
           taxonomySpace={() => stableTaxonomySpace()}
@@ -2284,11 +2310,10 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
           ]}
           // ── Controlled state ──
           sorting={tableSorting}
-          onSortingChange={(next) => {
-            const [first] = next;
-            if (first) setSort({ sortBy: first.id, sortDir: first.desc ? 'desc' : 'asc' });
-            else setSort({ sortBy: 'name', sortDir: 'asc' });
-          }}
+          // Removing the last level returns to the default sort rather than to an unsorted grid: the
+          // server always orders its pages, so "unsorted" would only mean an order nobody chose.
+          onSortingChange={(next) => setSort(next.length > 0 ? next : DEFAULT_SORT)}
+          multiSort={props.multiSort ?? false}
           scope={props.storageKeyPrefix}
           columnVisibility={columnVisibility}
           setColumnVisibility={(updater) => setColumnVisibility((prev) => updater(prev))}
@@ -2302,6 +2327,8 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
           setCellSelection={setCellSelection}
           onLeadingCellClick={(row, _colId, event) => handleLeadingCellClick(row, event)}
           onScrollNearEnd={() => {
+            // Not from the previous view's rows: the next page is the new view's, after its first.
+            if (query.isPlaceholderData) return;
             if (query.hasNextPage && !query.isFetchingNextPage) void query.fetchNextPage();
           }}
           fallback={

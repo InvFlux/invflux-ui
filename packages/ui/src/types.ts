@@ -82,6 +82,8 @@ export interface GridColumnMeta extends FieldMeta {
    *  capability for arrives read-only. The write handler re-checks server-side. */
   editable: boolean;
   sortable: boolean;
+  /** The first header click sorts descending (a column read for its largest values first). */
+  sortDescFirst?: boolean;
   copyable: boolean;
   pasteable: boolean;
   /** Reason prompt collected per column section in the save-review modal (§11.10.3); null = none. */

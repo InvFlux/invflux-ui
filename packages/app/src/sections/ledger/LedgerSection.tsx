@@ -29,6 +29,8 @@ interface RefDocument {
   label: string;
   url: string | null;
   sequence?: number;
+  /** Set for a goods receipt: whom the goods came from, by the supplier's display name. */
+  supplier?: string | null;
   discoveryContext?: string | null;
   note?: string | null;
 }
@@ -466,6 +468,12 @@ function ReferenceCell(props: { row: LedgerRow }): JSX.Element {
               )}
             </Show>
             {refSuffix(d())}
+            {/* Beside a receipt's document — its PO, or the receipt itself — the supplier: the
+                document says which, the name says whose, which is the question a merchant reading
+                a receipt row is usually asking. */}
+            <Show when={d().supplier}>
+              {(supplier) => <span class="text-text-muted"> · {supplier()}</span>}
+            </Show>
           </span>
         </Show>
       )}

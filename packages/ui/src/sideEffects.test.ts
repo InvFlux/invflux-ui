@@ -1,6 +1,3 @@
-import { readdirSync, readFileSync } from 'node:fs';
-import { dirname, join, relative } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -12,29 +9,30 @@ import { describe, expect, it } from 'vitest';
  * server does not tree-shake, so nothing shows until the release bundle. This reads the source
  * instead: a line that *starts* with a registry's `register(` call, or a top-level `registerX(`
  * call, is a load-time registration.
+ *
+ * The sources come through Vite's `import.meta.glob` as raw text rather than `node:fs`: this package
+ * ships to a browser and carries no Node types.
  */
-const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const TOP_LEVEL_REGISTRATION = /^(\w+[Rr]egistry\.register\(|register[A-Z]\w*\()/m;
 
-function sources(dir: string): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) return sources(path);
-
-    return /\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) ? [path] : [];
-  });
-}
+/** Every source module under `src/`, keyed `./relative/path.tsx` from this directory. */
+const sources = import.meta.glob<string>(['./**/*.ts', './**/*.tsx', '!./**/*.test.ts', '!./**/*.test.tsx'], {
+  query: '?raw',
+  import: 'default',
+  eager: true,
+});
+const packageJson = Object.values(
+  import.meta.glob<string>('../package.json', { query: '?raw', import: 'default', eager: true }),
+)[0];
 
 describe('package.json sideEffects', () => {
   it('lists every module that registers something when it loads', () => {
-    const listed = new Set(
-      (JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { sideEffects: string[] })
-        .sideEffects,
-    );
-    const registering = sources(join(root, 'src'))
-      .filter((path) => TOP_LEVEL_REGISTRATION.test(readFileSync(path, 'utf8')))
-      .map((path) => `./${relative(root, path)}`);
+    const listed = new Set((JSON.parse(packageJson ?? '{}') as { sideEffects?: string[] }).sideEffects ?? []);
+    const registering = Object.entries(sources)
+      .filter(([, text]) => TOP_LEVEL_REGISTRATION.test(text))
+      .map(([path]) => `./src/${path.slice(2)}`);
 
+    expect(Object.keys(sources).length).toBeGreaterThan(10);
     expect(registering.length).toBeGreaterThan(0);
     expect(registering.filter((path) => !listed.has(path))).toEqual([]);
   });

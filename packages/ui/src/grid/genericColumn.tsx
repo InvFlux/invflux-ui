@@ -66,6 +66,7 @@ export function makeGenericColumn<TRow>(
     id: meta.id,
     header: meta.label,
     enableSorting: meta.sortable,
+    sortDescFirst: meta.sortDescFirst ?? false,
     meta: rightAligned ? { align: 'right' } : undefined,
     cell: (info): JSX.Element => {
       const view =

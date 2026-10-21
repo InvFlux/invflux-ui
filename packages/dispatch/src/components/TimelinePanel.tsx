@@ -487,14 +487,15 @@ interface OrderSourceDeletedPayload {
   refunds_owed?: Array<{ total?: string; currency?: string | null }>;
 }
 
-/** `order.lines_unstaged` — `units` is the total dropped; `reason` says what closed the order. */
+/** `order.lines_unstaged` — `units` is the total dropped; `reason` says why they were released. */
 interface OrderLinesUnstagedPayload {
   units?: number;
   reason?: string;
 }
 
-/** Why the order closed, in the words an operator would use. Unknown reasons simply say nothing. */
+/** Why the units were released, in the words an operator would use. Unknown reasons say nothing. */
 const UNSTAGE_REASON_LABEL: Record<string, () => string> = {
+  correction: () => __('a correction reduced the line'),
   host_status: () => __('the order was closed in WooCommerce'),
   source_deleted: () => __('the order was deleted'),
   host_terminal_repair: () => __('the order was already finished in WooCommerce'),
@@ -502,7 +503,8 @@ const UNSTAGE_REASON_LABEL: Record<string, () => string> = {
 };
 
 /**
- * Units that were picked and set aside, released when the order closed.
+ * Units that were picked and set aside, released when the order closed or a correction cut the line
+ * below them.
  *
  * Worth a row of its own because it is the only warning anyone gets: the count is gone from the
  * line, but the units are still on the packing bench until someone carries them back.

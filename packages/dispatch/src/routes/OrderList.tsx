@@ -1369,10 +1369,11 @@ export function OrderList() {
     // brings its own queue, so an add-on that introduces goods receipt introduces "receipts to
     // book" with it, and no SPA rebuild should be needed for the option to appear.
     //
-    // It is also the *only* writer of `pending_action`, which both shipped views store — "Pending
-    // manual refunds" and the broader "Pending actions". A seeded view has to be a shortcut to
-    // something the surface can already say: deletion is permanent by design, so a parameter
-    // reachable only through one deletable row would take its constraint with it. That is why
+    // It is also the *only* writer of `pending_action`, which the shipped "Pending actions" view
+    // stores (and the "Pending manual refunds" view installs seeded earlier still hold). A seeded
+    // view has to be a shortcut to something the surface can already say: deletion is permanent by
+    // design, so a parameter reachable only through one deletable row would take its constraint
+    // with it. That is why
     // ticking every option writes `_any` here rather than the expanded list — the seeded view is
     // exactly what this control produces, not a shape only the seeder knows how to make.
     {

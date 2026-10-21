@@ -8,6 +8,9 @@ export interface ThumbnailZoomProps {
   alt?: string;
   /** Thumbnail edge in px (square). Default 36. */
   size?: number;
+  /** Fill the parent's box instead of a fixed `size`: for a thumbnail the caller sizes, such as one
+   *  that follows a grid row's height. */
+  fill?: boolean;
   /** Zoom-preview max edge in px. Default 240. */
   zoom?: number;
 }
@@ -39,8 +42,8 @@ export function ThumbnailZoom(props: ThumbnailZoomProps): JSX.Element {
       <img
         src={props.src!}
         alt={props.alt ?? ''}
-        class="rounded object-cover bg-gray-100 shrink-0 cursor-zoom-in ring-1 ring-black/5"
-        style={{ width: `${size()}px`, height: `${size()}px` }}
+        class={`rounded object-cover bg-gray-100 shrink-0 cursor-zoom-in ring-1 ring-black/5${props.fill ? ' h-full w-full' : ''}`}
+        style={props.fill ? undefined : { width: `${size()}px`, height: `${size()}px` }}
         onMouseEnter={(e) => setRect(e.currentTarget.getBoundingClientRect())}
         onMouseLeave={() => setRect(null)}
       />

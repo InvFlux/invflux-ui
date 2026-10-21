@@ -96,13 +96,22 @@ import { parseSpreadsheetTsv } from '../excel-tsv-parser';
 import type { GridColumnMeta, TaxonomySpace } from '../types';
 import { __, _n, _x, sprintf } from '@invflux/i18n';
 import { menuItemClass } from '../primitives';
+import { fuzzyScore } from '../fuzzy';
+import { SortLevelsEditor, type SortableColumn } from './SortLevelsEditor';
+import { addSortLevel, type SortLevels } from './sortLevels';
 import { ErrorBanner } from '../ErrorBanner';
 
-// Single owner of the `align` column-meta augmentation (moved verbatim from WorkbenchGrid).
+// Single owner of the column-meta augmentation.
 declare module '@tanstack/table-core' {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface ColumnMeta<TData extends RowData, TValue> {
     align?: 'right';
+    /**
+     * The cell takes the row's height rather than setting it: compact padding whatever the density,
+     * and positioned, so content placed absolutely inside (a thumbnail sized to the row) fills it.
+     * The other cells' padding and text then decide how tall the row is.
+     */
+    fitsRow?: boolean;
   }
 }
 
@@ -442,6 +451,9 @@ export interface DataGridProps<TRow> {
   // ── Controlled table state ──────────────────────────────────────────────────
   sorting: () => SortingState;
   onSortingChange: (next: SortingState) => void;
+  /** Allow several sort levels: Shift+click a header to add one, and the column manager's Sort tab.
+   *  For a host whose data source reads a list of levels; off by default. */
+  multiSort?: boolean;
 
   /**
    * Layout overrides, for the pieces a surface genuinely has to control.
@@ -477,6 +489,9 @@ export interface DataGridProps<TRow> {
    */
   defaultColumnOrder?: string[];
   defaultExpandedSections?: string[];
+  /** Columns pinned when no pins are stored yet, and again on a layout reset. Unlike
+   *  {@link lockedPinnedColumnIds}, a default may be unpinned. */
+  defaultPinnedColumns?: string[];
   /** Columns this surface pins and the merchant may not unpin — the grid renders their affordances as
    *  refusing rather than hiding them, so the constraint is visible rather than mysterious. A locked
    *  column cannot be hidden either: a pinned column that is not rendered would reserve edge space
@@ -586,29 +601,13 @@ export interface DataGridApi<TRow> {
 }
 
 /**
- * Subsequence fuzzy match (case-insensitive): the indices in `text` matched by `query`'s chars in
- * order, or null when they don't all appear. Empty query → [] (matches everything, no highlight).
+ * Subsequence fuzzy match, insensitive to case and accents (`categ` finds « Catégories de
+ * produits »): the indices in `text` matched by `query`'s characters in order, or null when they
+ * don't all appear. Empty query → [] (matches everything, no highlight). The shared
+ * {@link fuzzyScore}, the order tag picker's matcher, so a name is found the same way everywhere.
  */
 function fuzzyMatchIndices(text: string, query: string): number[] | null {
-  if (query === '') return [];
-  const haystack = text.toLowerCase();
-  const needle = query.toLowerCase();
-  const out: number[] = [];
-  let hi = 0;
-  for (const ch of needle) {
-    let hit = -1;
-    while (hi < haystack.length) {
-      const cur = haystack[hi];
-      hi += 1;
-      if (cur === ch) {
-        hit = hi - 1;
-        break;
-      }
-    }
-    if (hit === -1) return null;
-    out.push(hit);
-  }
-  return out;
+  return fuzzyScore(query, text)?.indices ?? null;
 }
 
 /** Render `text` with the given (subsequence-matched) char positions highlighted. */
@@ -680,12 +679,30 @@ export function ColumnManagerModal<TRow>(props: {
    * and says so, because a blur-triggered save happens after the eye has moved on.
    */
   onRenameColumn?: (columnId: string, label: string) => Promise<void> | void;
+  /** The tab to open on. Default the column list. */
+  initialTab?: 'select' | 'sort';
+  /** The sort levels, for the Sort tab — shown only when given (a grid that sorts by several). */
+  sortLevels?: () => SortLevels;
+  onSortChange?: (next: SortLevels) => void;
   onClose: () => void;
 }) {
   // Focus return (to the Columns button, or to the grid container when opened with Ctrl+M from a
   // cell) is the enclosing Modal's job — it captures the opener at render and restores on close.
 
-  const [tab, setTab] = createSignal<'select' | 'reorder'>('select');
+  const [tab, setTab] = createSignal<'select' | 'reorder' | 'sort'>(
+    // eslint-disable-next-line solid/reactivity -- the tab it opens on; the operator owns it after.
+    props.initialTab === 'sort' && props.sortLevels ? 'sort' : 'select',
+  );
+  const sortableColumns = (): SortableColumn[] =>
+    props.table
+      .getAllLeafColumns()
+      .filter((col) => col.getCanSort())
+      .map((col) => ({
+        id: col.id,
+        label: labelOf(col),
+        firstDesc: col.getFirstSortDir() === 'desc',
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label));
   // Sections are folded by default; only the keys in this set are open. Host-persisted when the
   // controlled props are supplied, else an in-memory fallback.
   const [internalExpanded, setInternalExpanded] = createSignal<string[]>([]);
@@ -1030,6 +1047,16 @@ export function ColumnManagerModal<TRow>(props: {
                 (low_stock_amount) column — which shares the bare msgid and mistranslates in fr. */}
             {_x('Reorder', 'column manager tab: rearrange the visible columns')}
           </button>
+          <Show when={props.sortLevels}>
+            <button
+              type="button"
+              data-testid="column-manager-tab-sort"
+              class={tabClass(tab() === 'sort')}
+              onClick={() => setTab('sort')}
+            >
+              {_x('Sort', 'column manager tab: the order of the rows, by one column or several')}
+            </button>
+          </Show>
         </ModalDragHandle>
 
         <div class="flex-1 overflow-auto p-3">
@@ -1271,6 +1298,15 @@ export function ColumnManagerModal<TRow>(props: {
           </Show>
 
           {/* ── Reorder: drag the visible columns; the pinned group sits above the divider ── */}
+          <Show when={tab() === 'sort' && props.sortLevels}>
+            {(levels) => (
+              <SortLevelsEditor
+                levels={levels()}
+                onChange={(next) => props.onSortChange?.(next)}
+                columns={sortableColumns()}
+              />
+            )}
+          </Show>
           <Show when={tab() === 'reorder'}>
             <ul class="space-y-1">
               {/* Named zones, not a bare rule: a divider alone in a drag list reads as decoration,
@@ -1454,7 +1490,12 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
       : undefined;
   const ownPinned =
     props.pinnedColumns === undefined
-      ? persistedGridSignal<string[]>(props.scope, 'col_pinned', [], isStringArray)
+      ? persistedGridSignal<string[]>(
+          props.scope,
+          'col_pinned',
+          props.defaultPinnedColumns ?? [],
+          isStringArray,
+        )
       : undefined;
 
   const columnVisibility = (): VisibilityState => (props.columnVisibility ?? ownVisibility![0])();
@@ -1527,8 +1568,11 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
   // point (Ctrl+M, the toolbar, the gear) opens on the full list, so each of those clears it —
   // otherwise the last right-click would still be narrowing the picker two openings later.
   const [colManagerQuery, setColManagerQuery] = createSignal('');
-  const openColumnManager = (initialQuery = ''): void => {
+  // The tab it opens on: "Sort…" in a header menu opens the Sort tab, every other way in the first.
+  const [colManagerTab, setColManagerTab] = createSignal<'select' | 'sort'>('select');
+  const openColumnManager = (initialQuery = '', tab: 'select' | 'sort' = 'select'): void => {
     setColManagerQuery(initialQuery);
+    setColManagerTab(tab);
     setShowColManager(true);
   };
   /**
@@ -1963,7 +2007,11 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
     },
     getCoreRowModel: getCoreRowModel(),
     manualSorting: true,
-    enableMultiSort: false,
+    // Off unless the host's data source reads several levels. On, Shift+click adds a level (TanStack's
+    // default multi-sort event), as in a spreadsheet; a plain click still replaces the whole sort.
+    get enableMultiSort() {
+      return props.multiSort ?? false;
+    },
     enableRowSelection: true,
     enableColumnResizing: true,
     columnResizeMode: 'onChange',
@@ -2050,6 +2098,23 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
     const dt = columnMetaById().get(columnId)?.dataType ?? '';
     return dt.startsWith('number') || dt.startsWith('decimal') || dt.endsWith(':count');
   };
+
+  /**
+   * A header click, spreadsheet-style. A plain click makes that column the whole sort: a column
+   * already sorting alone cycles its direction, any other click replaces every level with this
+   * column in its first direction. Shift+click (multi-sort grids) adds the column as the next level,
+   * or cycles it where it already is. TanStack's own handler differs on one case — a plain click on
+   * the LAST of several levels only flips that level — which reads as the click not having taken.
+   */
+  function sortFromHeader(column: Column<TRow, unknown>, event: MouseEvent): void {
+    const sorting = table.getState().sorting;
+    const alone = sorting.length === 1 && sorting[0].id === column.id;
+    if ((props.multiSort && event.shiftKey) || alone || sorting.length === 0) {
+      column.getToggleSortingHandler()?.(event);
+      return;
+    }
+    table.setSorting([{ id: column.id, desc: column.getFirstSortDir() === 'desc' }]);
+  }
 
   // ─── Footer totals ────────────────────────────────────────────────────────
   // Columns whose meta declares aggregate "sum" are totalled in a sticky footer row. The sum spans
@@ -2922,14 +2987,15 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
     },
     getSelectedCells: selectedCellRefs,
     getSelectableColumnIds: () => selectableColumnIds(),
+    // Back to the surface's declared starting arrangement, the same one a first run gets.
     resetLayout: () => {
-      ownOrder?.[1](() => []);
+      ownOrder?.[1](() => props.defaultColumnOrder ?? []);
       ownSizing?.[1](() => ({}));
-      ownSections?.[1](() => []);
+      ownSections?.[1](() => props.defaultExpandedSections ?? []);
       ownVisibility?.[1](() => ({}));
       // Locked pins survive a reset by construction: `mergePinnedColumns` puts them back on the next
-      // read. Clearing to empty is therefore the right target even for a surface that locks one.
-      ownPinned?.[1](() => []);
+      // read, so only the default pins need restoring here.
+      ownPinned?.[1](() => props.defaultPinnedColumns ?? []);
     },
   });
 
@@ -3126,6 +3192,20 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
           key: 'sort-clear',
           label: __('Clear sort'),
           run: () => column.clearSorting(),
+        });
+      }
+      // The full sort, as levels. The column the menu was opened on joins as the next level, so the
+      // tab opens on what the operator came to do.
+      if (props.multiSort) {
+        items.push({
+          key: 'sort-levels',
+          label: _x('Sort…', 'column header menu: open the sort levels'),
+          run: () => {
+            table.setSorting((levels) =>
+              addSortLevel(levels, columnId, column.getFirstSortDir() === 'desc'),
+            );
+            openColumnManager('', 'sort');
+          },
         });
       }
     }
@@ -3716,7 +3796,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
           return { ...(pinnedStyle ?? {}), ...(shadows ? { 'box-shadow': shadows } : {}) };
         })()}
         aria-busy={pending() ? 'true' : undefined}
-        class={`border-r border-t border-r-ground border-t-border ${editing() ? 'overflow-hidden p-0' : `${base} ${cellDensityText()}${cellWrapClass(cell.column.id)}`}${
+        class={`border-r border-t border-r-ground border-t-border ${editing() ? 'overflow-hidden p-0' : `${base} ${cell.column.columnDef.meta?.fitsRow ? `relative ${DENSITY_PADDING.compact} ${TEXT_SIZE_CLASS[gridSettings().textSize]}` : cellDensityText()}${cellWrapClass(cell.column.id)}`}${
           bg() ||
           (isPinned(pinnedColumnIds(), cell.column.id)
             ? // A pinned cell slides over the rows behind it, so it needs a background of its
@@ -3861,6 +3941,9 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
           canRenameColumns={props.canRenameColumns}
           onRenameColumn={props.onRenameColumn}
           initialQuery={colManagerQuery()}
+          initialTab={colManagerTab()}
+          sortLevels={props.multiSort ? () => table.getState().sorting : undefined}
+          onSortChange={(next) => table.setSorting(next)}
           onClose={() => setShowColManager(false)}
         />
       </Show>
@@ -4327,7 +4410,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
                                         // button, once here as it bubbles — landing back where it
                                         // started, so the control would look broken to a mouse.
                                         if ((event.target as HTMLElement).closest('button')) return;
-                                        header.column.getToggleSortingHandler()?.(event);
+                                        sortFromHeader(header.column, event);
                                       }
                                     : undefined
                               }
@@ -4393,9 +4476,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
                                           ? header.column.columnDef.header
                                           : header.column.id),
                                     )}
-                                    onClick={(event) =>
-                                      header.column.getToggleSortingHandler()?.(event)
-                                    }
+                                    onClick={(event) => sortFromHeader(header.column, event)}
                                     // Always at the cell's right edge, out of flow, at every line
                                     // count. Inline, it is the first thing a narrow column clips —
                                     // which is how a sortable column ends up showing no sort
@@ -4456,6 +4537,21 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
                                     >
                                       <path d="M0 0 8 0 4 5Z" />
                                     </svg>
+                                    {/* The level number, once there is more than one level: which
+                                        sort decides first is the one thing the arrows cannot say. */}
+                                    <Show
+                                      when={
+                                        table.getState().sorting.length > 1 &&
+                                        header.column.getSortIndex() >= 0
+                                      }
+                                    >
+                                      <span
+                                        class="mt-[2px] text-[9px] font-semibold leading-none tabular-nums"
+                                        data-testid={`sort-level-${header.column.id}`}
+                                      >
+                                        {header.column.getSortIndex() + 1}
+                                      </span>
+                                    </Show>
                                   </button>
                                 </Show>
                               </div>

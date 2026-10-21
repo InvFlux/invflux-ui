@@ -59,6 +59,11 @@ import {
   FieldError,
   focusFirstInvalid,
   SegmentedControl,
+  DEFAULT_SORT,
+  isDefaultSort,
+  sortFromParams,
+  sortToParams,
+  type SortLevels,
 } from '@invflux/ui';
 import { __, _n, _x, formatNumber, sprintf } from '@invflux/i18n';
 import type { SelectedCellRef } from '@invflux/ui';
@@ -101,9 +106,9 @@ function summarizeSelected(
 const LOAD_SIZE_OPTIONS = [50, 100, 200, 500, 1000, 2000];
 
 /** Columns whose value is meaningful only on unit (sellable) subjects — variable parents are
- *  value-less for them, so sorting by one auto-engages "hide brought-in parents" (the parents would
- *  otherwise clump at one end as a value-less block). */
-const UNIT_ONLY_SORT_COLUMNS = ['price'];
+ *  value-less for them (a parent has no price and no cost of its own), so sorting by one auto-engages
+ *  "hide brought-in parents" (the parents would otherwise clump at one end as a value-less block). */
+const UNIT_ONLY_SORT_COLUMNS = ['price', 'wac', 'stock_value', 'uncommitted_value', 'committed_value'];
 
 /** Server-search debounce: re-query the server this long after the last keystroke. */
 const SEARCH_DEBOUNCE_MS = 300;
@@ -127,8 +132,8 @@ const DEFAULT_LOAD_SIZE = 500;
 type QueryState = {
   search: string;
   loadSize: number;
-  sortBy: string;
-  sortDir: 'asc' | 'desc';
+  /** The sort levels, first deciding (see `SortLevels`). */
+  sort: SortLevels;
   /** Registry-driven filter values keyed by filter id (incl. `taxonomy_<name>`, `stock_status`, …). */
   filterValues: Record<string, string[]>;
   /** Per-filter scalar modifiers keyed by filter id (e.g. `{ supplier: { mode: "all" } }`). */
@@ -542,8 +547,6 @@ function readQueryFromUrl(
 ): QueryState {
   const params = port.read();
 
-  const sortDir = params.get('sort_dir');
-
   // Registry filters (taxonomy_<name>, stock_status, supplier, …) prime generically from any
   // unreserved `{id}[]` param; the WP indexed form is handled by the reader. When `metas` is
   // provided, filter types with bespoke encodings (`numeric_ids` → dash-joined `?post_ids=1-2-3`)
@@ -559,8 +562,9 @@ function readQueryFromUrl(
   return {
     search: params.get('search') ?? defaults.search,
     loadSize: defaults.loadSize, // loadSize lives in localStorage, not URL
-    sortBy: params.get('sort_by') ?? defaults.sortBy,
-    sortDir: sortDir === 'desc' ? 'desc' : sortDir === 'asc' ? 'asc' : defaults.sortDir,
+    sort: params.has('sort_by')
+      ? sortFromParams(params.get('sort_by'), params.get('sort_dir'))
+      : defaults.sort,
     filterValues,
     filterModifiers: readFilterModifiersFromParams(params),
     hideBroughtParents: params.get('hide_parents') === '1' || defaults.hideBroughtParents,
@@ -592,9 +596,10 @@ function syncQueryToUrl(
   deleteFilterModifierParams(current.searchParams);
 
   if (q.search.trim()) current.searchParams.set('search', q.search.trim());
-  if (q.sortBy !== 'name' || q.sortDir !== 'asc') {
-    current.searchParams.set('sort_by', q.sortBy);
-    current.searchParams.set('sort_dir', q.sortDir);
+  if (!isDefaultSort(q.sort)) {
+    const sortParams = sortToParams(q.sort);
+    current.searchParams.set('sort_by', sortParams.sort_by);
+    current.searchParams.set('sort_dir', sortParams.sort_dir);
   }
   writeFilterValuesToParams(current.searchParams, q.filterValues, metas);
   writeFilterModifiersToParams(current.searchParams, q.filterModifiers);
@@ -1223,8 +1228,7 @@ export function WorkbenchGrid(
   const baseDefaults = (loadSize: number): QueryState => ({
     search: '',
     loadSize,
-    sortBy: 'name',
-    sortDir: 'asc',
+    sort: DEFAULT_SORT,
     filterValues: {},
     filterModifiers: {},
     hideBroughtParents: false,
@@ -1371,8 +1375,7 @@ export function WorkbenchGrid(
   const querySig = (q: QueryState): string =>
     JSON.stringify([
       q.search,
-      q.sortBy,
-      q.sortDir,
+      q.sort,
       q.filterValues,
       q.filterModifiers,
       q.hideBroughtParents,
@@ -1430,8 +1433,7 @@ export function WorkbenchGrid(
     const q = query();
     return JSON.stringify([
       q.search,
-      q.sortBy,
-      q.sortDir,
+      q.sort,
       q.loadSize,
       q.filterValues,
       q.filterModifiers,
@@ -1552,7 +1554,8 @@ export function WorkbenchGrid(
 
     const collapsed = collapsedProductIds();
     const q = query();
-    const sortBy = q.sortBy;
+    // The primary level decides where a value-less parent would clump, so it alone engages the hiding.
+    const sortBy = q.sort[0]?.id ?? 'name';
     // "Hide brought-in parents": effective when the user toggles it OR a unit-only sort is active.
     const hideParentsActive = q.hideBroughtParents || UNIT_ONLY_SORT_COLUMNS.includes(sortBy);
     // Aggregate / non-unit rows: variable parents AND grouped products — neither is a sellable unit
@@ -1770,8 +1773,9 @@ export function WorkbenchGrid(
     if (subjectIds.length > 0) url.searchParams.set('subject_ids', subjectIds.join(','));
     const state = query();
     if (state.search.trim() !== '') url.searchParams.set('search', state.search.trim());
-    url.searchParams.set('sort_by', state.sortBy);
-    url.searchParams.set('sort_dir', state.sortDir);
+    const sortParams = sortToParams(state.sort);
+    url.searchParams.set('sort_by', sortParams.sort_by);
+    url.searchParams.set('sort_dir', sortParams.sort_dir);
     // Mirror the grid's brought-in display state so the export row set matches what's on screen.
     if (state.bringChildren) url.searchParams.set('bring_children', '1');
     if (!state.bringParents) url.searchParams.set('bring_parents', '0');
@@ -2432,6 +2436,12 @@ export function WorkbenchGrid(
           // A variation row sits under its parent, whose name is right above it, so the attributes
           // are what tells the rows apart. A variation shown without its parent keeps its full name.
           compactVariationNames
+          // A dense first view: compact rows, and room for a two-line column name so the long ones
+          // need not widen their column. The product's picture and name stay in view while the
+          // grid scrolls sideways.
+          defaultGridSettings={{ density: 'compact', headerLines: 2 }}
+          defaultPinnedColumnIds={['image_url', 'name']}
+          defaultColumnOrder={['image_url', 'name']}
           loadSize={query().loadSize}
           showRowSelection={true}
           showToolbar={false}
@@ -2446,8 +2456,9 @@ export function WorkbenchGrid(
           }}
           onLayoutChange={setLayoutInfo}
           queryParams={buildQueryParams}
-          sort={() => ({ sortBy: query().sortBy, sortDir: query().sortDir })}
-          onSortChange={(s) => setQuery((q) => ({ ...q, sortBy: s.sortBy, sortDir: s.sortDir }))}
+          sort={() => query().sort}
+          onSortChange={(sort) => setQuery((q) => ({ ...q, sort }))}
+          multiSort
           transformRows={transformRows}
           fold={{
             // A variable parent with loaded variations gets a ▸/▾ caret; the shell owns the state.

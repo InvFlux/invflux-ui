@@ -488,6 +488,8 @@ export type {
   WorkbenchGridCapabilities,
 } from './WorkbenchGrid';
 export { workbenchValueFor, applyRowPatch } from './grid/workbenchValueFor';
+export { DEFAULT_SORT, isDefaultSort, sortFromParams, sortToParams } from './grid/sortLevels';
+export type { SortLevels } from './grid/sortLevels';
 export { buildWorkbenchColumns, buildStockColumns, stockSlotOf } from './grid/workbenchColumns';
 export type { WorkbenchColumnDeps, StockColumnDeps, StockSlot } from './grid/workbenchColumns';
 export { decimalOrNull, parseDecimal } from './parseDecimal';

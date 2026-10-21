@@ -603,8 +603,8 @@ export function useProcessCorrectionsMutation(
 /**
  * Settle the order's pending manual refunds. On success, refresh the order
  * detail (the `pendingManualRefunds` counter drops), its timeline (fresh
- * `correction.refund_confirmed` events), and the queue (the order may leave the
- * "Pending manual refunds" filter).
+ * `correction.refund_confirmed` events), and the queue (the order may leave a
+ * pending-action view).
  */
 export function useSettleManualRefundMutation(
   orderHexId: Accessor<string>,

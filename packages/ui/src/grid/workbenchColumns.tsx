@@ -26,6 +26,7 @@ import type { GridColumnMeta } from '../types';
 import type { HostNav } from '../hostNav';
 import type { SlotDeltas } from '../onHandCascade';
 import { DropdownMenu } from '../DropdownMenu';
+import { ThumbnailZoom } from '../ThumbnailZoom';
 import { buildProductActionItems } from '../productActionsMenu';
 import { stockSlotOf, type StockSlot } from './stockSlot';
 import { workbenchValueFor } from './workbenchValueFor';
@@ -44,6 +45,10 @@ export interface WorkbenchColumnDeps {
    *  Receives the staged-or-persisted full name; returns the string to show. Edit mode uses the full
    *  name regardless. Absent → show the name verbatim. */
   displayName?: (row: WorkbenchRow, fullName: string) => string;
+  /** Whether a variation row is displayed inside its family (under its parent, or under a sibling
+   *  that is). Only then is it indented: an indent reads as "belongs to the row above", which is
+   *  wrong under a simple product. Absent → every variation is indented. */
+  isInFamily?: (row: WorkbenchRow) => boolean;
   /** Optional collapse/expand affordance for grouping rows (e.g. a variable parent's variations). The
    *  host owns the actual fold (it transforms the row set); this only renders a ▸/▾ toggle in the name
    *  cell for rows whose `state(row)` isn't `"none"`, calling `toggle(row)` on click. */
@@ -192,14 +197,15 @@ export function buildWorkbenchColumns(
       header: __('Product'),
       cell: (info) => {
         const row = info.row.original;
-        const indented = row.wcVariationId !== null;
+        const indented = (): boolean =>
+          row.wcVariationId !== null && (deps.isInFamily?.(row) ?? true);
         const dirty = (): boolean => isCellDirty(row.subjectId, 'name');
         const foldState = (): 'none' | 'collapsed' | 'expanded' => deps.fold?.state(row) ?? 'none';
         const displayName = (): string =>
           displayNameOf(row, String(stagedValue(row.subjectId, 'name', info.getValue()) ?? ''));
         return (
           <div
-            class={`flex items-center ${foldState() !== 'none' ? '-ml-2' : ''} ${indented ? 'pl-3' : ''}`}
+            class={`flex items-center ${foldState() !== 'none' ? '-ml-2' : ''} ${indented() ? 'pl-3' : ''}`}
           >
             {/* Collapse/expand caret for a grouping parent (variations); host owns the fold state. */}
             <Show when={foldState() !== 'none'}>
@@ -286,13 +292,14 @@ export function buildWorkbenchColumns(
       cell: (info) => {
         // A specified SKU reads in the default (darker) text color; an inherited one carries no
         // color of its own so the grid's inherited wash (muted + italic) shows through — the two are
-        // then distinguishable by color, not only by the italic.
+        // then distinguishable by color, not only by the italic. No size of its own: it follows the
+        // grid's text size like every other cell.
         const inherited = info.row.original.inherited?.includes('sku') ?? false;
         return scalarCell(
           info.row.original,
           'sku',
           info.getValue(),
-          inherited ? 'font-mono text-xs' : 'font-mono text-xs text-text',
+          inherited ? 'font-mono' : 'font-mono text-text',
           (v) => (String(v ?? '').trim() === '' ? '—' : String(v)),
         );
       },
@@ -302,12 +309,17 @@ export function buildWorkbenchColumns(
       id: 'image_url',
       enableSorting: false,
       header: __('Image'),
+      // The thumbnail follows the row instead of setting it: the cell keeps compact padding, and
+      // the picture fills the height the other cells give the row. Hovering it shows it larger.
+      meta: { fitsRow: true },
       cell: (info) => {
         const url = info.getValue();
         return (
           <>
             {url ? (
-              <img src={url} alt="" class="h-10 w-10 rounded object-cover" loading="lazy" />
+              <span class="absolute inset-y-1 left-2 block aspect-square">
+                <ThumbnailZoom src={url} fill />
+              </span>
             ) : (
               emDash()
             )}
