@@ -401,7 +401,6 @@ export function PoReception(props: { poId: number }): JSX.Element {
                 currency={query.data?.purchaseOrder.currency ?? ''}
                 baseCurrency={query.data?.purchaseOrder.baseCurrency ?? ''}
                 initialFxRate={query.data?.purchaseOrder.suggestedFxRate ?? null}
-                hasPro={app.hasPro}
                 pending={receive.isPending || abandon.isPending || closeShortOnly.isPending}
                 initial={(query.data?.lines ?? [])
                   .filter((l) => null !== l.staged)

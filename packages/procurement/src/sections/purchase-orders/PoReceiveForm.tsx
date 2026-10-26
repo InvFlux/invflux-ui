@@ -59,8 +59,6 @@ export function PoReceiveForm(props: {
   /** Governance cap: may finalize (confirm / close short) WITHOUT counting every line. Without it, the
    *  worker must address every line first (a staged value — incl. 0 — or nothing outstanding). */
   canLax: boolean;
-  /** Whether barcode (GTIN) matching is available; passed straight to the grid. */
-  hasPro: boolean;
   /** Governance cap: may finish the order on less than was ordered. Server-enforced; mirrored here
    *  so the action is disabled rather than offered and then refused. */
   canCloseShort: boolean;
@@ -250,7 +248,6 @@ export function PoReceiveForm(props: {
       <PoReceiveGrid
         poId={props.poId}
         lines={props.lines}
-        hasPro={props.hasPro}
         received={received}
         damaged={damaged}
         setRecv={setRecv}

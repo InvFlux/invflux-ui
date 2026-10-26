@@ -1,4 +1,4 @@
-import { createInvFluxApi } from '@invflux/ui/api';
+import { ApiError, createInvFluxApi } from '@invflux/ui/api';
 import type { AdminContext } from './types';
 
 /** One projected setting from `GET invflux/v1/settings` (mirrors SettingsCatalogProjector::project). */
@@ -104,6 +104,7 @@ const ROUTE = 'invflux/v1/settings';
 const ROUTE_ORDER_STATUS = 'invflux/v1/policies/order-status';
 const ROUTE_PLUGIN_META = 'invflux/v1/policies/plugin-meta';
 const ROUTE_PAYMENT_GATEWAYS = 'invflux/v1/policies/payment-gateways';
+const ROUTE_STATUS_MEANING = 'invflux/v1/policies/status-meaning';
 
 /**
  * Bound per call rather than held: `AdminContext` is a prop here, not a module singleton, and the
@@ -135,6 +136,74 @@ export async function fetchOrderStatusPolicies(ctx: AdminContext): Promise<Order
   const data = await api(ctx).get<{ policies?: OrderStatusPolicy[] }>(ROUTE_ORDER_STATUS);
 
   return data.policies ?? [];
+}
+
+/** What entering a status does to an open order — see `StatusMeaningEffect`. */
+export type StatusMeaningEffect = 'ship' | 'cancel' | 'commit' | 'hold' | 'resume';
+
+/**
+ * What a changed status meaning would reach among the orders already in that status
+ * (`GET invflux/v1/policies/status-meaning`). Raw counts and totals; the screen words them.
+ */
+export interface StatusMeaningImpact {
+  effect: StatusMeaningEffect;
+  /** Whether this user holds the capability the effect needs beyond managing settings. */
+  can_apply: boolean;
+  /** Open orders in the status — what applying would reach. */
+  open: number;
+  /** Orders the old meaning canceled. Never reached: they stay canceled. */
+  canceled: number;
+  /**
+   * For a cancel: the open orders still owing something, and their order totals, per currency. An
+   * upper bound on the refunds — what each order is owed depends on what it holds. `total` is a
+   * decimal string.
+   */
+  refund_ceiling: Array<{ currency: string; orders: number; total: string }>;
+}
+
+/** The proposed meaning: a mapping for a custom status, or a policy for the `trash` row. */
+export type ProposedMeaning =
+  | { status: string; stock_bucket: string; dispatch_status: string }
+  | { status: 'trash'; trash_policy: string };
+
+export function fetchStatusMeaningImpact(
+  ctx: AdminContext,
+  proposed: ProposedMeaning,
+): Promise<StatusMeaningImpact> {
+  return api(ctx).get<StatusMeaningImpact>(ROUTE_STATUS_MEANING, { params: proposed });
+}
+
+/** One chunk of applying a status's saved meaning to the open orders in it. */
+export interface StatusMeaningChunk {
+  effect: StatusMeaningEffect;
+  processed: number;
+  /** Host order ids that could not be updated; each is untouched. */
+  failed: number[];
+  last_id: number;
+  done: boolean;
+}
+
+/**
+ * The merchant-facing reason the apply route refused, when it gave one: it answers a refusal as
+ * `{ error: <translated sentence> }`. Read here, where the route's contract is known — the shared
+ * client does not treat `error` as a message, because other routes use the key for a slug. Null for
+ * anything else (a network failure, a body without one), which the caller words for itself.
+ */
+export function statusMeaningRefusal(err: unknown): string | null {
+  if (!(err instanceof ApiError) || err.status < 400 || err.status >= 500) return null;
+  const body = err.body;
+  if ('object' !== typeof body || null === body) return null;
+  const message = (body as { error?: unknown }).error;
+
+  return 'string' === typeof message && '' !== message ? message : null;
+}
+
+export function applyStatusMeaningChunk(
+  ctx: AdminContext,
+  status: string,
+  after: number,
+): Promise<StatusMeaningChunk> {
+  return api(ctx).post<StatusMeaningChunk>(`${ROUTE_STATUS_MEANING}/apply`, { status, after });
 }
 
 /** @param policies slug → { stock_bucket, dispatch_status } for custom (non-core) statuses. */

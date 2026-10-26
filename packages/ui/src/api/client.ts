@@ -133,6 +133,30 @@ export interface InvFluxApi {
   url: (route: string) => string;
 }
 
+/** The methods sent as POST with `X-HTTP-Method-Override` — see {@link wireMethod}. */
+const TUNNELED_METHODS = new Set(['PUT', 'PATCH', 'DELETE']);
+
+/**
+ * The method to put on the wire for `method`, and the headers that name the real one.
+ *
+ * PUT, PATCH and DELETE go out as POST with `X-HTTP-Method-Override: <method>`, which
+ * `WP_REST_Server` honours, so the route sees the real method. Some hosts and firewalls block those
+ * methods or drop their body — WordPress Playground, which serves the public demo, hands a PATCH's
+ * JSON body to PHP as nothing, so every parameter arrives missing and the route answers a confusing
+ * 422. WordPress's own `api-fetch` sends them the same way for the same reason. GET and POST are
+ * sent as they are.
+ *
+ * Exported for the few callers that build their own `fetch`; everything through
+ * {@link createInvFluxApi} gets it already.
+ */
+export function wireMethod(method: string): { method: string; headers: Record<string, string> } {
+  const upper = method.toUpperCase();
+
+  return TUNNELED_METHODS.has(upper)
+    ? { method: 'POST', headers: { 'X-HTTP-Method-Override': upper } }
+    : { method: upper, headers: {} };
+}
+
 export function createInvFluxApi(context: ApiContext): InvFluxApi {
   // Deliberately not through `raw`, which reads the body as text to parse it — that would decode a
   // binary export as UTF-8 and corrupt it. An *error* still comes back as JSON, so the failure path
@@ -156,12 +180,14 @@ export function createInvFluxApi(context: ApiContext): InvFluxApi {
     body: unknown,
     options: RequestOptions,
   ): Promise<{ status: number; payload: unknown; ok: boolean }> {
+    const wire = wireMethod(method);
     const headers: Record<string, string> = {
       Accept: 'application/json',
       'X-WP-Nonce': context.nonce,
+      ...wire.headers,
       ...options.headers,
     };
-    const init: RequestInit = { method, headers };
+    const init: RequestInit = { method: wire.method, headers };
     if (body !== undefined) {
       headers['Content-Type'] ??= 'application/json';
       init.body = JSON.stringify(body);

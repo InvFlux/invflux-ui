@@ -6,7 +6,7 @@
  * node-environment unit test that has no Solid renderer. A client is not a component; it gets its
  * own entry point, the same way `./nav` already does.
  */
-export { createInvFluxApi, path, ns } from './client';
+export { createInvFluxApi, path, ns, wireMethod } from './client';
 export type { ApiContext, InvFluxApi, RequestOptions, PartialResult } from './client';
 export { ApiError, isRetryable } from './errors';
 

@@ -7,8 +7,9 @@ import { PortalCtx } from '@invflux/ui';
 import { App as AdminApp } from '@invflux/admin/src/App';
 import type { AdminContext } from '@invflux/admin/src/types';
 import { useSearchParams } from '@solidjs/router';
-import { type JSX, useContext } from 'solid-js';
+import { type JSX, onCleanup, useContext } from 'solid-js';
 import { useApp } from '../../context';
+import { mirroredSearchParam, settingsDeepLink } from './deepLink';
 
 /**
  * System-wide **Settings** surface (stage c). Opened from the
@@ -23,7 +24,25 @@ import { useApp } from '../../context';
 export default function SettingsSection(): JSX.Element {
   const app = useApp();
   const portalRoot = useContext(PortalCtx);
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
+
+  // `?q=` mirrors the search box, so a filtered view is shareable, bookmarkable and survives a
+  // reload. Written with `replace` and on a short timer, for two separate reasons: pushed per
+  // keystroke it would turn the back button into an undo-by-letter walk out of the merchant's own
+  // search, and Safari rate-limits `replaceState`, so a write per keypress can simply be dropped.
+  //
+  // The timer means the URL ALWAYS LAGS the box during typing, which is a condition the inbound
+  // half has to tolerate rather than race — see `followUrlSearch`. Do not remove the debounce to
+  // "fix" a field that wipes itself; that was the symptom, not the cause.
+  let mirror: ReturnType<typeof setTimeout> | undefined;
+  const mirrorSearch = (term: string): void => {
+    clearTimeout(mirror);
+    mirror = setTimeout(() => {
+      // Dropped rather than left empty: `?q=` with nothing after it is noise in a shared link.
+      setParams({ q: mirroredSearchParam(term) }, { replace: true });
+    }, 250);
+  };
+  onCleanup(() => clearTimeout(mirror));
 
   const context: AdminContext = {
     apiRoot: app.apiRoot,
@@ -39,8 +58,19 @@ export default function SettingsSection(): JSX.Element {
     // link arriving while Settings has already been visited never re-runs this component. Read at
     // access time instead, and the effect on the other side sees the change.
     get startOnDecisions(): boolean {
-      return '1' === params.decisions;
+      return settingsDeepLink(params).decisions;
     },
+    // Getters for the same reason as above: this section stays mounted, so a second arrival by a
+    // link must be read at access time rather than captured when the component first ran.
+    get startSearch(): string {
+      return settingsDeepLink(params).search;
+    },
+    // `?section=` carries an outline KEY, not a search term — a term would be the section's
+    // translated label, so a link minted on an English install would match nothing in French.
+    get revealSection(): string | undefined {
+      return settingsDeepLink(params).revealSection;
+    },
+    onSearchChange: mirrorSearch,
   };
 
   return <AdminApp context={context} portalRoot={portalRoot as HTMLElement} />;

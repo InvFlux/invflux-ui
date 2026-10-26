@@ -83,15 +83,6 @@ interface PoReceiveGridProps {
   damaged: Accessor<Record<number, number | null>>;
   setRecv: (id: number, v: number | null) => void;
   setDmg: (id: number, v: number | null) => void;
-  /**
-   * Whether barcode (GTIN) matching is available — it is an add-on capability, while name, SKU and
-   * supplier-SKU matching are not.
-   *
-   * Taken as a prop rather than read from a surrounding context, because this grid is mounted from
-   * two surfaces now: the receiving surface a dock worker reaches, and procurement. A context lookup
-   * would tie the grid to the one that happens to provide it and throw on the other.
-   */
-  hasPro: boolean;
 }
 
 /**
@@ -118,8 +109,6 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
     return row.qtyReceived + (s ?? 0);
   };
 
-  const isPro = props.hasPro; // barcode (GTIN) matching is Pro; name / SKU / supplier-SKU are Essentials
-
   // ── Expected qty (read-only) ───────────────────────────────────────────────────────────────────
   // The supplier-confirmed baseline — a per-line order property set pre-arrival (ASN / invoice / a
   // separate entry workflow, not at GR). When unset it INHERITS the ordered qty (rendered faded); the
@@ -143,7 +132,7 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
   // Quick-filter: fuzzy-match the rows on the identifier fields; non-matching lines hide immediately.
   const [filterText, setFilterText] = createSignal('');
   const matchFields = (l: PoLine): Array<string | null> =>
-    isPro ? [l.productLabel, l.sku, l.supplierSku, l.gtin] : [l.productLabel, l.sku, l.supplierSku];
+    [l.productLabel, l.sku, l.supplierSku, l.gtin];
   const visibleLines = createMemo<PoLine[]>(() =>
     '' === filterText().trim()
       ? props.lines
@@ -614,9 +603,7 @@ export function PoReceiveGrid(props: PoReceiveGridProps): JSX.Element {
             onInput={setFilterText}
             onLeave={onFilterLeave}
             ref={(focus) => (focusFilter = focus)}
-            placeholder={
-              isPro ? __('Filter or scan — name / SKU / barcode…') : __('Filter — name or SKU…')
-            }
+            placeholder={__('Filter or scan — name / SKU / barcode…')}
           />
         </div>
         {/* GR-variance baseline toggle — the operator's choice persists (receiver vs expected, purchasing

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { createInvFluxApi, path, ns, filenameFromDisposition } from './client';
+import { createInvFluxApi, path, ns, filenameFromDisposition, wireMethod } from './client';
 import { ApiError, isRetryable } from './errors';
 
 /**
@@ -51,6 +51,54 @@ describe('URL construction', () => {
     await createInvFluxApi(CTX).get('/x');
     const headers = fetchMock.mock.calls[0][1].headers as Record<string, string>;
     expect(headers['X-WP-Nonce']).toBe('abc123');
+  });
+});
+
+/**
+ * WordPress Playground (the public demo) hands a PATCH's JSON body to PHP as nothing, and some hosts
+ * and firewalls block PUT/PATCH/DELETE outright: on the demo, staging a line answered 422 "stagedQty
+ * must be an integer." So those go out as POST with `X-HTTP-Method-Override`, which WP_REST_Server
+ * honours — the route still sees the real method.
+ */
+describe('PUT, PATCH and DELETE are tunnelled through POST', () => {
+  it.each([
+    ['patch', 'PATCH'],
+    ['put', 'PUT'],
+    ['del', 'DELETE'],
+  ] as const)('%s goes out as POST naming %s, with its body intact', async (verb, method) => {
+    const fetchMock = mockFetch(json({ ok: true }));
+    await createInvFluxApi(CTX)[verb]('/dispatch/orders/x/lines/1', { stagedQty: 2 });
+
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(init.method).toBe('POST');
+    expect((init.headers as Record<string, string>)['X-HTTP-Method-Override']).toBe(method);
+    expect(init.body).toBe(JSON.stringify({ stagedQty: 2 }));
+  });
+
+  it('a partial write goes the same way', async () => {
+    const fetchMock = mockFetch(json({ applied: [], errors: {} }));
+    await createInvFluxApi(CTX).partial('PUT', '/settings', { changes: [] });
+
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(init.method).toBe('POST');
+    expect((init.headers as Record<string, string>)['X-HTTP-Method-Override']).toBe('PUT');
+  });
+
+  it('GET and POST are sent as they are, with no override', async () => {
+    const fetchMock = mockFetch(json({}), json({}));
+    await createInvFluxApi(CTX).get('/x');
+    await createInvFluxApi(CTX).post('/x', {});
+
+    for (const [i, method] of [[0, 'GET'], [1, 'POST']] as const) {
+      const init = fetchMock.mock.calls[i][1] as RequestInit;
+      expect(init.method).toBe(method);
+      expect((init.headers as Record<string, string>)['X-HTTP-Method-Override']).toBeUndefined();
+    }
+  });
+
+  it('wireMethod is what hand-built fetches use, whatever case they pass', () => {
+    expect(wireMethod('patch')).toEqual({ method: 'POST', headers: { 'X-HTTP-Method-Override': 'PATCH' } });
+    expect(wireMethod('GET')).toEqual({ method: 'GET', headers: {} });
   });
 });
 

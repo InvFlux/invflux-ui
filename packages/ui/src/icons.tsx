@@ -395,6 +395,23 @@ export function InfoIcon(props: IconProps): JSX.Element {
   );
 }
 
+/**
+ * Warning triangle — Feather's `alert-triangle`. For a consequence the reader must not miss (money
+ * leaving, stock leaving the books), not for a hint, which is {@link InfoIcon}'s job. Stroked in
+ * `currentColor` like the rest of the set, so a surface wanting the road-sign look sets the colors
+ * on the holder: red glyph on a yellow tile.
+ */
+export function WarningIcon(props: IconProps): JSX.Element {
+  const [local, rest] = splitProps(props, ['class']);
+  return (
+    <svg {...strokeProps()} {...rest} class={local.class ?? 'h-4 w-4'}>
+      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+      <path d="M12 9v4" />
+      <path d="M12 17h.01" />
+    </svg>
+  );
+}
+
 /** Archive box — the terminal put-it-away action (a lidded crate, distinct from {@link PackageIcon}). */
 export function ArchiveIcon(props: IconProps): JSX.Element {
   const [local, rest] = splitProps(props, ['class']);

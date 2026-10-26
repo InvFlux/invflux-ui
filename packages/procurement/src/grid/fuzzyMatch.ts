@@ -36,8 +36,8 @@ function matchesField(needle: string, field: string): boolean {
 
 /**
  * True if the needle fuzzy-matches ANY of the row's match fields. An empty/whitespace needle matches
- * everything (no filter). Nullish fields are skipped. The caller supplies `fields` (tier-gated: e.g.
- * `[name, sku]` at Essentials, `+ gtin` at Pro).
+ * everything (no filter). Nullish fields are skipped. The caller supplies `fields`: the identifiers it
+ * has to match against (name, SKU, supplier SKU, and every barcode it was handed).
  */
 export function fuzzyMatches(needle: string, fields: Array<string | null | undefined>): boolean {
   const n = norm(needle);

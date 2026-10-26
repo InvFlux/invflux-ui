@@ -1,5 +1,6 @@
 import { windowUrlPort, type UrlParamsPort } from '../urlPort';
 import { createViewportFill, ErrorBanner, useHostNav } from '@invflux/ui';
+import { wireMethod } from '@invflux/ui/api';
 import {
   createEffect,
   createMemo,
@@ -186,12 +187,14 @@ async function postJson<T>(
   body: unknown,
   method = 'POST',
 ): Promise<T> {
+  const wire = wireMethod(method);
   const res = await fetch(`${ctx.apiRoot.replace(/\/$/, '')}/invflux/v1${path}`, {
-    method,
+    method: wire.method,
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
       'X-WP-Nonce': ctx.nonce,
+      ...wire.headers,
     },
     credentials: 'same-origin',
     body: JSON.stringify(body),
@@ -2357,6 +2360,7 @@ export function WorkbenchGrid(
           trigger={
             <>
               {sprintf(
+                /* translators: %d: number of products the bulk actions will apply to (the selection, else all loaded). */
                 __('Bulk actions (%d products)…'),
                 selectedSubjectIds().length > 0 ? selectedSubjectIds().length : loadedCount(),
               )}
@@ -2517,6 +2521,7 @@ export function WorkbenchGrid(
               {
                 id: 'bulk-actions',
                 label: sprintf(
+                  /* translators: %d: number of selected rows the bulk action will apply to. */
                   _n('Bulk action on %d row…', 'Bulk action on %d rows…', subjectIds.length),
                   subjectIds.length,
                 ),

@@ -1,8 +1,19 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  Match,
+  onCleanup,
+  onMount,
+  Show,
+  Switch,
+} from 'solid-js';
+import { followUrlSearch } from './followUrlSearch';
 import { Dynamic } from 'solid-js/web';
 import { createStore, reconcile } from 'solid-js/store';
 import { createQuery, useQueryClient } from '@tanstack/solid-query';
-import { __, _n, _x, formatDateTime, sprintf } from '@invflux/i18n';
+import { __, _n, _x, formatDateTime, formatMoney, sprintf } from '@invflux/i18n';
 import {
   ErrorBanner,
   Button,
@@ -22,11 +33,16 @@ import {
   ModalFooter,
   ModalHeader,
   ModalPanel,
+  Spinner,
+  WarningIcon,
 } from '@invflux/ui';
 import { ImportAliasSection, IMPORT_ALIASES_QUERY_KEY } from './ImportAliasSection';
 import {
+  applyStatusMeaningChunk,
   commitSettings,
   fetchSettings,
+  fetchStatusMeaningImpact,
+  statusMeaningRefusal,
   fetchOrderStatusPolicies,
   fetchPaymentGatewayPolicies,
   fetchPluginPolicies,
@@ -39,6 +55,9 @@ import {
   type PaymentGatewayPolicy,
   type PluginPolicyRow,
   type PluginPolicyData,
+  type ProposedMeaning,
+  type StatusMeaningEffect,
+  type StatusMeaningImpact,
 } from '../api';
 import type { AdminContext } from '../types';
 // Brand SVGs inlined as markup (?raw → bundled into the JS, no separate asset file to enqueue).
@@ -54,6 +73,30 @@ const SECTION_ORDER_STATUS = '__order_status__';
 const SECTION_PAYMENT_GATEWAYS = '__payment_gateways__';
 const SECTION_PLUGIN_META = '__plugin_meta__';
 const SECTION_IMPORT_ALIASES = '__import_aliases__';
+/** The catalog setting that says what trashing an order means — the `trash` row's only editor. */
+const TRASH_POLICY_SETTING = 'orders.trash_policy';
+
+/**
+ * A status whose meaning this save changes: a custom status's mapping, or the trash policy.
+ * `errorKey` is where the save reports a failure for it.
+ */
+interface MeaningChange {
+  status: string;
+  label: string;
+  errorKey: string;
+  proposed: ProposedMeaning;
+}
+
+/** Progress of applying a saved meaning to the orders already in its status. */
+interface ApplyProgress {
+  label: string;
+  done: number;
+  total: number;
+}
+
+/** Money leaves, or stock leaves the books — what turns the guard red. */
+const isDangerousEffect = (effect: StatusMeaningEffect | undefined): boolean =>
+  'cancel' === effect || 'ship' === effect;
 
 interface SettingsViewProps {
   context: AdminContext;
@@ -180,6 +223,159 @@ export function SettingsView(props: SettingsViewProps) {
       pgChanges().length +
       ('' !== pmRegister() ? 1 : 0),
   );
+  // ── Changing what a status means while orders sit in it ───────────────────────────────────────
+  // A status's meaning only acts on orders as they enter it, so the review asks, per changed
+  // status, whether the new meaning should also reach the orders already there. Only from now on
+  // unless ticked; canceled orders are never reached.
+  const meaningChanges = createMemo((): MeaningChange[] => {
+    const out: MeaningChange[] = [];
+    for (const r of osChanges()) {
+      const v = osValue(r);
+      if (v.stock_bucket === r.stock_bucket && v.dispatch_status === r.dispatch_status) continue;
+      out.push({
+        status: r.status_slug,
+        label: r.label,
+        errorKey: `order-status:${r.status_slug}`,
+        proposed: {
+          status: r.status_slug,
+          stock_bucket: v.stock_bucket,
+          dispatch_status: v.dispatch_status,
+        },
+      });
+    }
+    const trash = dirtyRows().find((row) => TRASH_POLICY_SETTING === row.name);
+    const policy = undefined === trash ? undefined : effectiveValue(trash);
+    if (undefined !== trash && 'string' === typeof policy) {
+      out.push({
+        status: 'trash',
+        // The row's own label, so the review names it as the order-status table does.
+        label: osRows().find((r) => 'trash' === r.status_slug)?.label ?? trash.title ?? trash.name,
+        errorKey: trash.name,
+        proposed: { status: 'trash', trash_policy: policy },
+      });
+    }
+
+    return out;
+  });
+  // Read when the review opens, never cached: it counts orders, which move on their own.
+  const impactQuery = createQuery(() => {
+    // Read here, in the tracked options, so the key and the fetch see the same set.
+    const changes = meaningChanges();
+    const ctx = props.context;
+
+    return {
+      queryKey: ['invflux-status-meaning-impact', changes.map((c) => c.proposed)] as const,
+      queryFn: async (): Promise<Record<string, StatusMeaningImpact | null>> =>
+        Object.fromEntries(
+          await Promise.all(
+            changes.map(
+              async (c) =>
+                [
+                  c.status,
+                  await fetchStatusMeaningImpact(ctx, c.proposed).catch(() => null),
+                ] as const,
+            ),
+          ),
+        ),
+      enabled: modalOpen() && changes.length > 0,
+      staleTime: 0,
+      gcTime: 0,
+    };
+  });
+  /** Undefined while loading, null when the check failed. */
+  const impactOf = (c: MeaningChange): StatusMeaningImpact | null | undefined =>
+    impactQuery.data?.[c.status];
+  /** Per status: "also apply it now to the orders already there". Unticked is the default. */
+  const [applyNow, setApplyNow] = createStore<Record<string, boolean>>({});
+  /** What this save will apply: ticked, reaching at least one open order, and permitted. */
+  const plannedApplies = createMemo(() =>
+    meaningChanges().filter((c) => {
+      const impact = impactOf(c);
+
+      return true === applyNow[c.status] && !!impact && impact.open > 0 && impact.can_apply;
+    }),
+  );
+  const applyIsDangerous = (): boolean =>
+    plannedApplies().some((c) => isDangerousEffect(impactOf(c)?.effect));
+  const [applyProgress, setApplyProgress] = createSignal<ApplyProgress | null>(null);
+  /** What went wrong while applying, kept on screen after the save; null when nothing did. */
+  const [applyOutcome, setApplyOutcome] = createSignal<string[] | null>(null);
+
+  /**
+   * Drive each planned apply to completion, a chunk per request, after the save has landed — the
+   * server applies the meaning it has *stored*, so it must already be the new one.
+   */
+  async function runApplies(plan: Array<{ change: MeaningChange; total: number }>): Promise<void> {
+    const notes: string[] = [];
+    for (const { change, total } of plan) {
+      setApplyProgress({ label: change.label, done: 0, total });
+      let after = 0;
+      let reached = 0;
+      const failed: number[] = [];
+      try {
+        for (;;) {
+          const chunk = await applyStatusMeaningChunk(props.context, change.status, after);
+          reached += chunk.processed + chunk.failed.length;
+          failed.push(...chunk.failed);
+          setApplyProgress({ label: change.label, done: reached, total });
+          // A chunk that did not advance would repeat forever; the server says done on a short one.
+          if (chunk.done || chunk.last_id === after) break;
+          after = chunk.last_id;
+        }
+      } catch (err) {
+        // The server's own reason when it refused (a permission revoked, the status changed in
+        // another tab); "stopped partway" only where that is what happened, or nothing better is known.
+        const reason = statusMeaningRefusal(err);
+        if (reached > 0 || null === reason) {
+          notes.push(
+            sprintf(
+              /* translators: %s: an order status name. */
+              __(
+                '%s: applying stopped partway. The orders it had not reached keep their previous treatment.',
+              ),
+              change.label,
+            ),
+          );
+        }
+        if (null !== reason) {
+          notes.push(
+            sprintf(
+              /* translators: 1: an order status name. 2: why the change could not be applied, a full sentence. */
+              __('%1$s: %2$s'),
+              change.label,
+              reason,
+            ),
+          );
+        }
+      }
+      if (failed.length > 0) {
+        notes.push(
+          sprintf(
+            /* translators: 1: an order status name. 2: how many orders. 3: their order numbers, comma-separated. */
+            _n(
+              '%1$s: %2$d order could not be updated and is unchanged: #%3$s.',
+              '%1$s: %2$d orders could not be updated and are unchanged: #%3$s.',
+              failed.length,
+            ),
+            change.label,
+            failed.length,
+            failed.join(', #'),
+          ),
+        );
+      }
+    }
+    setApplyProgress(null);
+    if (notes.length > 0) setApplyOutcome(notes);
+    else setModalOpen(false);
+  }
+
+  const closeModal = (): void => {
+    // Not mid-apply: the loop would carry on behind a closed dialog with nobody told how it ended.
+    if (null !== applyProgress()) return;
+    setModalOpen(false);
+    setApplyOutcome(null);
+  };
+
   // Modified = the effective (staged-or-persisted) value differs from the catalog default — the
   // persistent blue gutter indicator (VSCode's "modified" marker), distinct from unsaved/dirty.
   const isModified = (row: SettingRow): boolean =>
@@ -342,6 +538,11 @@ export function SettingsView(props: SettingsViewProps) {
     const pgPayload: Record<string, PaymentGatewayAnswer> = {};
     for (const r of pgChanges()) pgPayload[r.gateway_id] = pgValue(r);
     const register = pmRegister();
+    // Taken now: saving clears the staged edits these are derived from.
+    const plan = plannedApplies().map((change) => ({
+      change,
+      total: impactOf(change)?.open ?? 0,
+    }));
 
     setSaving(true);
     const errors: Record<string, string> = {};
@@ -377,11 +578,14 @@ export function SettingsView(props: SettingsViewProps) {
       setPmDirty(reconcile({}));
       setPgDirty(reconcile({}));
       setPmRegister('');
-      setModalOpen(false);
+      setApplyNow(reconcile({}));
       void queryClient.invalidateQueries({ queryKey: QUERY_KEY });
       void queryClient.invalidateQueries({ queryKey: OS_QUERY_KEY });
       void queryClient.invalidateQueries({ queryKey: PM_QUERY_KEY });
       void queryClient.invalidateQueries({ queryKey: PG_QUERY_KEY });
+      // Everything saved, so every planned apply now reads its new meaning on the server.
+      if (plan.length > 0) await runApplies(plan);
+      else setModalOpen(false);
     } else {
       // Nothing (or only some endpoints) persisted; surface errors and keep the modal open.
       setServerErrors(errors);
@@ -407,6 +611,64 @@ export function SettingsView(props: SettingsViewProps) {
   const scrollToGroup = (key: string): void => {
     sectionEls.get(key)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
+
+  // ── Deep links from the host's URL ──────────────────────────────────────────
+  //
+  // Both read through `props.context`, never from `location`: this package owns no router, and the
+  // host already mediates `startOnDecisions` the same way.
+
+  // The search term follows the URL verbatim, empty included — an empty one means the merchant
+  // cleared the box rather than that there is nothing to say. The local term is read untracked
+  // inside, which is what stops a two-way mirror from fighting the person typing; the reasoning and
+  // the regression test live beside the primitive.
+  followUrlSearch(
+    () => props.context.startSearch,
+    search,
+    (term) => setSearch(term),
+  );
+
+  // Revealing a section has to wait for it to exist. The bespoke policy tables render only once
+  // their own query resolves, so a scroll attempted on mount finds nothing — hence the tick, bumped
+  // as each section registers, which re-runs this effect until the target appears.
+  const [sectionTick, setSectionTick] = createSignal(0);
+  const [revealed, setRevealed] = createSignal<string | null>(null);
+  createEffect(() => {
+    const key = props.context.revealSection;
+    sectionTick();
+    if (undefined === key || '' === key) return;
+    // Once per target. Re-scrolling on a later registration would yank the page out from under a
+    // merchant who has already started reading somewhere else.
+    if (revealed() === key) return;
+
+    // Cleared before the element is looked for, not after: this filter hides the bespoke sections
+    // wholesale, so while it is on the target never renders and the scroll could never happen.
+    setOnlyDecisions(false);
+
+    const el = sectionEls.get(key);
+    if (undefined === el) return;
+
+    setRevealed(key);
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+
+  /**
+   * The merchant typed in the search box: hold it locally and tell the host, which mirrors it into
+   * the URL so the filtered view can be shared, bookmarked and reloaded.
+   */
+  const onSearchInput = (term: string): void => {
+    setSearch(term);
+    props.context.onSearchChange?.(term);
+  };
+
+  /** Register a section's element, and let the reveal effect know one more exists. */
+  const registerSection =
+    (key: string) =>
+    (el: HTMLElement): void => {
+      sectionEls.set(key, el);
+      // Out of the render phase: setting a signal while the DOM is being built is how a ref turns
+      // into a re-entrant update.
+      queueMicrotask(() => setSectionTick((n) => n + 1));
+    };
 
   // Order-status rows that are not statuses but things WooCommerce does to an order (trashing,
   // deleting): shown in the table, decided by a setting, never edited here.
@@ -547,7 +809,7 @@ export function SettingsView(props: SettingsViewProps) {
           class="w-full"
           placeholder={__('Search settings…')}
           value={search()}
-          onInput={(e) => setSearch(e.currentTarget.value)}
+          onInput={(e) => onSearchInput(e.currentTarget.value)}
         />
         <div class="mt-2 flex flex-wrap items-center gap-4">
           <label class="flex w-fit cursor-pointer items-center gap-2 text-sm text-text-muted">
@@ -638,7 +900,7 @@ export function SettingsView(props: SettingsViewProps) {
           <div class="min-w-0 flex-1 space-y-10 overflow-y-auto p-4">
             <For each={groups()}>
               {(group) => (
-                <section ref={(el) => sectionEls.set(group.key, el)} class="scroll-mt-4">
+                <section ref={registerSection(group.key)} class="scroll-mt-4">
                   <h2 class="mb-4 text-lg font-semibold">{group.label.replace('/', ' › ')}</h2>
                   <div class="space-y-6">
                     <For each={group.rows}>{(row) => <SettingRowView row={row} />}</For>
@@ -649,7 +911,7 @@ export function SettingsView(props: SettingsViewProps) {
 
             {/* Bespoke policy-table sections (not catalog settings — see SettingsPolicyController). */}
             <Show when={showOrderStatus()}>
-              <section ref={(el) => sectionEls.set(SECTION_ORDER_STATUS, el)} class="scroll-mt-4">
+              <section ref={registerSection(SECTION_ORDER_STATUS)} class="scroll-mt-4">
                 <h2 class="mb-1 text-lg font-semibold">{osSectionLabel()}</h2>
                 <p class="mb-4 text-sm text-text-muted">
                   {__(
@@ -661,7 +923,7 @@ export function SettingsView(props: SettingsViewProps) {
             </Show>
 
             <Show when={showPluginMeta()}>
-              <section ref={(el) => sectionEls.set(SECTION_PLUGIN_META, el)} class="scroll-mt-4">
+              <section ref={registerSection(SECTION_PLUGIN_META)} class="scroll-mt-4">
                 <h2 class="mb-1 text-lg font-semibold">{pmSectionLabel()}</h2>
                 <p class="mb-4 text-sm text-text-muted">
                   {__(
@@ -673,10 +935,7 @@ export function SettingsView(props: SettingsViewProps) {
             </Show>
 
             <Show when={showPaymentGateways()}>
-              <section
-                ref={(el) => sectionEls.set(SECTION_PAYMENT_GATEWAYS, el)}
-                class="scroll-mt-4"
-              >
+              <section ref={registerSection(SECTION_PAYMENT_GATEWAYS)} class="scroll-mt-4">
                 <h2 class="mb-1 text-lg font-semibold">{pgSectionLabel()}</h2>
                 <p class="mb-4 text-sm text-text-muted">
                   {__(
@@ -688,7 +947,7 @@ export function SettingsView(props: SettingsViewProps) {
             </Show>
 
             <Show when={showImportAliases()}>
-              <section ref={(el) => sectionEls.set(SECTION_IMPORT_ALIASES, el)} class="scroll-mt-4">
+              <section ref={registerSection(SECTION_IMPORT_ALIASES)} class="scroll-mt-4">
                 <h2 class="mb-1 text-lg font-semibold">{aliasSectionLabel()}</h2>
                 <p class="mb-4 text-sm text-text-muted">
                   {__(
@@ -732,10 +991,7 @@ export function SettingsView(props: SettingsViewProps) {
                 parts.push(
                   null === v.color_id
                     ? __('color: default')
-                    : sprintf(
-                        __('color: %s'),
-                        TAG_PALETTE[v.color_id]?.name ?? String(v.color_id),
-                      ),
+                    : sprintf(__('color: %s'), TAG_PALETTE[v.color_id]?.name ?? String(v.color_id)),
                 );
               }
 
@@ -762,10 +1018,21 @@ export function SettingsView(props: SettingsViewProps) {
           oldValue={(row) => row.value}
           newValue={(row) => effectiveValue(row)}
           error={(row) => clientErrors()[row.name] ?? null}
-          canSave={!hasBlockingErrors() && !saving()}
+          meaning={meaningChanges().map((change) => ({
+            status: change.status,
+            label: change.label,
+            impact: impactOf(change),
+            checked: true === applyNow[change.status],
+            onToggle: (on: boolean) => setApplyNow(change.status, on),
+          }))}
+          applying={plannedApplies().length > 0}
+          danger={applyIsDangerous()}
+          progress={applyProgress()}
+          outcome={applyOutcome()}
+          canSave={!hasBlockingErrors() && !saving() && null === applyProgress()}
           saving={saving()}
           onConfirm={() => void save()}
-          onCancel={() => setModalOpen(false)}
+          onCancel={closeModal}
         />
       </Show>
     </div>
@@ -1403,10 +1670,185 @@ interface SummaryModalProps {
   oldValue: (row: SettingRow) => unknown;
   newValue: (row: SettingRow) => unknown;
   error: (row: SettingRow) => string | null;
+  /** One entry per status whose meaning this save changes. */
+  meaning: MeaningImpactBlockProps[];
+  /** Whether the save will also apply a meaning to orders already in a status. */
+  applying: boolean;
+  /** Whether that apply moves money or ships stock — the confirm turns red. */
+  danger: boolean;
+  /** Set while the apply runs, after the save. */
+  progress: ApplyProgress | null;
+  /** What went wrong while applying; the dialog then only reports it. */
+  outcome: string[] | null;
   canSave: boolean;
   saving: boolean;
   onConfirm: () => void;
   onCancel: () => void;
+}
+
+interface MeaningImpactBlockProps {
+  status: string;
+  label: string;
+  /** Undefined while loading, null when the check failed. */
+  impact: StatusMeaningImpact | null | undefined;
+  checked: boolean;
+  onToggle: (on: boolean) => void;
+}
+
+/** What applying does to the open orders, in the merchant's terms. */
+function effectText(impact: StatusMeaningImpact): string {
+  const n = impact.open;
+  switch (impact.effect) {
+    case 'cancel': {
+      const ceiling = impact.refund_ceiling
+        .map((row) => formatMoney(Number(row.total), row.currency))
+        .join(', ');
+      const what = sprintf(
+        _n(
+          'Applying it cancels %d order now and puts its stock back on sale. If the order was paid, the customer is refunded straight away: through the payment gateway where it supports refunds, otherwise as a manual refund for you to settle.',
+          'Applying it cancels %d orders now and puts their stock back on sale. Every paid order is refunded straight away: through the payment gateway where it supports refunds, otherwise as a manual refund for you to settle.',
+          n,
+        ),
+        n,
+      );
+
+      return '' === ceiling
+        ? what
+        : `${what} ${sprintf(
+            /* translators: %s: one or more amounts with their currency, comma-separated. */
+            __('Refunds total at most %s.'),
+            ceiling,
+          )}`;
+    }
+    case 'ship':
+      return sprintf(
+        _n(
+          'Applying it marks %d order as shipped now. Its stock leaves your on-hand count, and this cannot be undone here.',
+          'Applying it marks %d orders as shipped now. Their stock leaves your on-hand count, and this cannot be undone here.',
+          n,
+        ),
+        n,
+      );
+    case 'commit':
+      return sprintf(
+        _n(
+          'Applying it commits stock to %d order now.',
+          'Applying it commits stock to %d orders now.',
+          n,
+        ),
+        n,
+      );
+    case 'hold':
+      return sprintf(
+        _n(
+          'Applying it holds %d order out of the dispatch queue now.',
+          'Applying it holds %d orders out of the dispatch queue now.',
+          n,
+        ),
+        n,
+      );
+    case 'resume':
+      return sprintf(
+        _n(
+          'Applying it returns %d order to the dispatch queue now, if InvFlux is holding it for this status.',
+          'Applying it returns %d orders to the dispatch queue now, where InvFlux is holding them for this status.',
+          n,
+        ),
+        n,
+      );
+  }
+}
+
+/**
+ * One changed status in the review: who is already in it, and the choice to apply the new meaning
+ * to them now. Canceled orders are counted and left alone. A cancel or a ship is shown as a warning
+ * — red text beside a red-on-yellow glyph — because applying it refunds money or ships stock.
+ */
+function MeaningImpactBlock(props: MeaningImpactBlockProps) {
+  return (
+    <li
+      class="rounded border border-border p-2 text-sm"
+      data-testid="status-meaning-block"
+      data-status={props.status}
+    >
+      <div class="font-medium">{props.label}</div>
+      <Switch>
+        <Match when={undefined === props.impact}>
+          <p class="mt-1 flex items-center gap-2 text-xs text-text-muted">
+            <Spinner />
+            {__('Checking the orders already in this status…')}
+          </p>
+        </Match>
+        <Match when={null === props.impact}>
+          <p class="mt-1 text-xs text-text-muted">
+            {__(
+              'The orders already in this status could not be checked. Saving changes only the orders that enter it from now on.',
+            )}
+          </p>
+        </Match>
+        <Match when={props.impact}>
+          {(impact) => (
+            <div class="mt-1 space-y-2">
+              <Show when={0 === impact().open && 0 === impact().canceled}>
+                <p class="text-xs text-text-muted">{__('No orders are in this status now.')}</p>
+              </Show>
+              <Show when={impact().canceled > 0 && 'cancel' !== impact().effect}>
+                <p class="text-xs text-text-muted" data-testid="status-meaning-canceled">
+                  {sprintf(
+                    _n(
+                      '%d order in this status is cancelled. It stays cancelled; restore it to bring it back.',
+                      '%d orders in this status are cancelled. They stay cancelled; restore any you want back.',
+                      impact().canceled,
+                    ),
+                    impact().canceled,
+                  )}
+                </p>
+              </Show>
+              <Show when={impact().open > 0}>
+                <Checkbox
+                  data-testid="status-meaning-apply"
+                  checked={props.checked}
+                  disabled={!impact().can_apply}
+                  onChange={(e) => props.onToggle(e.currentTarget.checked)}
+                  label={sprintf(
+                    _n(
+                      'Also apply it now to the %d open order already in this status',
+                      'Also apply it now to the %d open orders already in this status',
+                      impact().open,
+                    ),
+                    impact().open,
+                  )}
+                />
+                <Show when={!impact().can_apply}>
+                  <p class="text-xs text-text-muted">
+                    {'ship' === impact().effect
+                      ? __('Applying this needs the permission to dispatch orders.')
+                      : __(
+                          'Applying this needs the permission to process corrections and refunds.',
+                        )}
+                  </p>
+                </Show>
+                <Show
+                  when={isDangerousEffect(impact().effect)}
+                  fallback={<p class="text-xs text-text-muted">{effectText(impact())}</p>}
+                >
+                  <div
+                    class="flex items-start gap-3 rounded border border-red-300 bg-red-50 p-2"
+                    data-testid="status-meaning-danger"
+                  >
+                    <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded bg-yellow-300">
+                      <WarningIcon class="h-5 w-5 text-red-600" />
+                    </span>
+                    <p class="font-medium text-red-700">{effectText(impact())}</p>
+                  </div>
+                </Show>
+              </Show>
+            </div>
+          )}
+        </Match>
+      </Switch>
+    </li>
+  );
 }
 
 function display(value: unknown, row?: SettingRow): string {
@@ -1427,7 +1869,8 @@ function SummaryModal(props: SummaryModalProps) {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
-      if (props.canSave) props.onConfirm();
+      // Not for a refund or a shipment: that confirm takes a deliberate click.
+      if (props.canSave && !props.danger) props.onConfirm();
     }
   };
 
@@ -1440,48 +1883,123 @@ function SummaryModal(props: SummaryModalProps) {
     <Modal onClose={props.onCancel} label={__('Review changes')}>
       <ModalPanel size="lg" class="text-text" onKeyDown={onKeyDown}>
         <ModalHeader title={__('Review changes')} />
-        <div class="p-4">
-          <ul class="mb-4 max-h-80 space-y-2 overflow-auto">
-            <For each={props.changes}>
-              {(row) => {
-                const err = props.error(row);
+        <Switch>
+          <Match when={props.progress}>
+            {(progress) => (
+              <div class="p-4" data-testid="status-meaning-progress">
+                <p aria-live="polite">
+                  {sprintf(
+                    /* translators: 1: an order status name. 2: orders done so far. 3: orders to do. */
+                    __('Saved. Applying it to the orders in “%1$s”… %2$d of %3$d'),
+                    progress().label,
+                    progress().done,
+                    progress().total,
+                  )}
+                </p>
+                <div class="mt-2 h-1.5 w-full overflow-hidden rounded bg-slate-200">
+                  <div
+                    class="h-full bg-primary transition-[width]"
+                    style={{
+                      width: `${progress().total > 0 ? Math.min(100, Math.round((progress().done / progress().total) * 100)) : 0}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+          </Match>
+          <Match when={props.outcome}>
+            {(outcome) => (
+              <div class="space-y-2 p-4" data-testid="status-meaning-outcome">
+                <p>{__('Your changes are saved, but not every order could be updated:')}</p>
+                <ul class="list-disc space-y-1 pl-5 text-sm">
+                  <For each={outcome()}>{(note) => <li>{note}</li>}</For>
+                </ul>
+              </div>
+            )}
+          </Match>
+          <Match when={true}>
+            <div class="p-4">
+              <ul class="mb-4 max-h-80 space-y-2 overflow-auto">
+                <For each={props.changes}>
+                  {(row) => {
+                    const err = props.error(row);
 
-                return (
-                  <li class="rounded border border-border p-2">
-                    <div class="flex items-center justify-between gap-2">
-                      <span class="font-medium">{row.title ?? row.name}</span>
-                      <Show when={err}>
-                        <ErrorBanner as="span" class="text-xs">
-                          {err}
-                        </ErrorBanner>
-                      </Show>
-                    </div>
-                    <div class="mt-1 text-xs text-text-muted">
-                      <span class="line-through">{display(props.oldValue(row), row)}</span>
-                      {' → '}
-                      <span class="text-text">{display(props.newValue(row), row)}</span>
-                    </div>
-                  </li>
-                );
-              }}
-            </For>
-            <For each={props.policyChanges}>
-              {(change) => (
-                <li class="rounded border border-border p-2">
-                  <div class="font-medium">{change.label}</div>
-                  <div class="mt-1 text-xs text-text-muted">{change.detail}</div>
-                </li>
-              )}
-            </For>
-          </ul>
-        </div>
+                    return (
+                      <li class="rounded border border-border p-2">
+                        <div class="flex items-center justify-between gap-2">
+                          <span class="font-medium">{row.title ?? row.name}</span>
+                          <Show when={err}>
+                            <ErrorBanner as="span" class="text-xs">
+                              {err}
+                            </ErrorBanner>
+                          </Show>
+                        </div>
+                        <div class="mt-1 text-xs text-text-muted">
+                          <span class="line-through">{display(props.oldValue(row), row)}</span>
+                          {' → '}
+                          <span class="text-text">{display(props.newValue(row), row)}</span>
+                        </div>
+                      </li>
+                    );
+                  }}
+                </For>
+                <For each={props.policyChanges}>
+                  {(change) => (
+                    <li class="rounded border border-border p-2">
+                      <div class="font-medium">{change.label}</div>
+                      <div class="mt-1 text-xs text-text-muted">{change.detail}</div>
+                    </li>
+                  )}
+                </For>
+              </ul>
+              <Show when={props.meaning.length > 0}>
+                <h3 class="mb-1 text-sm font-semibold">
+                  {__('Orders already in a changed status')}
+                </h3>
+                <p class="mb-2 text-xs text-text-muted">
+                  {__(
+                    'A status’s new meaning reaches orders as they enter it. The orders already there keep their current treatment unless you apply it to them now.',
+                  )}
+                </p>
+                <ul class="max-h-80 space-y-2 overflow-auto">
+                  <For each={props.meaning}>{(block) => <MeaningImpactBlock {...block} />}</For>
+                </ul>
+              </Show>
+            </div>
+          </Match>
+        </Switch>
         <ModalFooter>
-          <Button ref={cancelBtn} variant="secondary" eagerFocusRing onClick={props.onCancel}>
-            {__('Cancel')}
-          </Button>
-          <Button eagerFocusRing disabled={!props.canSave} onClick={props.onConfirm}>
-            {props.saving ? __('Saving…') : __('Save')}
-          </Button>
+          <Show
+            when={null === props.outcome}
+            fallback={
+              <Button ref={cancelBtn} eagerFocusRing onClick={props.onCancel}>
+                {__('Close')}
+              </Button>
+            }
+          >
+            <Button
+              ref={cancelBtn}
+              variant="secondary"
+              eagerFocusRing
+              disabled={null !== props.progress}
+              onClick={props.onCancel}
+            >
+              {__('Cancel')}
+            </Button>
+            <Button
+              eagerFocusRing
+              variant={props.danger ? 'danger' : 'primary'}
+              data-testid="settings-save-confirm"
+              disabled={!props.canSave}
+              onClick={props.onConfirm}
+            >
+              {props.saving || null !== props.progress
+                ? __('Saving…')
+                : props.applying
+                  ? __('Save and apply')
+                  : __('Save')}
+            </Button>
+          </Show>
         </ModalFooter>
       </ModalPanel>
     </Modal>

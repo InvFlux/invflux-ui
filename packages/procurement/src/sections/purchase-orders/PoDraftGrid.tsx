@@ -212,7 +212,6 @@ interface PoDraftGridProps {
 export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
   const ctx = useProcurement();
   const portalRoot = usePortalRoot();
-  const isPro = ctx.hasPro; // barcode (GTIN) matching is Pro; name / SKU / supplier-SKU are Essentials
   const api = createApi(ctx);
 
   // On-order drill-down data source (only the on_order column carries hasDrilldown). Fetched by the
@@ -253,7 +252,7 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
   // Quick-filter: fuzzy-match the rows on the identifier fields; non-matching lines hide immediately.
   const [filterText, setFilterText] = createSignal('');
   const matchFields = (l: PoLine): Array<string | null> =>
-    isPro ? [l.productLabel, l.sku, l.supplierSku, l.gtin] : [l.productLabel, l.sku, l.supplierSku];
+    [l.productLabel, l.sku, l.supplierSku, l.gtin];
   const visibleLines = createMemo<PoLine[]>(() =>
     '' === filterText().trim()
       ? props.lines
@@ -997,7 +996,7 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
           onInput={setFilterText}
           onLeave={onFilterLeave}
           ref={(focus) => (focusFilter = focus)}
-          placeholder={isPro ? __('Filter — name / SKU / barcode…') : __('Filter — name or SKU…')}
+          placeholder={__('Filter — name / SKU / barcode…')}
         />
         <Show when={props.toolbarEnd}>
           <div class="flex items-center gap-3">{props.toolbarEnd}</div>

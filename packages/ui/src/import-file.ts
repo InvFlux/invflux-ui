@@ -1,3 +1,5 @@
+import { wireMethod } from './api/client';
+
 /**
  * Shared file-import transport for the {@link ImportWizard}. A picked CSV / TSV / XLSX is uploaded to
  * the adapter's `POST invflux/v1/import/parse` endpoint, which parses it server-side and answers the
@@ -102,12 +104,14 @@ export async function saveImportAliases(
   transport: ImportFileTransport,
   aliases: ImportAliasMap,
 ): Promise<ImportAliasMap> {
+  const wire = wireMethod('PUT');
   const res = await fetch(`${restBase(transport)}/import/aliases`, {
-    method: 'PUT',
+    method: wire.method,
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
       'X-WP-Nonce': transport.nonce,
+      ...wire.headers,
     },
     body: JSON.stringify({ aliases }),
   });

@@ -202,6 +202,7 @@ export {
   TranslateIcon,
   HourglassIcon,
   InfoIcon,
+  WarningIcon,
 } from './icons';
 export type { IconProps, IconComponent } from './icons';
 export { Hint } from './Hint';
