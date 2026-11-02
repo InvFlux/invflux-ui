@@ -117,21 +117,30 @@ export function movePinnedColumn(
   return [...without.slice(0, at), columnId, ...without.slice(at)];
 }
 
-/** What a drop in the column-reorder list means, decided by which zone each end sits in. */
+/**
+ * What a drop of one column on another means, decided by which zone each end sits in.
+ *
+ * Positions are where the column lands: `toIndex` counts the group *without* the moved column,
+ * `atIndex` the group it joins; a free drop names its neighbor and the side it lands on.
+ */
 export type PinDrop =
   | { kind: 'reorder-pinned'; columnId: string; toIndex: number }
   | { kind: 'pin'; columnId: string; atIndex: number }
-  | { kind: 'unpin'; columnId: string }
-  | { kind: 'reorder-free'; columnId: string; targetId: string };
+  | { kind: 'unpin'; columnId: string; targetId: string; after: boolean }
+  | { kind: 'reorder-free'; columnId: string; targetId: string; after: boolean };
 
 /**
- * Read a drop in the reorder list as an action.
+ * Read a drop — in the reorder list, or on the grid's own headers — as an action.
  *
- * The divider between the two zones is a control, not a separator: dragging a row across it pins or
- * unpins, because a drag that visibly moved a row into the pinned group and then snapped back reads
- * as a bug rather than as a refusal. Within a zone it is an ordinary reorder — but of *which* list
- * depends on the zone, since the pinned group has its own order and moving a pinned column through
- * `columnOrder` would leave the list and the grid disagreeing.
+ * The edge of the pinned group is a control, not a separator: dragging a column across it pins or
+ * unpins, because a drag that visibly moved a column into the pinned group and then snapped back reads
+ * as a bug rather than as a refusal. It lands where it was dropped, in either direction. Within a zone
+ * it is an ordinary reorder — but of *which* list depends on the zone, since the pinned group has its
+ * own order and moving a pinned column through `columnOrder` would leave the list and the grid
+ * disagreeing.
+ *
+ * `after` is the side of the target the column was dropped on: the far half of a header puts it after
+ * that column, which is the only way to reach the end of the pinned group, or of the grid.
  *
  * Pure and separate from the component because it is four branches over two booleans, which is
  * exactly the shape that gets one branch wrong and is never noticed.
@@ -140,17 +149,74 @@ export function pinDropAction(
   pinned: readonly string[],
   sourceId: string,
   targetId: string,
+  after = false,
 ): PinDrop {
   const sourcePinned = pinned.includes(sourceId);
   const targetPinned = pinned.includes(targetId);
+  const side = after ? 1 : 0;
 
   if (sourcePinned && targetPinned) {
-    return { kind: 'reorder-pinned', columnId: sourceId, toIndex: pinned.indexOf(targetId) };
-  }
-  if (targetPinned) return { kind: 'pin', columnId: sourceId, atIndex: pinned.indexOf(targetId) };
-  if (sourcePinned) return { kind: 'unpin', columnId: sourceId };
+    const without = pinned.filter((id) => id !== sourceId);
 
-  return { kind: 'reorder-free', columnId: sourceId, targetId };
+    return {
+      kind: 'reorder-pinned',
+      columnId: sourceId,
+      toIndex: without.indexOf(targetId) + side,
+    };
+  }
+  if (targetPinned) {
+    return { kind: 'pin', columnId: sourceId, atIndex: pinned.indexOf(targetId) + side };
+  }
+  if (sourcePinned) return { kind: 'unpin', columnId: sourceId, targetId, after };
+
+  return { kind: 'reorder-free', columnId: sourceId, targetId, after };
+}
+
+/** Slowest and fastest scroll, in pixels per animation frame, while a drag hovers the pinned group. */
+const EDGE_SCROLL_MIN = 2;
+const EDGE_SCROLL_MAX = 24;
+
+/**
+ * How far to scroll back toward the pinned group this frame, while a column drag hovers it.
+ *
+ * Scrolled right, the columns just past the group are out of sight, so a column could not be dropped
+ * there. Hovering the group brings them back, faster the deeper the pointer is: just inside its edge
+ * creeps, so a drop meant *in* the group is not chased by a moving grid; at the far side it races.
+ *
+ * @param depth how far the pointer is inside the group, from its scrolling edge (px)
+ * @param width the group's width (px)
+ *
+ * @return pixels to scroll left; 0 when the pointer is not over the group
+ */
+export function pinnedEdgeScrollStep(depth: number, width: number): number {
+  if (width <= 0 || depth <= 0) return 0;
+  const share = Math.min(depth, width) / width;
+
+  return Math.round(EDGE_SCROLL_MIN + (EDGE_SCROLL_MAX - EDGE_SCROLL_MIN) * share);
+}
+
+/**
+ * Turn a position in the pinned group *as shown* into a position in the *stored* pin list.
+ *
+ * The two differ when the surface locks a column the merchant never pinned: it is shown at the front
+ * without being stored, so every shown index runs one ahead of the stored one. Translating by the
+ * neighbor's id rather than by arithmetic keeps both right. A neighbor that is not stored is such a
+ * locked column, which always sits in front of the stored ones, so the position is the stored front.
+ *
+ * @param stored the stored list the position will be applied to (without the moved column)
+ * @param shown  the group as shown, the same way (without the moved column)
+ * @param index  the position in `shown`; past its end means last
+ */
+export function storedPinIndex(
+  stored: readonly string[],
+  shown: readonly string[],
+  index: number,
+): number {
+  const neighbor = shown[index];
+  if (neighbor === undefined) return stored.length;
+  const at = stored.indexOf(neighbor);
+
+  return at === -1 ? 0 : at;
 }
 
 /**

@@ -9,15 +9,16 @@ import {
   ModalHeader,
   ModalPanel,
 } from '@invflux/ui';
+import { NO_PAYMENT_RECORDED } from '../api';
 import { formatMoney, toCents } from '../money';
 import { useOrderEventsQuery, useSettleManualRefundMutation } from '../queries';
-import type { DispatchOrderSummary } from '../types';
+import type { DispatchOrderSummary, UnrecordedPaymentAnswer } from '../types';
+import { NoRecordedPaymentQuestion } from './NoRecordedPaymentQuestion';
 
 /**
- * Settle the order's pending manual refunds (non-refundable gateway). Shows the
- * outstanding amount (summed from the unsettled `refund.scheduled(mode=manual)`
- * events) + an attestation the operator must check, then issues the WC refund
- * record via the settle endpoint. Mirrors the Essentials manual-gateway attestation.
+ * Settle the order's pending manual refunds. Shows the outstanding amount (summed from the unsettled
+ * `refund.scheduled(mode=manual)` events). A gateway that can refund offers to send it; whatever the
+ * gateway, an attestation the operator must check records that they returned the money themselves.
  *
  * On an order WooCommerce no longer has there is no refund record to create: the dialog says so,
  * and the operator's attestation that they paid the customer is the record.
@@ -27,6 +28,8 @@ export function SettleManualRefundModal(props: {
   order: DispatchOrderSummary;
   /** The WooCommerce order was deleted outright; see `DispatchOrderDetail.hostOrderMissing`. */
   hostOrderMissing?: boolean;
+  /** Nothing says the customer paid, so that is asked first; see `NoRecordedPaymentQuestion`. */
+  noPaymentRecorded?: boolean;
   onClose: () => void;
 }) {
   const settleMutation = useSettleManualRefundMutation(() => props.orderHexId);
@@ -83,8 +86,31 @@ export function SettleManualRefundModal(props: {
     return [head, tail];
   };
 
-  function handleSettle() {
-    settleMutation.mutate(undefined, { onSuccess: () => props.onClose() });
+  // An order the host no longer has cannot be refunded through anything.
+  const canSendThroughGateway = () =>
+    props.order.paymentSupportsRefunds === true && !props.hostOrderMissing;
+
+  const [saidPaid, setSaidPaid] = createSignal(false);
+  const refusedForNoPayment = () => settleMutation.error?.code === NO_PAYMENT_RECORDED;
+  const asksAboutPayment = () =>
+    !saidPaid() && (props.noPaymentRecorded === true || refusedForNoPayment());
+
+  function handleSettle(throughGateway: boolean) {
+    settleMutation.mutate(
+      { throughGateway, unrecordedPayment: saidPaid() ? 'refund' : undefined },
+      { onSuccess: () => props.onClose() },
+    );
+  }
+
+  function handleAnswer(answer: UnrecordedPaymentAnswer) {
+    if (answer === 'refund') {
+      setSaidPaid(true);
+      return;
+    }
+    settleMutation.mutate(
+      { throughGateway: false, unrecordedPayment: answer },
+      { onSuccess: () => props.onClose() },
+    );
   }
 
   return (
@@ -122,32 +148,40 @@ export function SettleManualRefundModal(props: {
             </p>
           </Show>
 
-          <label class="flex items-start gap-2 text-gray-700 cursor-pointer">
-            <input
-              type="checkbox"
-              class="mt-0.5 shrink-0"
-              checked={confirmed()}
-              onChange={(e) => setConfirmed((e.currentTarget as HTMLInputElement).checked)}
-            />
-            <Show
-              when={!props.hostOrderMissing}
-              fallback={
+          <Show when={!asksAboutPayment()}>
+            <label class="flex items-start gap-2 text-gray-700 cursor-pointer">
+              <input
+                type="checkbox"
+                class="mt-0.5 shrink-0"
+                checked={confirmed()}
+                onChange={(e) => setConfirmed((e.currentTarget as HTMLInputElement).checked)}
+              />
+              <Show
+                when={!props.hostOrderMissing && !canSendThroughGateway()}
+                fallback={
+                  <span>
+                    {__(
+                      'I confirm this refund has been / will be paid to the customer outside WooCommerce.',
+                    )}
+                  </span>
+                }
+              >
                 <span>
-                  {__(
-                    'I confirm this refund has been / will be paid to the customer outside WooCommerce.',
-                  )}
+                  {confirmParts()[0]}
+                  <strong>{gatewayLabel()}</strong>
+                  {confirmParts()[1]}
                 </span>
-              }
-            >
-              <span>
-                {confirmParts()[0]}
-                <strong>{gatewayLabel()}</strong>
-                {confirmParts()[1]}
-              </span>
-            </Show>
-          </label>
+              </Show>
+            </label>
+          </Show>
 
-          <Show when={settleMutation.isError}>
+          <Show when={asksAboutPayment()}>
+            <NoRecordedPaymentQuestion
+              disabled={settleMutation.isPending}
+              onAnswer={handleAnswer}
+            />
+          </Show>
+          <Show when={settleMutation.isError && !refusedForNoPayment()}>
             <ErrorBanner as="div" class="px-3 py-2 text-sm bg-red-50 rounded">
               {settleMutation.error?.message ?? __('Settle failed.')}
             </ErrorBanner>
@@ -158,19 +192,37 @@ export function SettleManualRefundModal(props: {
           <Button variant="secondary" disabled={settleMutation.isPending} onClick={props.onClose}>
             {__('Cancel')}
           </Button>
-          <Button
-            variant="success"
-            disabled={!confirmed() || settleMutation.isPending}
-            onClick={handleSettle}
-          >
-            {settleMutation.isPending
-              ? __('Settling…')
-              : sprintf(
-                  /* translators: %s: the amount to refund, with its currency. */
-                  __('Settle refund (%s)'),
-                  pendingLabel(),
-                )}
-          </Button>
+          <Show when={canSendThroughGateway() && !asksAboutPayment()}>
+            <Button
+              variant="success"
+              data-testid="settle-refund-through-gateway"
+              disabled={settleMutation.isPending}
+              onClick={() => handleSettle(true)}
+            >
+              {sprintf(
+                /* translators: 1: the amount to refund, with its currency. 2: the payment gateway's name. */
+                __('Refund %1$s through %2$s'),
+                pendingLabel(),
+                gatewayLabel(),
+              )}
+            </Button>
+          </Show>
+          <Show when={!asksAboutPayment()}>
+            <Button
+              variant={canSendThroughGateway() ? 'secondary' : 'success'}
+              data-testid="settle-refund-confirm"
+              disabled={!confirmed() || settleMutation.isPending}
+              onClick={() => handleSettle(false)}
+            >
+              {settleMutation.isPending
+                ? __('Settling…')
+                : sprintf(
+                    /* translators: %s: the amount to refund, with its currency. */
+                    __('Settle refund (%s)'),
+                    pendingLabel(),
+                  )}
+            </Button>
+          </Show>
         </ModalFooter>
       </ModalPanel>
     </Modal>

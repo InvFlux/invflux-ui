@@ -28,6 +28,7 @@ import {
   type ComboboxOption,
   type FilterDescriptor,
   isTypingTarget,
+  isOnScreen,
   Pill,
   ColumnsSettingsIcon,
   RefreshIcon,
@@ -1842,6 +1843,9 @@ export function OrderList() {
    */
   onMount(() => {
     const handler = (e: KeyboardEvent) => {
+      // Dispatch stays mounted, hidden, behind whichever surface is in front; the keys typed there
+      // are not for this list.
+      if (!isOnScreen(queueRootEl)) return;
       const inEditable = isTypingTarget(e);
       const inSearchBox = e.composedPath().includes(searchInputEl as unknown as EventTarget);
       // Allow the global shortcut set to fire from inside the search

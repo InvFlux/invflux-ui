@@ -60,6 +60,6 @@ export function statusPillClass(status: RoadmapStatus): string {
     case 'considering':
       return 'border border-dashed border-slate-400 text-slate-600';
     default:
-      return 'bg-slate-200 text-slate-700';
+      return 'bg-slate-300 text-slate-800';
   }
 }

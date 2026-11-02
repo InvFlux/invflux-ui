@@ -29,8 +29,12 @@ function foldChar(c: string): string {
   return lower.length === base.length ? lower : base;
 }
 
-/** Fold a whole string character by character, so the result indexes like the original. */
-const fold = (s: string): string => {
+/**
+ * Fold a whole string character by character, so the result indexes like the original: lowercase,
+ * accents stripped. Compare two folded strings to match the way a case- and accent-insensitive
+ * database collation does.
+ */
+export const foldText = (s: string): string => {
   let out = '';
   for (let i = 0; i < s.length; i++) out += foldChar(s[i] ?? '');
   return out;
@@ -47,9 +51,9 @@ const fold = (s: string): string => {
  * dies on the `é` and the tag disappears at the fifth keystroke, having matched at the fourth.
  */
 export function fuzzyScore(needle: string, label: string): FuzzyScore | null {
-  const q = fold(needle).trim();
+  const q = foldText(needle).trim();
   if ('' === q) return { score: 0, indices: [] };
-  const t = fold(label);
+  const t = foldText(label);
   const indices: number[] = [];
   let score = 0;
   let from = 0;
@@ -88,11 +92,11 @@ export function fuzzyScore(needle: string, label: string): FuzzyScore | null {
  * matches the server then refuses. Folded like {@link fuzzyScore}: case and accents never matter.
  */
 export function wordMatch(needle: string, label: string): number[] | null {
-  const words = fold(needle)
+  const words = foldText(needle)
     .trim()
     .split(/\s+/u)
     .filter((w) => '' !== w);
-  const t = fold(label);
+  const t = foldText(label);
   const hit = new Set<number>();
   for (const word of words) {
     let at = t.indexOf(word);
@@ -112,7 +116,7 @@ export function wordMatch(needle: string, label: string): number[] | null {
  */
 export function wordQueryNarrows(prev: string, next: string): boolean {
   const words = (q: string): string[] =>
-    fold(q)
+    foldText(q)
       .trim()
       .split(/\s+/u)
       .filter((w) => '' !== w);

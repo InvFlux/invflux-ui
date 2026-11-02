@@ -42,6 +42,7 @@ import {
   ModalPanel,
 } from '../Modal';
 import { createDragReorder } from '../dragReorder';
+import { isOnScreen } from '../focusUtils';
 import { SettingsSection } from '../SettingsSection';
 import { surfaceSettingsRegistry } from '../surfaceSettings';
 import { useSurface } from '../surfaceCtx';
@@ -78,8 +79,10 @@ import {
   movePinnedColumn,
   pinColumn,
   pinDropAction,
+  pinnedEdgeScrollStep,
   pinnedLeafOrder,
   pinnedWidthExceeded,
+  storedPinIndex,
   unpinColumn,
 } from './columnPinning';
 import { mergeColumnOrder } from './columnOrder';
@@ -724,7 +727,11 @@ export function ColumnManagerModal<TRow>(props: {
         props.onPinColumn?.(drop.columnId, drop.atIndex);
         break;
       case 'unpin':
+        // A locked pin cannot leave the group, so it does not move among the free columns either.
+        if (isColumnPinLocked(drop.columnId)) break;
         props.onUnpinColumn?.(drop.columnId);
+        // Where it was dropped, not where it sat before it was pinned.
+        props.onMoveColumn(drop.columnId, drop.targetId);
         break;
       case 'reorder-free':
         props.onMoveColumn(drop.columnId, drop.targetId);
@@ -969,6 +976,8 @@ export function ColumnManagerModal<TRow>(props: {
   onMount(() => {
     const onEsc = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return;
+      // Parked in a hidden surface, this Escape belongs to the page in front.
+      if (!isOnScreen(panelRef)) return;
       e.preventDefault();
       e.stopPropagation();
       // An open rename claims Escape first: it abandons the edit and keeps the dialog, its filter
@@ -1523,6 +1532,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
   const [resizingActive, setResizingActive] = createSignal(false); // true from grip press to mouseup
   const [draggingColId, setDraggingColId] = createSignal<string | null>(null); // column being dragged
   const [dropTargetId, setDropTargetId] = createSignal<string | null>(null); // column the cursor is over
+  const [dropAfter, setDropAfter] = createSignal(false); // the cursor is on that column's far half
 
   const [draggingSelection, setDraggingSelection] = createSignal(false);
   // Per-cell edit (6b.4): which cell is currently being edited, and the typed-char seed.
@@ -1833,12 +1843,15 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
     return [...lead, ...available.filter((id) => !seen.has(id))];
   });
 
-  function moveColumn(sourceId: string, targetId: string): void {
+  /** Move a column in front of `targetId`, or right after it when `after` is set. */
+  function moveColumn(sourceId: string, targetId: string, after = false): void {
     setColumnOrderState((prev) => {
       const order = mergeColumnOrder(prev, canonicalColumnOrder());
       const fromIndex = order.indexOf(sourceId);
-      const toIndex = order.indexOf(targetId);
-      if (fromIndex <= 0 || toIndex <= 0 || fromIndex === toIndex) return order;
+      const targetIndex = order.indexOf(targetId);
+      if (fromIndex <= 0 || targetIndex <= 0 || sourceId === targetId) return order;
+
+      const toIndex = targetIndex + (after ? 1 : 0);
 
       return moveArrayItem(order, fromIndex, fromIndex < toIndex ? toIndex - 1 : toIndex);
     });
@@ -1900,7 +1913,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
   }
 
   /**
-   * Pin a column, optionally at a position within the group, and make sure it is visible.
+   * Pin a column, optionally at a position within the group as shown, and make sure it is visible.
    *
    * Visibility comes with it because the merchant's intent is "keep this in front of me", and a
    * pinned-but-hidden column honors the letter of that and none of it. The width budget is enforced
@@ -1911,10 +1924,13 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
 
     const column = table.getColumn(columnId);
     if (column && !column.getIsVisible()) column.toggleVisibility(true);
+    const shown = pinnedColumnIds();
     setPinnedColumnsState((prev) => {
       const pinned = pinColumn(prev, columnId);
 
-      return atIndex === undefined ? pinned : movePinnedColumn(pinned, columnId, atIndex);
+      return atIndex === undefined
+        ? pinned
+        : movePinnedColumn(pinned, columnId, storedPinIndex(prev, shown, atIndex));
     });
   }
 
@@ -1930,6 +1946,110 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
       return to === -1 ? prev : movePinnedColumn(prev, sourceId, to);
     });
   }
+
+  /**
+   * Whether dropping `sourceId` on `targetId` would be refused: pinning past the width budget, or
+   * dragging a locked pin out of the group. The header then shows no drop marker and the browser's
+   * no-drop cursor, rather than accepting a drop that would do nothing.
+   */
+  function columnDropRefused(sourceId: string, targetId: string): boolean {
+    const pinned = pinnedColumnIds();
+    const sourcePinned = pinned.includes(sourceId);
+    const targetPinned = isPinned(pinned, targetId);
+    if (targetPinned && !sourcePinned) return pinRefusal(sourceId) !== undefined;
+    if (sourcePinned && !targetPinned) return isPinLocked(lockedPinIds(), sourceId);
+
+    return false;
+  }
+
+  /**
+   * Drop a dragged header on another: reorder, pin or unpin by the zone each end sits in, landing in
+   * front of the target or, from its far half, after it — see {@link pinDropAction}.
+   */
+  function dropColumn(sourceId: string, targetId: string, after: boolean): void {
+    if (columnDropRefused(sourceId, targetId)) return;
+
+    const drop = pinDropAction(pinnedColumnIds(), sourceId, targetId, after);
+    switch (drop.kind) {
+      case 'reorder-pinned': {
+        const shown = pinnedColumnIds().filter((id) => id !== sourceId);
+        setPinnedColumnsState((prev) =>
+          movePinnedColumn(
+            prev,
+            sourceId,
+            storedPinIndex(
+              prev.filter((id) => id !== sourceId),
+              shown,
+              drop.toIndex,
+            ),
+          ),
+        );
+        break;
+      }
+      case 'pin':
+        pinColumnId(sourceId, drop.atIndex);
+        break;
+      case 'unpin':
+        unpinColumnId(sourceId);
+        moveColumn(sourceId, drop.targetId, drop.after);
+        break;
+      case 'reorder-free':
+        moveColumn(sourceId, drop.targetId, drop.after);
+        break;
+    }
+  }
+
+  /**
+   * Scrolling back toward the pinned group while a header drag hovers it.
+   *
+   * Scrolled right, the columns just past the group are out of sight, so nothing could be dropped
+   * there or unpinned next to them. Hovering the group scrolls the grid left, faster the deeper the
+   * pointer is ({@link pinnedEdgeScrollStep}), until it is back at the start. The pointer is followed
+   * on the window, not on the headers: `dragover` reaches only the element under the pointer, and the
+   * pointer may leave the grid on its left, which is the deepest a merchant can go.
+   */
+  let edgeScrollFrame = 0;
+  let edgePointer: { x: number; y: number } | null = null;
+
+  function pinnedGroupWidth(): number {
+    return pinnedLeft().reduce((width, id) => {
+      const column = table.getColumn(id);
+
+      return column?.getIsVisible() ? width + column.getSize() : width;
+    }, 0);
+  }
+
+  function edgeScrollFrameStep(): void {
+    edgeScrollFrame = 0;
+    const el = scrollContainerRef;
+    if (!el || edgePointer === null || draggingColId() === null || el.scrollLeft <= 0) return;
+
+    const box = el.getBoundingClientRect();
+    if (edgePointer.y < box.top || edgePointer.y > box.bottom) return;
+    const width = pinnedGroupWidth();
+    const step = pinnedEdgeScrollStep(width - (edgePointer.x - box.left - el.clientLeft), width);
+    if (step === 0) return;
+
+    el.scrollLeft = Math.max(0, el.scrollLeft - step);
+    edgeScrollFrame = requestAnimationFrame(edgeScrollFrameStep);
+  }
+
+  const followDragPointer = (event: DragEvent): void => {
+    edgePointer = { x: event.clientX, y: event.clientY };
+    if (edgeScrollFrame === 0) edgeScrollFrame = requestAnimationFrame(edgeScrollFrameStep);
+  };
+
+  function startEdgeScroll(): void {
+    window.addEventListener('dragover', followDragPointer);
+  }
+
+  function stopEdgeScroll(): void {
+    window.removeEventListener('dragover', followDragPointer);
+    if (edgeScrollFrame !== 0) cancelAnimationFrame(edgeScrollFrame);
+    edgeScrollFrame = 0;
+    edgePointer = null;
+  }
+  onCleanup(stopEdgeScroll);
 
   /** The pinned group's right edge — where the frozen region visibly ends. */
   const lastPinnedId = createMemo(() => pinnedLeft().at(-1));
@@ -2576,6 +2696,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
       if (columnId === undefined || row === undefined) continue;
       const meta = metaById.get(columnId);
       if (!meta || meta.kind === 'read_only' || meta.pasteable === false) continue; // skip non-editable
+      if (!props.canEdit(row, meta)) continue; // read-only on this row, as it is against typing
 
       const codec = codecRegistry.resolve(meta.dataType);
       const outcome = resolvePastedCell(
@@ -4375,11 +4496,20 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
                                 setDraggingColId(header.column.id);
                                 event.dataTransfer?.setData('text/x-invflux-col', header.column.id);
                                 if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+                                startEdgeScroll();
                               }}
                               onDragOver={(event) => {
                                 const src = draggingColId();
                                 if (isSelectCol || src === null || src === header.column.id) return;
+                                // A refused drop (past the pin budget, a locked pin leaving the
+                                // group) keeps the no-drop cursor and draws no marker.
+                                if (columnDropRefused(src, header.column.id)) {
+                                  if (dropTargetId() === header.column.id) setDropTargetId(null);
+                                  return;
+                                }
                                 event.preventDefault(); // allow drop
+                                const box = event.currentTarget.getBoundingClientRect();
+                                setDropAfter(event.clientX > box.left + box.width / 2);
                                 setDropTargetId(header.column.id);
                               }}
                               onDragLeave={() => {
@@ -4392,11 +4522,13 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
                                   event.dataTransfer?.getData('text/x-invflux-col') ??
                                   '';
                                 if (sourceId && sourceId !== header.column.id)
-                                  moveColumn(sourceId, header.column.id);
+                                  dropColumn(sourceId, header.column.id, dropAfter());
+                                stopEdgeScroll();
                                 setDraggingColId(null);
                                 setDropTargetId(null);
                               }}
                               onDragEnd={() => {
+                                stopEdgeScroll();
                                 setDraggingColId(null);
                                 setDropTargetId(null);
                               }}
@@ -4420,12 +4552,14 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
                                   : (e) => handleHeaderContextMenu(e, header.column.id)
                               }
                             >
-                              {/* Drop-insertion cursor: a reordered column always lands immediately
-                              before the column under the pointer, so the bar sits on its left edge. */}
+                              {/* Drop-insertion cursor: the column lands before the one under the
+                              pointer, or after it from its far half, and the bar sits on that edge. */}
                               <Show when={dropTargetId() === header.column.id}>
                                 <div
                                   data-drop-target
-                                  class="pointer-events-none absolute inset-y-0 left-0 z-20 w-0.5 bg-blue-500"
+                                  data-drop-side={dropAfter() ? 'after' : 'before'}
+                                  class="pointer-events-none absolute inset-y-0 z-20 w-0.5 bg-blue-500"
+                                  classList={{ 'left-0': !dropAfter(), 'right-0': dropAfter() }}
                                 />
                               </Show>
                               {/* A wrapped header pins its sort affordance to the cell corner and

@@ -72,6 +72,7 @@ import {
 import { workbenchValueFor, applyRowPatch } from './grid/workbenchValueFor';
 import { workbenchFooterSum } from './grid/workbenchFooterSum';
 import { DEFAULT_SORT, sortToParams, type SortLevels } from './grid/sortLevels';
+import { orderIndex, orderRows, sameSort } from './grid/serverOrder';
 import { buildWorkbenchColumns, buildStockColumns } from './grid/workbenchColumns';
 import { useHostNav } from './hostNav';
 import { applyColumnOverrides, columnOverridesForSave } from './columnLabels';
@@ -254,8 +255,8 @@ export interface WorkbenchGridProps {
     transport?: LiveUpdatesTransport;
     /** Polling cadence (ms) for the default transport — from the plugin-level setting. Default 30000. */
     intervalMs?: number;
-    /** Poll endpoint override (relative to `apiRoot`) for the default transport. */
-    endpoint?: string;
+    /** Poll path for a subscription (relative to `apiRoot`) for the default transport. */
+    endpoint?: (subscriptionId: string) => string;
     /** Gate the transport on/off (e.g. only while stock columns are visible). Default: always on. */
     enabled?: () => boolean;
   };
@@ -342,6 +343,12 @@ export interface WorkbenchGridProps {
     taxonomySpace: TaxonomySpace | undefined;
     total: number;
     loaded: number;
+    /**
+     * Every page of the CURRENT query is in: no next page, and the rows on screen are not a previous
+     * query's placeholder. `loaded` cannot answer this, because it counts the displayed rows, after
+     * the host's own display filtering.
+     */
+    complete: boolean;
   }) => void;
 }
 
@@ -562,9 +569,36 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   const [internalSort, setInternalSort] = createSignal<SortLevels>(props.sort?.() ?? DEFAULT_SORT);
   const sort = (): SortLevels => props.sort?.() ?? internalSort();
   const setSort = (next: SortLevels): void => {
-    setInternalSort(next);
-    props.onSortChange?.(next);
+    // One batch, so the query never sees the new sort before the re-order that stands in for it.
+    batch(() => {
+      planReorder(next);
+      setInternalSort(next);
+      props.onSortChange?.(next);
+    });
   };
+
+  // A new sort on a fully loaded result set re-orders the rows already held, by the server's order of
+  // their ids (see grid/serverOrder), instead of fetching every row again. `base` is the sort the rows
+  // were fetched in, and stays the query's key; `ids` is null while the order is on its way.
+  interface Reorder {
+    base: SortLevels;
+    view: string;
+    sort: SortLevels;
+    ids: Map<number, number> | null;
+  }
+  const [reorder, setReorder] = createSignal<Reorder | null>(null);
+  /** The rest of the request: a change there replaces the loaded set, and with it any re-order. */
+  const viewKey = (): string =>
+    JSON.stringify([endpoint(), presetParams(), queryParams(), loadSize()]);
+  const activeReorder = createMemo((): Reorder | null => {
+    const r = reorder();
+    return r !== null && r.view === viewKey() && sameSort(r.sort, sort()) ? r : null;
+  });
+  const reorderPending = (): boolean => activeReorder()?.ids === null;
+  /** The sort the rows are fetched in: the displayed one, unless a re-order stands in for it. */
+  const fetchSort = createMemo((): SortLevels => activeReorder()?.base ?? sort(), undefined, {
+    equals: sameSort,
+  });
   const tableSorting = (): SortingState => sort();
 
   // ── Controlled DataGrid state (persisted per surface) ──
@@ -606,7 +640,7 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
       endpoint(),
       presetParams(),
       queryParams(),
-      sort(),
+      fetchSort(),
       loadSize(),
     );
   const query = createInfiniteQuery<WorkbenchPage>(() => ({
@@ -618,7 +652,7 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
         endpoint(),
         presetParams(),
         queryParams(),
-        sort(),
+        fetchSort(),
         loadSize(),
         pageParam as number,
         subscriptionId,
@@ -637,6 +671,51 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
     // than blanking the grid for the length of the request. The stale rows are dimmed meanwhile.
     placeholderData: keepPreviousData,
   }));
+
+  /** Decide how a new sort reaches the screen: by re-ordering the loaded rows, or by a fresh fetch. */
+  function planReorder(next: SortLevels): void {
+    const base = fetchSort();
+    const complete = query.data !== undefined && !query.hasNextPage && !query.isPlaceholderData;
+    if (!complete || sameSort(next, base)) {
+      setReorder(null);
+      return;
+    }
+    const view = viewKey();
+    setReorder({ base, view, sort: next, ids: null });
+    const isCurrent = (r: Reorder | null): r is Reorder =>
+      r !== null && r.view === view && sameSort(r.sort, next);
+    fetchOrder(next).then(
+      (subjectIds) => setReorder((r) => (isCurrent(r) ? { ...r, ids: orderIndex(subjectIds) } : r)),
+      // No order, no re-order: the new sort is then fetched the ordinary way.
+      () => setReorder((r) => (isCurrent(r) ? null : r)),
+    );
+  }
+
+  /**
+   * The held rows' subject ids in `order` — the order alone, no rows. The subscription names the rows
+   * (its watched set is what the pages loaded); the view rides along so the server can rebuild a
+   * subscription it has reaped.
+   */
+  async function fetchOrder(order: SortLevels): Promise<number[]> {
+    const url = buildProductsUrl(
+      props.ctx,
+      `${endpoint()}/order`,
+      presetParams(),
+      queryParams(),
+      order,
+      loadSize(),
+      1,
+      subscriptionId,
+    );
+    url.searchParams.delete('page');
+    url.searchParams.delete('per_page');
+    const res = await fetch(url, {
+      headers: { Accept: 'application/json', 'X-WP-Nonce': props.ctx.nonce },
+      credentials: 'same-origin',
+    });
+    if (!res.ok) throw new Error(`Request failed (${res.status})`);
+    return ((await res.json()) as { subject_ids: number[] }).subject_ids;
+  }
 
   // Live-update overlay: subjectId → latest patched fields (keyed by column id). Folded onto the
   // query-cache rows in `rows()` so live stock (and future audit) deltas surface without mutating the
@@ -659,7 +738,9 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   const rows = createMemo<WorkbenchRow[]>(() => {
     const data = query.data as InfiniteData<WorkbenchPage> | undefined;
     if (!data) return [];
-    const base = data.pages.flatMap((p) => p.products);
+    const fetched = data.pages.flatMap((p) => p.products);
+    const order = activeReorder()?.ids;
+    const base = order ? orderRows(fetched, order) : fetched;
     const overlay = livePatches();
     const merged =
       overlay.size === 0
@@ -691,15 +772,24 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
    * reload of every loaded page, whose cost (the list query's catalog-wide work, then every row
    * again over the wire) has nothing to do with what was saved. Which rows: see `rowsToRefresh`.
    *
-   * Read by id with the page's filters and the host's preset left out: a saved row that no longer
-   * matches the filter is still brought up to date where it sits (it moves or drops out on the next
-   * full load), and the product tab's `post_ids` preset would otherwise drop the variations it shows
-   * as brought-with context. No subscription is sent, so the live-updates watched set is untouched.
+   * Read by id, with the host's preset left out: the product tab's `post_ids` preset would drop the
+   * variations it shows as brought-with context. The view's filters go along marked `read_back`: on
+   * the server they no longer narrow the rows, so a saved row that no longer matches is still brought
+   * up to date where it sits (it moves or drops out on the next full load), but they still decide the
+   * view's columns. Without them a row comes back missing the values of any column a filter brought
+   * in (a worksheet's quantity, a supplier's price) and shows them empty.
+   * No subscription is sent, so the live-updates watched set is untouched.
    * The re-read rows' overlay entries go too — the fresh rows are authoritative for them.
    *
-   * Any failure falls back to the full reload: slower, never less correct.
+   * After a save, any failure falls back to the full reload: slower, never less correct. A live
+   * update passes `keep` instead: its patch already put the stock totals right, and a background
+   * tick has no business reloading every loaded row.
    */
-  async function refreshRows(saved: readonly number[], inFlight: number): Promise<void> {
+  async function refreshRows(
+    saved: readonly number[],
+    inFlight: number,
+    onFailure: 'reload' | 'keep' = 'reload',
+  ): Promise<void> {
     const data = query.data as InfiniteData<WorkbenchPage> | undefined;
     const ids = rowsToRefresh(saved, data?.pages.flatMap((page) => page.products) ?? []);
     if (ids.length === 0) return;
@@ -716,7 +806,7 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
           props.ctx,
           endpoint(),
           {},
-          { subject_ids: chunk.join('-'), bring_parents: '0' },
+          { ...queryParams(), subject_ids: chunk.join('-'), read_back: '1' },
           sort(),
           chunk.length,
           1,
@@ -732,7 +822,7 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
           if (wanted.has(row.subjectId)) fresh.set(row.subjectId, row);
       });
     } catch {
-      await refetchAndResetLive();
+      if (onFailure === 'reload') await refetchAndResetLive();
       return;
     }
     queryClient.setQueryData<InfiniteData<WorkbenchPage>>(gridQueryKey(), (prev) =>
@@ -754,13 +844,39 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
     const transport =
       lu.transport ??
       pollingTransport({ intervalMs: lu.intervalMs ?? 30_000, endpoint: lu.endpoint });
+    /** Where the loaded rows stand in the ledger: the first page's, which the later pages only add to. */
+    const loadedAt = (): string => {
+      const data = query.data as InfiniteData<WorkbenchPage> | undefined;
+      // The rows on screen while a new query loads belong to the old one: nothing to ask about yet.
+      return query.isPlaceholderData ? '' : (data?.pages[0]?.cursor ?? '');
+    };
+    // The snapshot a reload was last asked for after the subscription went missing. Asking again for
+    // the same rows would loop at the poll's pace when the reload cannot mint it (a failed request).
+    let reloadedFor: string | null = null;
     onCleanup(
       transport({
         apiRoot: props.ctx.apiRoot,
         nonce: props.ctx.nonce,
         subscriptionId: () => subscriptionId,
+        cursor: loadedAt,
         enabled: lu.enabled ?? (() => true),
-        onUpdate: applyPatches,
+        onUpdate: (patches) => {
+          if (patches.length === 0) return;
+          // The totals show at once; the rest of each moved row (its values at cost, its stock
+          // concerns, the parent's sums) comes with a re-read of just those rows.
+          applyPatches(patches.filter((p) => Object.keys(p.fields).length > 0));
+          void refreshRows(
+            patches.map((p) => p.subject_id),
+            2,
+            'keep',
+          );
+        },
+        onGone: () => {
+          const at = loadedAt();
+          if (at === reloadedFor) return;
+          reloadedFor = at;
+          void refetchAndResetLive();
+        },
         onError: () => {},
       }),
     );
@@ -803,6 +919,7 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
       taxonomySpace: stableTaxonomySpace(),
       total: totalCount(),
       loaded: loadedCount(),
+      complete: undefined !== query.data && !query.hasNextPage && !query.isPlaceholderData,
     });
   });
 
@@ -2223,8 +2340,8 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
       <div
         // The table dims, not the wrapper: the grid's own dialogs (the column manager) render inside
         // this element, and a sort changed from one of them would fade the dialog in use.
-        class={`flex min-h-0 flex-1 flex-col [&_table]:transition-opacity ${query.isPlaceholderData ? '[&_table]:opacity-60' : ''}`}
-        aria-busy={query.isPlaceholderData || undefined}
+        class={`flex min-h-0 flex-1 flex-col [&_table]:transition-opacity ${query.isPlaceholderData || reorderPending() ? '[&_table]:opacity-60' : ''}`}
+        aria-busy={query.isPlaceholderData || reorderPending() || undefined}
       >
         <DataGrid<WorkbenchRow>
           rows={rows}

@@ -22,6 +22,7 @@ export function CorrectionsPanel(props: {
   orderHexId: string;
   order: DispatchOrderSummary;
   lines: DispatchOrderLine[];
+  noPaymentRecorded: boolean;
   onOpenCorrection: (lineId: number | null) => void;
 }) {
   const ctx = useDispatch();
@@ -258,6 +259,7 @@ export function CorrectionsPanel(props: {
           order={props.order}
           corrections={corrections()}
           lines={props.lines}
+          noPaymentRecorded={props.noPaymentRecorded}
           onClose={() => setProcessModalOpen(false)}
         />
       </Show>

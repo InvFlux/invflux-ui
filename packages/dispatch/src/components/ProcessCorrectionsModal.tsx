@@ -3,7 +3,10 @@ import { __, _n, _x, formatDateTime, sprintf } from '@invflux/i18n';
 import {
   Button,
   ErrorBanner,
+  FieldError,
+  focusFirstInvalid,
   IconButton,
+  Input,
   Modal,
   menuItemClass,
   type TimelineEvent,
@@ -11,14 +14,19 @@ import {
   ModalHeader,
   ModalPanel,
 } from '@invflux/ui';
+import { NO_PAYMENT_RECORDED } from '../api';
 import { hasDiscount } from '../lineRefund';
+import { centsToDecimal } from '../money';
 import { useOrderEventsQuery, useProcessCorrectionsMutation } from '../queries';
 import type {
   CorrectionRefundConfirmedPayload,
   DispatchCorrection,
   DispatchOrderLine,
   DispatchOrderSummary,
+  UnrecordedPaymentAnswer,
 } from '../types';
+import { adjustmentCents, adjustmentProblem, signedAdjustmentCents } from '../refundAdjustments';
+import { NoRecordedPaymentQuestion } from './NoRecordedPaymentQuestion';
 
 /** One operator-entered manual adjustment row (§9.3). `amount` is a magnitude
  * string; the sign comes from `kind`. Rows are addressed by position
@@ -48,6 +56,8 @@ export function ProcessCorrectionsModal(props: {
   order: DispatchOrderSummary;
   corrections: DispatchCorrection[];
   lines: DispatchOrderLine[];
+  /** Nothing says the customer paid, so a refund asks that first; see `NoRecordedPaymentQuestion`. */
+  noPaymentRecorded?: boolean;
   onClose: () => void;
 }) {
   const processMutation = useProcessCorrectionsMutation(() => props.orderHexId);
@@ -94,7 +104,15 @@ export function ProcessCorrectionsModal(props: {
 
   const supportsRefunds = () => props.order.paymentSupportsRefunds === true;
 
-  const shippingTotal = createMemo(() => parseAmount(props.order.shippingTotal));
+  const preview = () => props.order.refundPreview ?? null;
+  // Nothing was shipped and everything is canceled: shipping and fees go back, not by choice.
+  const wholeOrder = () => preview()?.wholeOrder === true;
+  const lineTax = createMemo(() => parseAmount(preview()?.lineTax));
+  const fees = createMemo(() => (wholeOrder() ? parseAmount(preview()?.fees) : 0));
+  const shippingTotal = createMemo(() =>
+    parseAmount(preview()?.shipping ?? props.order.shippingTotal),
+  );
+  const shippingRefunded = () => wholeOrder() || refundShipping();
   const orderTotal = createMemo(() => parseAmount(props.order.orderTotal));
   const pastRefunds = createMemo(() => parseAmount(props.order.pastRefundsTotal));
 
@@ -107,13 +125,12 @@ export function ProcessCorrectionsModal(props: {
   );
 
   const shippingAmount = createMemo(() =>
-    refundShipping() && showShippingRow() ? shippingTotal() : 0,
+    shippingRefunded() && showShippingRow() ? shippingTotal() : 0,
   );
 
-  // Signed contribution of one adjustment row.
-  const signedOf = (a: AdjustmentRow) => (a.kind === 'reduce' ? -1 : 1) * parseAmount(a.amount);
-
-  const netAdjustment = createMemo(() => adjustments().reduce((sum, a) => sum + signedOf(a), 0));
+  const netAdjustment = createMemo(
+    () => adjustments().reduce((sum, a) => sum + signedAdjustmentCents(a), 0) / 100,
+  );
 
   // Order is already fully refunded → block (§9.3 edge case).
   const alreadyFullyRefunded = createMemo(
@@ -121,15 +138,32 @@ export function ProcessCorrectionsModal(props: {
   );
 
   const newRefundTotal = createMemo(() =>
-    Math.max(0, correctionTotal() + shippingAmount() + netAdjustment()),
+    Math.max(0, correctionTotal() + lineTax() + fees() + shippingAmount() + netAdjustment()),
   );
 
   const remainingRevenue = createMemo(() => orderTotal() - pastRefunds() - newRefundTotal());
 
   // Net-clamp bounds: net adjustment keeps the batch total in [0, order_total − past_refunds].
-  const corrShip = createMemo(() => correctionTotal() + shippingAmount());
-  const floorNet = createMemo(() => -corrShip());
-  const ceilNet = createMemo(() => orderTotal() - pastRefunds() - corrShip());
+  const corrShip = createMemo(() => correctionTotal() + lineTax() + fees() + shippingAmount());
+  const floorCents = createMemo(() => -Math.round(corrShip() * 100));
+  const ceilCents = createMemo(() => Math.round((orderTotal() - pastRefunds() - corrShip()) * 100));
+  const problemOf = (index: number) =>
+    adjustmentProblem(adjustments(), index, floorCents(), ceilCents());
+  const problemMessage = (index: number): string | null => {
+    const problem = problemOf(index);
+    if (problem === null) return null;
+    return problem.kind === 'invalid'
+      ? __('Enter an amount with at most two decimals.')
+      : sprintf(
+          /* translators: %s: the largest amount this refund adjustment can hold, e.g. 12.50 */
+          __('This adjustment can be at most %s.'),
+          fmt(problem.roomCents / 100),
+        );
+  };
+  const hasAdjustmentProblem = () => adjustments().some((_, i) => problemOf(i) !== null);
+  // A problem is marked as soon as it exists, and explained once the operator tries to process.
+  const [processAttempted, setProcessAttempted] = createSignal(false);
+  let panelEl: HTMLDivElement | undefined;
 
   function addAdjustment(kind: 'reduce' | 'increase') {
     setAdjustments((prev) => [...prev, { kind, description: '', amount: '0.00' }]);
@@ -140,23 +174,8 @@ export function ProcessCorrectionsModal(props: {
   function patchDescription(index: number, description: string) {
     setAdjustments((prev) => prev.map((a, i) => (i === index ? { ...a, description } : a)));
   }
-  // Clamp the magnitude so the running net stays within bounds (§9.3).
-  function patchAmount(index: number, raw: string) {
-    setAdjustments((prev) => {
-      const row = prev[index];
-      if (!row) return prev;
-      const otherNet = prev.reduce((s, a, i) => (i === index ? s : s + signedOf(a)), 0);
-      const mag = Math.max(0, parseAmount(raw));
-      const cap =
-        row.kind === 'reduce'
-          ? Math.max(0, otherNet - floorNet()) // room to go down
-          : Math.max(0, ceilNet() - otherNet); // room to go up
-      const clamped = Math.min(mag, cap);
-      // Preserve the raw text while it's a valid in-range partial (so typing
-      // "1" before "12" isn't fought); otherwise snap to the clamped value.
-      const next = mag === clamped ? raw : clamped.toFixed(2);
-      return prev.map((a, i) => (i === index ? { ...a, amount: next } : a));
-    });
+  function patchAmount(index: number, amount: string) {
+    setAdjustments((prev) => prev.map((a, i) => (i === index ? { ...a, amount } : a)));
   }
 
   const needsAttestation = createMemo(() => !supportsRefunds() && newRefundTotal() > 0);
@@ -164,13 +183,34 @@ export function ProcessCorrectionsModal(props: {
     () => !alreadyFullyRefunded() && (!needsAttestation() || manualConfirmed()),
   );
 
-  function handleProcess() {
+  const [saidPaid, setSaidPaid] = createSignal(false);
+  const refusedForNoPayment = () => processMutation.error?.code === NO_PAYMENT_RECORDED;
+  const asksAboutPayment = createMemo(
+    () =>
+      !saidPaid() &&
+      ((props.noPaymentRecorded === true && newRefundTotal() > 0) || refusedForNoPayment()),
+  );
+
+  function handleProcess(nothingToRefund = false) {
+    if (hasAdjustmentProblem()) {
+      setProcessAttempted(true);
+      focusFirstInvalid(panelEl);
+      return;
+    }
     processMutation.mutate(
       {
-        refundShipping: refundShipping(),
+        unrecordedPayment: nothingToRefund
+          ? 'nothing_to_refund'
+          : saidPaid()
+            ? 'refund'
+            : undefined,
+        refundShipping: shippingRefunded(),
         adjustments: adjustments()
-          .filter((a) => parseAmount(a.amount) > 0)
-          .map((a) => ({ description: a.description, amount: signedOf(a).toFixed(2) })),
+          .filter((a) => (adjustmentCents(a.amount) ?? 0) > 0)
+          .map((a) => ({
+            description: a.description,
+            amount: centsToDecimal(signedAdjustmentCents(a)),
+          })),
         manualConfirmed: manualConfirmed(),
       },
       { onSuccess: () => props.onClose() },
@@ -208,7 +248,7 @@ export function ProcessCorrectionsModal(props: {
 
   return (
     <Modal onClose={props.onClose} label={__('Process corrections')}>
-      <ModalPanel size="2xl">
+      <ModalPanel ref={panelEl} size="2xl">
         <ModalHeader
           title={sprintf(
             _n('Process %d correction', 'Process %d corrections', pending().length),
@@ -325,8 +365,21 @@ export function ProcessCorrectionsModal(props: {
                 </For>
 
                 {/* §9.2 Shipping row */}
+                <Show when={lineTax() > 0}>
+                  <tr data-testid="refund-row-tax">
+                    <td class="px-4 py-2 text-gray-700">
+                      {_x('Tax', 'refund table row: the tax on the refunded lines')}
+                    </td>
+                    <td class="px-4 py-2 text-text-muted text-xs italic" colSpan={3}>
+                      {__('on the refunded lines')}
+                    </td>
+                    <td class="px-4 py-2 text-right tabular-nums text-gray-900">
+                      {fmt(lineTax())}
+                    </td>
+                  </tr>
+                </Show>
                 <Show when={showShippingRow()}>
-                  <tr class={`hover:bg-gray-50 ${!refundShipping() ? 'opacity-50' : ''}`}>
+                  <tr class={`hover:bg-gray-50 ${!shippingRefunded() ? 'opacity-50' : ''}`}>
                     <td class="px-4 py-2 text-gray-700">
                       {_x('Shipping', 'refund table row: the shipping charge on the order')}
                     </td>
@@ -335,19 +388,36 @@ export function ProcessCorrectionsModal(props: {
                     </td>
                     <td class="px-4 py-2 text-right tabular-nums">
                       <label class="flex items-center justify-end gap-2 cursor-pointer">
-                        <span class={`text-gray-900 ${!refundShipping() ? 'line-through' : ''}`}>
+                        <span class={`text-gray-900 ${!shippingRefunded() ? 'line-through' : ''}`}>
                           {fmt(shippingTotal())}
                         </span>
                         <input
                           type="checkbox"
-                          checked={refundShipping()}
+                          data-testid="refund-shipping"
+                          checked={shippingRefunded()}
+                          disabled={wholeOrder()}
                           onChange={(e) =>
                             setRefundShipping((e.currentTarget as HTMLInputElement).checked)
                           }
-                          title={__('Include shipping in refund')}
+                          title={
+                            wholeOrder()
+                              ? __('Nothing was shipped, so the shipping charge is refunded.')
+                              : __('Include shipping in refund')
+                          }
                         />
                       </label>
                     </td>
+                  </tr>
+                </Show>
+                <Show when={fees() > 0}>
+                  <tr data-testid="refund-row-fees">
+                    <td class="px-4 py-2 text-gray-700">
+                      {_x('Fees', 'refund table row: the fees charged on the order')}
+                    </td>
+                    <td class="px-4 py-2 text-text-muted text-xs italic" colSpan={3}>
+                      {__('included in order')}
+                    </td>
+                    <td class="px-4 py-2 text-right tabular-nums text-gray-900">{fmt(fees())}</td>
                   </tr>
                 </Show>
 
@@ -377,15 +447,16 @@ export function ProcessCorrectionsModal(props: {
                           >
                             {a().kind === 'reduce' ? '−' : '+'}
                           </span>
-                          <input
+                          <Input
                             aria-label={__('Amount')}
+                            data-testid="adjustment-amount"
                             type="text"
                             inputmode="decimal"
-                            class="border border-gray-300 rounded px-2 py-1 text-sm w-20 text-right tabular-nums"
+                            autocomplete="off"
+                            class="w-20 text-right tabular-nums"
                             value={a().amount}
-                            onInput={(e) =>
-                              patchAmount(i, (e.currentTarget as HTMLInputElement).value)
-                            }
+                            invalid={problemOf(i) !== null}
+                            onInput={(e) => patchAmount(i, e.currentTarget.value)}
                           />
                           <IconButton
                             size="xs"
@@ -395,6 +466,12 @@ export function ProcessCorrectionsModal(props: {
                           >
                             ✕
                           </IconButton>
+                        </div>
+                        <div class="text-right">
+                          <FieldError
+                            testId="adjustment-amount-error"
+                            message={processAttempted() && problemMessage(i)}
+                          />
                         </div>
                       </td>
                     </tr>
@@ -547,8 +624,19 @@ export function ProcessCorrectionsModal(props: {
           </Show>
         </div>
 
+        <Show when={asksAboutPayment()}>
+          <div class="px-4 py-2">
+            <NoRecordedPaymentQuestion
+              disabled={processMutation.isPending}
+              onAnswer={(answer: UnrecordedPaymentAnswer) =>
+                answer === 'refund' ? setSaidPaid(true) : handleProcess(true)
+              }
+            />
+          </div>
+        </Show>
+
         {/* Error banner */}
-        <Show when={processMutation.isError}>
+        <Show when={processMutation.isError && !refusedForNoPayment()}>
           <ErrorBanner as="div" class="px-4 py-2 text-sm bg-red-50">
             {processMutation.error?.message ?? __('Processing failed.')}
           </ErrorBanner>
@@ -557,7 +645,7 @@ export function ProcessCorrectionsModal(props: {
         {/* Footer */}
         <ModalFooter layout="column">
           {/* Manual attestation */}
-          <Show when={needsAttestation()}>
+          <Show when={needsAttestation() && !asksAboutPayment()}>
             <label class="flex items-start gap-2 text-sm text-gray-700 cursor-pointer">
               <input
                 type="checkbox"
@@ -596,13 +684,15 @@ export function ProcessCorrectionsModal(props: {
               >
                 {__('Cancel')}
               </Button>
-              <Button
-                variant="success"
-                disabled={!canProcess() || processMutation.isPending || pending().length === 0}
-                onClick={handleProcess}
-              >
-                {processLabel()}
-              </Button>
+              <Show when={!asksAboutPayment()}>
+                <Button
+                  variant="success"
+                  disabled={!canProcess() || processMutation.isPending || pending().length === 0}
+                  onClick={() => handleProcess()}
+                >
+                  {processLabel()}
+                </Button>
+              </Show>
             </div>
           </div>
         </ModalFooter>

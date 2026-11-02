@@ -43,6 +43,7 @@ import {
   parseNumericValue,
   type NumericOp,
 } from './numericBulkOps';
+import { isOnScreen } from './focusUtils';
 import { Modal, ModalFooter, ModalHeader, ModalPanel } from './Modal';
 import { Combobox } from './Combobox';
 import { Button } from './Button';
@@ -447,10 +448,13 @@ export function BulkEditModal<TRow = WorkbenchRow>(props: BulkEditModalProps<TRo
 
   // Ctrl/Cmd+Enter or Ctrl/Cmd+S applies the bulk edits (same as the button). Capture phase +
   // stopPropagation pre-empts the grid's bubble handler (which would otherwise open the save flow).
+  let panelRef: HTMLDivElement | undefined;
   createEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (!(event.ctrlKey || event.metaKey)) return;
       if (event.key !== 'Enter' && event.key !== 's' && event.key !== 'S') return;
+      // A dialog parked in a hidden surface must not apply edits on the visible page's chord.
+      if (!isOnScreen(panelRef)) return;
       event.preventDefault();
       event.stopPropagation();
       apply();
@@ -465,7 +469,7 @@ export function BulkEditModal<TRow = WorkbenchRow>(props: BulkEditModalProps<TRo
 
   return (
     <Modal onClose={props.onClose} mount={props.mount} label={__('Edit selection')}>
-      <ModalPanel size="lg" class="invflux-bulk-edit">
+      <ModalPanel ref={panelRef} size="lg" class="invflux-bulk-edit">
         <ModalHeader
           title={__('Edit selection')}
           subtitle={sprintf(

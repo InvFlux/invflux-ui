@@ -32,7 +32,17 @@
  * The default polling transport reads its interval from the caller (typically a plugin-level
  * setting surfaced through the UI bootstrap context) — not a hardcoded 30 seconds. Admins tune
  * cadence once; every surface using the default transport picks it up. Custom transports
- * (WebSocket / SSE) don't have a cadence concept so this doesn't apply.
+ * (WebSocket / SSE) don't have a cadence concept so this doesn't apply. It does not poll while the
+ * page is hidden: nobody is looking, and a background tab would otherwise poll all day.
+ *
+ * ## Cursor
+ *
+ * The rows were loaded at a point in the stock ledger — the snapshot cursor the products response
+ * carries. The transport asks for what changed after it, and moves its own cursor forward with each
+ * answer. When the rows are loaded again (a new query, a refresh) the snapshot moves, and the
+ * transport starts over from the new one; an answer to a poll that a reload overtook is dropped,
+ * since it describes rows the grid no longer holds. With no snapshot yet it waits: an empty cursor
+ * would ask for the watched rows' whole history.
  */
 
 import { onCleanup } from 'solid-js';
@@ -47,10 +57,20 @@ export interface LiveUpdatesTransportConfig {
   nonce: string;
   /** Opaque token minted by the fetch layer; server tracks the watched-set against it. */
   subscriptionId: () => string;
+  /** The ledger cursor the rows were loaded at; `''` until they are, and the transport waits. */
+  cursor: () => string;
   /** True to run the transport (poll / connect / listen), false to pause. */
   enabled: () => boolean;
-  /** Where to deliver received patches. Called with `[]` is legal (heartbeat / no-op tick). */
+  /**
+   * Where to deliver received patches. Called with `[]` is legal (heartbeat / no-op tick). A patch
+   * with no fields names a row that changed in a way the transport cannot describe; re-read it.
+   */
   onUpdate: (patches: RowPatch[]) => void;
+  /**
+   * The server no longer knows the subscription (reaped after a long pause, or never minted). The
+   * remedy is the grid's: load the rows again, which mints it anew under the same token.
+   */
+  onGone?: () => void;
   /** Where to report a transport-level error (network failure, WS drop, …). Non-fatal. */
   onError?: (error: unknown) => void;
 }
@@ -62,14 +82,23 @@ export interface LiveUpdatesTransportConfig {
 export type LiveUpdatesTransport = (config: LiveUpdatesTransportConfig) => () => void;
 
 /**
- * Response shape from the default polling endpoint. Only the transport cares about this — the
- * grid consumes `RowPatch[]` directly. Kept exported so custom callers can reuse the shape when
- * writing their own transports against the same endpoint.
+ * Response shape of the default polling endpoint. Only the transport reads it — the grid consumes
+ * `RowPatch[]` directly. Exported so a custom transport against the same endpoint can reuse it.
  */
 export interface LiveUpdatesPollResponse {
-  patches: RowPatch[];
   /** Server-monotonic cursor to send back on the next poll (delta boundary). */
   cursor: string;
+  /** The current stock totals of every watched subject that moved since the cursor. */
+  updates: Array<{ subjectId: number; atp: number; res: number; ctd: number; total: number }>;
+  /** Subjects to re-read rather than patch; reserved by the server, not emitted yet. */
+  resync?: number[];
+}
+
+/** The poll endpoint answered something other than success. */
+export class LiveUpdatesHttpError extends Error {
+  constructor(public readonly status: number) {
+    super(`live-updates poll failed (${status})`);
+  }
 }
 
 /**
@@ -78,71 +107,102 @@ export interface LiveUpdatesPollResponse {
 export interface PollingTransportConfig {
   /** Polling interval in milliseconds — usually threaded from a plugin-level setting. */
   intervalMs: number;
-  /**
-   * Relative URL to the poll endpoint, appended to `apiRoot`. Defaults to the workbench's
-   * historical `/invflux/v1/workbench/stock-updates` — a future refactor may rename to something
-   * generic (`/inventory/updates`) once the audit-driven non-stock updates land.
-   */
-  endpoint?: string;
-  /**
-   * Initial cursor to send on the first poll. Empty string (default) means "give me everything
-   * since the subscription was created."
-   */
-  initialCursor?: string;
+  /** The poll path for a subscription, appended to `apiRoot`. Defaults to the workbench's. */
+  endpoint?: (subscriptionId: string) => string;
 }
+
+const workbenchUpdatesPath = (subscriptionId: string): string =>
+  `/invflux/v1/workbench/subscriptions/${encodeURIComponent(subscriptionId)}/updates`;
+
+/** The stock columns a poll answer fills, keyed by column id. */
+function toPatches(body: LiveUpdatesPollResponse): RowPatch[] {
+  const patches: RowPatch[] = (body.updates ?? []).map((u) => ({
+    subject_id: u.subjectId,
+    fields: { atp: u.atp, res: u.res, ctd: u.ctd, total: u.total },
+    cursor: body.cursor,
+  }));
+  for (const subjectId of body.resync ?? []) patches.push({ subject_id: subjectId, fields: {} });
+  return patches;
+}
+
+const pageHidden = (): boolean =>
+  typeof document !== 'undefined' && document.visibilityState === 'hidden';
 
 /**
  * Build a polling transport at a given cadence. The returned transport factory is the value you'd
  * pass to `InventoryGrid` via `liveUpdates.transport`. Cadence is a caller-supplied number rather
  * than being read here to keep the module WP-context-agnostic — a settings-aware default lives at
- * the mount site (typically the bootstrap that reads `invflux.grid.pollIntervalMs`).
+ * the mount site.
  *
- * The transport advances its `cursor` on each successful response so the server can emit the
- * next window's diffs. On error (network or non-2xx), the transport backs off one full interval
- * and retries; the cursor stays at its last-good value so nothing is silently missed.
+ * On error (network or non-2xx) the transport waits one full interval and retries from the same
+ * cursor, so nothing is silently missed. A 410 is reported through `onGone`, not `onError`.
  */
 export function pollingTransport(cfg: PollingTransportConfig): LiveUpdatesTransport {
   const intervalMs = Math.max(1_000, cfg.intervalMs);
-  const endpoint = cfg.endpoint ?? '/invflux/v1/workbench/stock-updates';
+  const endpoint = cfg.endpoint ?? workbenchUpdatesPath;
 
   return (runtime) => {
-    let cursor = cfg.initialCursor ?? '';
+    let snapshot = '';
+    let cursor = '';
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let inFlight = false;
     let stopped = false;
 
     const schedule = (delayMs: number): void => {
       if (stopped) return;
+      if (timer !== null) clearTimeout(timer);
       timer = setTimeout(() => {
         timer = null;
         void tick();
       }, delayMs);
     };
 
+    // Every path, a bail-out or a throw included, ends by scheduling the next tick: a loop that
+    // stopped on one bad tick would go quiet with nothing to show for it.
     const tick = async (): Promise<void> => {
-      if (stopped) return;
-      if (!runtime.enabled()) {
-        schedule(intervalMs);
-        return;
-      }
-      const url = new URL(`${runtime.apiRoot.replace(/\/$/, '')}${endpoint}`);
-      url.searchParams.set('subscription', runtime.subscriptionId());
-      if (cursor !== '') url.searchParams.set('cursor', cursor);
-
+      if (stopped || inFlight) return;
+      inFlight = true;
       try {
+        const loadedAt = runtime.cursor();
+        if (!runtime.enabled() || pageHidden() || loadedAt === '') return;
+        if (loadedAt !== snapshot) {
+          snapshot = loadedAt;
+          cursor = loadedAt;
+        }
+        const url = new URL(
+          `${runtime.apiRoot.replace(/\/$/, '')}${endpoint(runtime.subscriptionId())}`,
+        );
+        url.searchParams.set('cursor', cursor);
+
         const res = await fetch(url, {
           headers: { Accept: 'application/json', 'X-WP-Nonce': runtime.nonce },
           credentials: 'same-origin',
         });
-        if (!res.ok) throw new Error(`live-updates poll failed (${res.status})`);
+        if (res.status === 410) {
+          runtime.onGone?.();
+          return;
+        }
+        if (!res.ok) throw new LiveUpdatesHttpError(res.status);
         const body = (await res.json()) as LiveUpdatesPollResponse;
+        // The rows were loaded again while this poll was out: it describes rows the grid no longer
+        // holds, so it neither patches nor moves the cursor.
+        if (stopped || runtime.cursor() !== loadedAt) return;
         cursor = body.cursor ?? cursor;
-        runtime.onUpdate(body.patches ?? []);
+        runtime.onUpdate(toPatches(body));
       } catch (err) {
         runtime.onError?.(err);
       } finally {
+        inFlight = false;
         schedule(intervalMs);
       }
     };
+
+    // Back in view after a while: catch up now rather than at the end of the interval.
+    const onVisibility = (): void => {
+      if (!pageHidden() && !inFlight) schedule(0);
+    };
+    if (typeof document !== 'undefined')
+      document.addEventListener('visibilitychange', onVisibility);
 
     // Fire the first tick on next microtask so the caller can finish setup before the network
     // round-trip runs. Small delay is a courtesy; the interval itself governs the steady state.
@@ -150,6 +210,8 @@ export function pollingTransport(cfg: PollingTransportConfig): LiveUpdatesTransp
 
     return () => {
       stopped = true;
+      if (typeof document !== 'undefined')
+        document.removeEventListener('visibilitychange', onVisibility);
       if (timer !== null) {
         clearTimeout(timer);
         timer = null;
@@ -167,23 +229,14 @@ export function pollingTransport(cfg: PollingTransportConfig): LiveUpdatesTransp
  * useLiveUpdates({
  *   apiRoot, nonce,
  *   subscriptionId: () => currentSubscription(),
+ *   cursor: () => loadedAtCursor(),
  *   enabled: () => stockColumnsVisible(),
  *   intervalMs: 30_000,
  *   onUpdate: (patches) => applyPatches(patches),
  * });
  * ```
  */
-export function useLiveUpdates(
-  opts: LiveUpdatesTransportConfig & { intervalMs: number; endpoint?: string },
-): void {
-  const transport = pollingTransport({ intervalMs: opts.intervalMs, endpoint: opts.endpoint });
-  const cleanup = transport({
-    apiRoot: opts.apiRoot,
-    nonce: opts.nonce,
-    subscriptionId: opts.subscriptionId,
-    enabled: opts.enabled,
-    onUpdate: opts.onUpdate,
-    onError: opts.onError,
-  });
-  onCleanup(cleanup);
+export function useLiveUpdates(opts: LiveUpdatesTransportConfig & PollingTransportConfig): void {
+  const { intervalMs, endpoint, ...runtime } = opts;
+  onCleanup(pollingTransport({ intervalMs, endpoint })(runtime));
 }

@@ -8,6 +8,7 @@ import {
   ModalFooter,
   ModalHeader,
   ModalPanel,
+  QuantityInput,
 } from '@invflux/ui';
 import {
   defaultReasonFor,
@@ -217,7 +218,9 @@ export function CorrectionModal(props: {
     return isOutOfStock() ? outOfStockCap(line, correctableQty) : correctableQty;
   });
 
-  const [qty, setQty] = createSignal(untrack(maxQty));
+  // Null while the field holds anything but a quantity, so Submit can never send the last good one.
+  const [qty, setQty] = createSignal<number | null>(untrack(maxQty));
+  const [submitted, setSubmitted] = createSignal(false);
   const [note, setNote] = createSignal('');
   const [error, setError] = createSignal<string | null>(null);
 
@@ -229,7 +232,7 @@ export function CorrectionModal(props: {
   const stockReadoutText = createMemo((): string => {
     const line = selectedLine();
     if (!line) return '';
-    const readout = stockReadout(line, stock(), reasonCode(), qty());
+    const readout = stockReadout(line, stock(), reasonCode(), qty() ?? 0);
     if (readout.kind === 'writtenOff') {
       /* translators: %d: units written off. */
       return sprintf(__('Written off: %d'), readout.qty);
@@ -255,19 +258,21 @@ export function CorrectionModal(props: {
   /** What the correction will owe — the server's own figure, computed the same way. */
   const refundAmount = createMemo(() => {
     const line = selectedLine();
-    return line ? refundFor(line, qty()) : '0.00';
+    return line ? refundFor(line, qty() ?? 0) : '0.00';
   });
 
   async function submit(e: SubmitEvent): Promise<void> {
     e.preventDefault();
     setError(null);
+    setSubmitted(true);
     const line = selectedLine();
     if (!line) {
       setError(__('Please pick a line.'));
       return;
     }
     const max = maxQty();
-    if (qty() < 1 || qty() > max) {
+    const quantity = qty();
+    if (quantity === null || quantity < 1 || quantity > max) {
       setError(sprintf(__('Qty must be between 1 and %d.'), max));
       return;
     }
@@ -289,7 +294,7 @@ export function CorrectionModal(props: {
       await createMutation.mutateAsync({
         lineId: line.lineId,
         typeCode: type.code,
-        qty: qty(),
+        qty: quantity,
         note: note().trim() === '' ? null : note(),
         reasonCode: reasonCode() === '' ? null : reasonCode(),
       });
@@ -337,16 +342,17 @@ export function CorrectionModal(props: {
 
               <label class="md:col-span-2 block text-xs">
                 <span class="block text-gray-600 mb-1">{_x('Qty', 'correction form field')}</span>
-                <input
-                  type="number"
-                  min="1"
+                {/* Order lines are whole units until a line carries its subject's scale. */}
+                <QuantityInput
+                  data-testid="correction-qty"
+                  scale={0}
+                  min={1}
                   max={maxQty()}
-                  // With `max` below `min` a browser still lets the stepper reach `min`, offering a
-                  // quantity that is not there.
                   disabled={maxQty() < 1}
-                  class="w-full text-sm border border-gray-300 rounded pl-2 pr-4 py-1 bg-surface tabular-nums"
+                  class="w-full tabular-nums"
                   value={qty()}
-                  onInput={(e) => setQty(Number(e.currentTarget.value) || 0)}
+                  invalid={submitted() && qty() === null}
+                  onChange={(parsed) => setQty(parsed.kind === 'ok' ? parsed.scaled : null)}
                 />
               </label>
             </div>
@@ -529,7 +535,7 @@ export function CorrectionModal(props: {
                       const line = selectedLine();
                       return line ? netUnitPrice(line) : '0.00';
                     })(),
-                    qty(),
+                    qty() ?? 0,
                   )}
                 </span>
               </div>

@@ -425,7 +425,12 @@ export function OrderContextBar(props: {
               </Button>
             </Show>
             <Show when={o.pendingManualRefunds > 0 && props.onSettleRefund}>
-              <Button variant="warning" size="xs" onClick={() => props.onSettleRefund?.()}>
+              <Button
+                variant="warning"
+                size="xs"
+                data-testid="settle-refund-open"
+                onClick={() => props.onSettleRefund?.()}
+              >
                 {_x(
                   'Settle',
                   'button: record that a manual refund has been paid out to the customer',
@@ -447,11 +452,17 @@ export function OrderContextBar(props: {
               <Show when={o.pendingManualRefunds > 0}>
                 <dd class="col-span-2 mb-1 px-2 py-1.5 rounded bg-amber-50 border border-amber-200 text-xs text-amber-800">
                   {sprintf(
-                    _n(
-                      "%d manual refund pending — this gateway can't refund through its API. Settle it once you have refunded the customer outside WooCommerce.",
-                      "%d manual refunds pending — this gateway can't refund through its API. Settle them once you have refunded the customer outside WooCommerce.",
-                      o.pendingManualRefunds,
-                    ),
+                    o.paymentSupportsRefunds === true
+                      ? _n(
+                          '%d refund pending — no money has been sent. Settle it to refund through this gateway, or once you have refunded the customer outside WooCommerce.',
+                          '%d refunds pending — no money has been sent. Settle them to refund through this gateway, or once you have refunded the customer outside WooCommerce.',
+                          o.pendingManualRefunds,
+                        )
+                      : _n(
+                          "%d manual refund pending — this gateway can't refund through its API. Settle it once you have refunded the customer outside WooCommerce.",
+                          "%d manual refunds pending — this gateway can't refund through its API. Settle them once you have refunded the customer outside WooCommerce.",
+                          o.pendingManualRefunds,
+                        ),
                     o.pendingManualRefunds,
                   )}
                 </dd>

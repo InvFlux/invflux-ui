@@ -780,6 +780,13 @@ export function ImportWizard(props: ImportWizardProps): JSX.Element {
                   {__('Map a key column (SKU / supplier SKU / barcode) to match products.')}
                 </p>
               </Show>
+              {/* Continue stays disabled while the mapping is unusable, so each reason is stated here.
+                  This one was the silent one: a key is mapped but no data row has a value in it. */}
+              <Show when={null !== keyField() && 0 === mappedRows().length}>
+                <p class="mt-2 text-xs text-amber-700">
+                  {__('No row has a value in the key column.')}
+                </p>
+              </Show>
               <Show
                 when={needsValueColumn() && null !== keyField() && 0 === upsertableMappedCount()}
               >

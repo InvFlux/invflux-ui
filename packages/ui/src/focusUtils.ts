@@ -35,6 +35,21 @@ export function containsAcrossShadow(container: Node, node: Node | null): boolea
   return false;
 }
 
+/**
+ * Whether `el` has a layout box, i.e. is on screen to be interacted with.
+ *
+ * The shell keeps a surface mounted, hidden, behind the one in front, so a component can be alive
+ * and listening with no box at all. A handler on `document` (a chord the browser claims at
+ * document level, so no element ever sees it) is blind to that: it must ask before acting, or the
+ * keystroke meant for the visible page saves, applies or closes something nobody can see.
+ *
+ * `getClientRects()` rather than `offsetParent`, which is null for any `position: fixed` element —
+ * exactly what a dialog is.
+ */
+export function isOnScreen(el: Element | null | undefined): boolean {
+  return el !== null && el !== undefined && el.getClientRects().length > 0;
+}
+
 export const FOCUSABLE_SELECTOR =
   'a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
 

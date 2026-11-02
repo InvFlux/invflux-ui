@@ -1,17 +1,9 @@
 import {
-  Button,
-  Checkbox,
-  Combobox,
-  IconButton,
-  Input,
-  Modal,
-  Pill,
-  Select,
-  Spinner,
-  Textarea,
+  sharedPluginUi,
   installPluginApi as installSharedPluginApi,
   toast,
   type PluginApi,
+  type SharedPluginUi,
 } from '@invflux/ui';
 import {
   createEffect,
@@ -51,22 +43,11 @@ export interface WorkbenchBridge {
     Dynamic: typeof Dynamic;
   };
   /**
-   * Shared UI primitives — same as `@invflux/ui`'s public exports. The atomic set
-   * (`Button` … `Spinner`) is what stops a plug-in hand-rolling its own controls; a bridge
-   * component renders with the **host's** stylesheet, so they arrive pre-styled.
+   * UI components for add-on markup: the SPA-wide set ({@link SharedPluginUi}: form controls, the
+   * dialog and its frame). A bridge component renders with the **host's**
+   * stylesheet, so an add-on gets it pre-styled without generating those utilities into its own sheet.
    */
-  ui: {
-    Button: typeof Button;
-    IconButton: typeof IconButton;
-    Input: typeof Input;
-    Select: typeof Select;
-    Textarea: typeof Textarea;
-    Checkbox: typeof Checkbox;
-    Pill: typeof Pill;
-    Spinner: typeof Spinner;
-    Combobox: typeof Combobox;
-    Modal: typeof Modal;
-  };
+  ui: SharedPluginUi;
   /** Transient notifications — `toast.success(…)`, `toast(…, { variant, duration })`, etc. */
   toast: typeof toast;
 }
@@ -91,18 +72,7 @@ export function installPluginApi(): WorkbenchPluginApi {
       Match,
       Dynamic,
     },
-    ui: {
-      Button,
-      IconButton,
-      Input,
-      Select,
-      Textarea,
-      Checkbox,
-      Pill,
-      Spinner,
-      Combobox,
-      Modal,
-    },
+    ui: { ...sharedPluginUi },
     toast,
   });
 }

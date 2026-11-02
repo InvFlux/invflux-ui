@@ -3,6 +3,7 @@ import { buildDisplayCard, DEFAULT_DISPLAY, UNCOMMITTED, visibleCount } from './
 import { stockCard, type StockCardRow } from './stockCard';
 
 const merged = { ...DEFAULT_DISPLAY, mergeUncommitted: true };
+const separate = { ...DEFAULT_DISPLAY, mergeUncommitted: false };
 
 /** Reserve 3 of 10 available, then commit them — newest first, as the ledger returns rows. */
 const rows: StockCardRow[] = [
@@ -10,9 +11,15 @@ const rows: StockCardRow[] = [
   { fromSlot: 'oh.atp', toSlot: 'oh.res', quantity: 3, initialFrom: 10, initialTo: 0 },
 ];
 
+describe('DEFAULT_DISPLAY', () => {
+  it('merges available and reserved for a reader who has chosen nothing', () => {
+    expect(DEFAULT_DISPLAY.mergeUncommitted).toBe(true);
+  });
+});
+
 describe('buildDisplayCard', () => {
   it('leaves every slot its own column when nothing is merged', () => {
-    const card = buildDisplayCard(stockCard(rows), DEFAULT_DISPLAY);
+    const card = buildDisplayCard(stockCard(rows), separate);
 
     expect(card.columns.map((c) => c.key)).toEqual(['oh.atp', 'oh.res', 'oh.ctd']);
     expect(card.hiddenRows).toEqual([false, false]);
@@ -56,7 +63,7 @@ describe('buildDisplayCard', () => {
       { fromSlot: 'sup.atp', toSlot: 'oh.atp', quantity: 4, initialFrom: 9, initialTo: 1 },
       { fromSlot: 'oh.atp', toSlot: 'oh.ctd', quantity: 2, initialFrom: 5, initialTo: 0 },
     ];
-    const card = buildDisplayCard(stockCard(across), DEFAULT_DISPLAY);
+    const card = buildDisplayCard(stockCard(across), separate);
 
     expect(card.groups.map((g) => g.location)).toEqual(['sup', 'oh']);
     expect(card.groups.map((g) => g.columns.length)).toEqual([1, 2]);

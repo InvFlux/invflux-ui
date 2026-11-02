@@ -3,6 +3,7 @@ import { createEffect, createMemo, createSignal, For, onCleanup, Show, type JSX 
 import { Button } from './Button';
 import { Dynamic } from 'solid-js/web';
 import { __, _n, sprintf } from '@invflux/i18n';
+import { isOnScreen } from './focusUtils';
 import { Modal, ModalFooter, ModalHeader, ModalPanel } from './Modal';
 import { RequiredMark } from './RequiredMark';
 import { SegmentedControl } from './SegmentedControl';
@@ -205,6 +206,7 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
   let scrimRef: HTMLDivElement | undefined;
   let receiptPanelRef: HTMLDivElement | undefined;
   let applyRef: HTMLButtonElement | undefined;
+  let panelRef: HTMLDivElement | undefined;
 
   const distinctSubjects = createMemo(() => {
     const ids = new Set<number>();
@@ -419,6 +421,8 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
     const onKey = (event: KeyboardEvent): void => {
       if (!(event.ctrlKey || event.metaKey)) return;
       if (event.key !== 'Enter' && event.key !== 's' && event.key !== 'S') return;
+      // A dialog parked in a hidden surface must not confirm on the visible page's chord.
+      if (!isOnScreen(panelRef)) return;
       event.preventDefault();
       event.stopPropagation();
       confirm();
@@ -449,6 +453,7 @@ export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.El
       label={heading()}
     >
       <ModalPanel
+        ref={panelRef}
         size="3xl"
         class="relative"
         aria-busy={props.pending || undefined}

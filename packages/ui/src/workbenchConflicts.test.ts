@@ -39,6 +39,12 @@ describe('explainConflict', () => {
     }
   });
 
+  it('says a worksheet quantity was refused because the line is gone, and to reload', () => {
+    const message = explainConflict('not_on_worksheet', 'Labels · Qty');
+    expect(message).toContain('no longer on the worksheet');
+    expect(message).toContain('Reload');
+  });
+
   it('returns null for a code this build does not know, rather than inventing a cause', () => {
     expect(explainConflict('some_future_reason', 'Col')).toBeNull();
   });

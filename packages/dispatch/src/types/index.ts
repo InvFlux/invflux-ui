@@ -320,6 +320,17 @@ export interface DispatchOrderSummary {
    */
   shippingTotal: string | null;
   /**
+   * What refunding the pending corrections adds to their own amounts, tax included. Null on queue
+   * rows and when nothing is pending. `wholeOrder`: processing cancels the order with nothing
+   * shipped, so shipping and fees are refunded whatever anyone ticks.
+   */
+  refundPreview?: {
+    wholeOrder: boolean;
+    lineTax: string;
+    shipping: string;
+    fees: string;
+  } | null;
+  /**
    * Whether the full shipping total has already been refunded via WC.
    * Null on queue rows. When true the shipping row is hidden.
    */
@@ -376,7 +387,12 @@ export interface ProcessCorrectionsPayload {
    * `paymentSupportsRefunds` is false.
    */
   manualConfirmed: boolean;
+  /** The operator's answer once the server has asked about an order with no payment on record. */
+  unrecordedPayment?: UnrecordedPaymentAnswer;
 }
+
+/** `refund`: the customer did pay. `nothing_to_refund`: they never did, so no money moves. */
+export type UnrecordedPaymentAnswer = 'refund' | 'nothing_to_refund';
 
 /**
  * Payload of a `correction.refund_confirmed` timeline event (batch model).
@@ -387,6 +403,8 @@ export interface CorrectionRefundConfirmedPayload {
   refund_mode: 'auto' | 'manual_confirmed';
   refund_total: string;
   wc_refund_id: number | null;
+  /** The gateway's own id for the refund, where it leaves one to read. */
+  gateway_refund_id?: string;
   shipping_included: boolean;
   /** Net manual adjustment (signed decimal); null if zero. */
   adjustment: string | null;
@@ -558,7 +576,7 @@ export interface DispatchOrderLine {
   stagedQty: number;
   stagedBy: number | null;
   stagedAt: string | null;
-  stagedSource: 'scanner' | 'click' | 'resend' | 'system' | null;
+  stagedSource: StageSource | 'resend' | 'system' | null;
   stockState: StockConcerns;
   /** True when this line's subject isn't InvFlux-governed (WooCommerce/another plugin manages its
    *  stock) — renders the amber ⚠ "unmanaged" marker, distinct from a red deficit. */
@@ -599,6 +617,11 @@ export interface DispatchOrderLine {
    * "who packed it". Null when nobody has, or the user no longer exists.
    */
   stagedByName?: string | null;
+  /**
+   * Every code a scan of this line's product should match — its barcode identifiers, the primary
+   * GTIN included, pack codes left out. Loaded by the order detail; absent elsewhere.
+   */
+  codes?: string[];
   /** What is on the way for a line that is short — quantity always, the per-PO breakdown only when
    *  the add-on that computes it is present and licensed. Absent on lines with no deficit. */
   inbound?: InboundCover;
@@ -1046,6 +1069,76 @@ export interface OrderDetailPanelSlotProps {
   orderHexId: string;
   order: DispatchOrderSummary;
   lines: DispatchOrderLine[];
+}
+
+/**
+ * How a line came to be staged, as recorded on it: a click on the table's button, a scan, or a
+ * query typed into a contribution and confirmed with Enter. Kept apart because a scan proves the
+ * product was in hand and a typed name does not.
+ */
+export type StageSource = 'scanner' | 'click' | 'keyboard';
+
+/** A field a typed line-filter query searches. */
+export type LineFilterField = 'name' | 'sku' | 'codes';
+
+/** How an order-page line-filter query was entered, and so how it matches. */
+export interface LineFilterOptions {
+  mode: 'scan' | 'typed';
+  /** Which fields a `typed` query searches; default all three. A scan ignores it. */
+  fields?: LineFilterField[];
+}
+
+/**
+ * Context for `order.detail.lines.header` — above the order's lines table. A scan station renders
+ * its input here (Scanner Ops); the host owns the lines, the filter and the staging, and the
+ * contribution only drives them. Read fields inside effects rather than destructuring: they track.
+ *
+ * With no contribution mounted the filter is never set, and the table shows every line as before.
+ */
+export interface OrderDetailLinesHeaderSlotProps {
+  orderHexId: string;
+  order: DispatchOrderSummary;
+  /** Every line of the order. */
+  lines: DispatchOrderLine[];
+  /** The lines the table shows under the current filter; one left is the single-match case. */
+  visibleLines: DispatchOrderLine[];
+  /** The current filter query; how it matches is {@link lineFilterOptions}. */
+  lineFilter: string;
+  /** How the current query matches: as a scan, or typed against which fields. */
+  lineFilterOptions: LineFilterOptions;
+  /**
+   * Set the filter. A `scan` matches a whole code or a whole SKU and nothing else; a `typed` query
+   * matches name and SKU by the fuzzy picker rule, per `fields`, and codes exactly. Without options
+   * the query is a scan. While a typed query is active, the table highlights what matched in the
+   * fields it searched.
+   */
+  setLineFilter: (query: string, opts?: LineFilterOptions) => void;
+  /**
+   * Mark the line Enter would stage, or null for none. The contribution owns the rule (one row
+   * left, not blocked, not over-counted); the host only draws the mark, and drops it with the order.
+   * A line the filter hides shows no mark.
+   */
+  armLine: (lineId: number | null) => void;
+  /**
+   * Register the filter input's focus, so the host can hand focus back to it: when the lines first
+   * render, after a stage or unstage made from the table, and on Escape in the table. Returns the
+   * unregister.
+   */
+  registerFilterFocus: (focus: () => void) => () => void;
+  /**
+   * Stage a line: an absolute quantity, or a change to the current one (a scan's one). One line's
+   * requests go out one after another, so a fast run of scans never shows a stale count; different
+   * lines run side by side. Resolves with the server's answer, rejects with its `ApiError` (code and
+   * message) after the host has rolled its optimistic count back. Never retried: a failed scan is
+   * scanned again.
+   */
+  stage: (
+    lineId: number,
+    change: { qty: number } | { delta: number },
+    source: StageSource,
+  ) => Promise<{ stagedQty: number; shippableQty: number }>;
+  /** Why this order takes no more staging (shipped, held, closed), or undefined; releases still work. */
+  stageBlockedReason: string | undefined;
 }
 
 /**

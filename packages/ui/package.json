@@ -21,7 +21,10 @@
     "./nav": "./src/NavTab.tsx",
     "./api": "./src/api/index.ts",
     "./toast": "./src/toast.ts",
+    "./fuzzy": "./src/fuzzy.tsx",
     "./pane": "./src/paneActive.ts",
+    "./parseDecimal": "./src/parseDecimal.ts",
+    "./quantity": "./src/quantity.ts",
     "./assets/*": "./assets/*"
   },
   "scripts": {

@@ -1,6 +1,11 @@
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 import tailwindcss from '@tailwindcss/vite';
 import solidPlugin from 'vite-plugin-solid';
 import { defineConfig } from 'vite';
+
+const requireFromHere = createRequire(import.meta.url);
 
 // Config-time env access, declared locally rather than via `@types/node` (the only Node surface
 // this package touches).
@@ -112,6 +117,45 @@ function stripTestIdsPlugin() {
   };
 }
 
+/**
+ * Every name a shared specifier exports, as the **browser** sees it.
+ *
+ * Importing the specifier here loads whatever Node resolves, and for `solid-js/web` that is Solid's
+ * server build. It lacks browser-only helpers compiled JSX emits — `use`, for a callback `ref` — so a
+ * bundle using one fails to link with "is not exported". The browser build's names are therefore added
+ * too, read from its `export { … }` list rather than by importing it: the browser build imports
+ * `solid-js` itself, which Node would again resolve to the server build. The union is safe, since a
+ * name the host's runtime lacks is simply undefined on it.
+ */
+async function sharedExportNames(specifier) {
+  const serverNames = Object.keys(await import(specifier));
+
+  return [...new Set([...serverNames, ...browserExportNames(specifier)])].filter((name) => 'default' !== name);
+}
+
+/** The names in the `export { … }` lists of the package's `browser` → `import` entry; [] if it has none. */
+function browserExportNames(specifier) {
+  const [pkgName, ...subpath] = specifier.split('/');
+  const pkgJsonPath = requireFromHere.resolve(`${pkgName}/package.json`);
+  const pkg = JSON.parse(readFileSync(pkgJsonPath, 'utf8'));
+  const entry = pkg.exports?.[0 === subpath.length ? '.' : `./${subpath.join('/')}`];
+  const browser = entry && 'object' === typeof entry ? entry.browser : undefined;
+  const file = browser && 'object' === typeof browser ? browser.import : undefined;
+  if ('string' !== typeof file) return [];
+
+  const source = readFileSync(join(dirname(pkgJsonPath), file), 'utf8');
+  const names = [];
+  for (const block of source.matchAll(/export\s*\{([^}]*)\}/g)) {
+    for (const part of block[1].split(',')) {
+      const alias = part.trim().match(/\sas\s+([\w$]+)$/);
+      const name = alias ? alias[1] : part.trim();
+      if (/^[\w$]+$/.test(name)) names.push(name);
+    }
+  }
+
+  return names;
+}
+
 function sharedRuntimePlugin() {
   return {
     name: 'invflux:shared-runtime',
@@ -144,8 +188,7 @@ function sharedRuntimePlugin() {
       if (!id.startsWith(VIRTUAL_PREFIX)) return null;
 
       const specifier = id.slice(VIRTUAL_PREFIX.length);
-      const real = await import(specifier);
-      const names = Object.keys(real).filter((name) => 'default' !== name);
+      const names = await sharedExportNames(specifier);
 
       const access = `globalThis.${HOST_RUNTIME_GLOBAL}?.[${JSON.stringify(specifier)}]`;
 

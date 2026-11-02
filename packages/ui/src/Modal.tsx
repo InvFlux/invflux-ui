@@ -12,6 +12,7 @@ import {
   containsAcrossShadow,
   deepActiveElement,
   focusableWithin,
+  isOnScreen,
   restoreFocusTo,
 } from './focusUtils';
 import { usePortalRootOptional } from './portal';
@@ -186,7 +187,16 @@ export function Modal(props: ModalProps): JSX.Element {
   let containerRef: HTMLDivElement | undefined;
   const contextPortalRoot = usePortalRootOptional();
 
+  /**
+   * Whether the dialog is on screen. A dialog stays mounted when its surface is hidden behind
+   * another (the shell keeps surfaces alive), and then has no layout box at all.
+   */
+  const shown = (): boolean => isOnScreen(containerRef);
+
   const handleKeyDown = (event: KeyboardEvent): void => {
+    // A dialog nobody can see must not take the Escape or the Tab meant for the page in front.
+    if (!shown()) return;
+
     if ((props.closeOnEsc ?? true) && event.key === 'Escape') {
       // Walk the composed path, not `event.target`: the SPAs mount in a shadow root, which
       // retargets `target` to the host before a document-level listener sees it.
@@ -231,14 +241,32 @@ export function Modal(props: ModalProps): JSX.Element {
   const opener = deepActiveElement();
 
   let releaseBackground: (() => void) | undefined;
+  let watchVisibility: ResizeObserver | undefined;
 
   onMount(() => {
     document.addEventListener('keydown', handleKeyDown, true);
 
     // The focus trap already stops Tab reaching the page behind; this is the other half — a screen
     // reader's own navigation, and a pointer, both of which ignore the trap entirely.
-    if (containerRef) {
-      releaseBackground = makeBackgroundInert(containerRef, [props.mount, contextPortalRoot]);
+    //
+    // The background is inert only while the dialog is on screen. Leaving the route another way
+    // than the dialog's own controls (browser Back, an edited address) hides the surface this
+    // dialog lives in but does not unmount it, and an inert background that outlives its view
+    // covers the page the user went to. Showing again re-applies it, so the dialog and what was
+    // typed into it are still there on return.
+    const syncBackground = (): void => {
+      if (!containerRef) return;
+      if (shown()) {
+        releaseBackground ??= makeBackgroundInert(containerRef, [props.mount, contextPortalRoot]);
+      } else {
+        releaseBackground?.();
+        releaseBackground = undefined;
+      }
+    };
+    syncBackground();
+    if (containerRef && typeof ResizeObserver === 'function') {
+      watchVisibility = new ResizeObserver(syncBackground);
+      watchVisibility.observe(containerRef);
     }
 
     // Fade in rather than appear — scrim and panel together, since both live on the backdrop.
@@ -262,6 +290,7 @@ export function Modal(props: ModalProps): JSX.Element {
   });
   onCleanup(() => {
     document.removeEventListener('keydown', handleKeyDown, true);
+    watchVisibility?.disconnect();
     releaseBackground?.();
     // Hosts that re-engage something more specific than the opener (the grid restoring cell
     // navigation) opt out and do it themselves.

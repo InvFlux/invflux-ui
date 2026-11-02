@@ -1,5 +1,7 @@
-import type { InputSource } from '../scanner/state';
 import type { StageCode } from './cycle';
+
+/** How a stage change was entered: a scanner burst, or typed and clicked by hand. */
+export type InputSource = 'scanner' | 'keyboard';
 
 export type StageGuardResult = 'ok' | 'ean-noscan' | 'no-shippable-qty';
 

@@ -17,6 +17,7 @@ import { Dynamic } from 'solid-js/web';
 import {
   DropdownMenu,
   FilterBar,
+  foldText,
   Button,
   IconButton,
   Modal,
@@ -60,6 +61,7 @@ import {
   FieldError,
   focusFirstInvalid,
   SegmentedControl,
+  Switch,
   DEFAULT_SORT,
   isDefaultSort,
   sortFromParams,
@@ -109,24 +111,24 @@ const LOAD_SIZE_OPTIONS = [50, 100, 200, 500, 1000, 2000];
 /** Columns whose value is meaningful only on unit (sellable) subjects — variable parents are
  *  value-less for them (a parent has no price and no cost of its own), so sorting by one auto-engages
  *  "hide brought-in parents" (the parents would otherwise clump at one end as a value-less block). */
-const UNIT_ONLY_SORT_COLUMNS = ['price', 'wac', 'stock_value', 'uncommitted_value', 'committed_value'];
+const UNIT_ONLY_SORT_COLUMNS = [
+  'price',
+  'wac',
+  'stock_value',
+  'uncommitted_value',
+  'committed_value',
+];
 
 /** Server-search debounce: re-query the server this long after the last keystroke. */
 const SEARCH_DEBOUNCE_MS = 300;
 const LOAD_SIZE_STORAGE_KEY = 'invflux_workbench_load_size';
+const LIVE_STOCK_STORAGE_KEY = 'invflux_workbench_live_stock';
 const COLLAPSED_STORAGE_KEY = 'invflux_workbench_collapsed';
 const DEFAULT_LOAD_SIZE = 500;
 
-/* Live-stock delta polling is DISABLED. The backend landed (adapter 298b195) but the "SPA
- * poll/apply" half never did: the reusable grid's default polling transport
- * targets `/workbench/stock-updates?subscription=…`, a route that was never registered (the server
- * exposes `/workbench/subscriptions/{id}/updates`), and the response envelope differs too
- * (`{updates:[{subjectId,atp,res,ctd,total}]}` vs the client's `{patches: RowPatch[]}`). So the
- * poller only produced a 404 every 30s per open Workbench and never delivered an update — stock
- * still refreshes on each products fetch. Passing no `liveUpdates` prop leaves the transport
- * uninstantiated. BACKLOG: finish the poll/apply integration (URL + envelope + mapping the server
- * aggregates onto the grid's stock-column field ids) — not needed for the wp.org submission.
+/** How often the loaded rows' stock is polled while the page is in view, and the switch is on.
  */
+const LIVE_STOCK_INTERVAL_MS = 30_000;
 
 // ─── Query helpers ────────────────────────────────────────────────────────────
 
@@ -631,6 +633,15 @@ function loadLoadSize(): number {
   return DEFAULT_LOAD_SIZE;
 }
 
+/** The reader's live-stock switch; on unless they turned it off. */
+function loadLiveStock(): boolean {
+  try {
+    return localStorage.getItem(LIVE_STOCK_STORAGE_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+
 function loadCollapsedProductIds(): Set<number> {
   try {
     const raw = sessionStorage.getItem(COLLAPSED_STORAGE_KEY);
@@ -699,7 +710,21 @@ function WorkbenchSettingsPanel(props: {
   /** Variation rows show only their attributes. The Product column's header menu sets the same value. */
   compactVariationNames: boolean;
   onCompactVariationNames: (compact: boolean) => void;
+  liveStock: boolean;
+  onLiveStock: (on: boolean) => void;
+  liveStockIntervalSeconds: number;
 }) {
+  const liveStockLabel = (): string =>
+    sprintf(
+      /* translators: %d: how many seconds apart the stock columns are refreshed (e.g. 30). Gear-menu switch. */
+      _n(
+        'Live stock updates (every %d second)',
+        'Live stock updates (every %d seconds)',
+        props.liveStockIntervalSeconds,
+      ),
+      props.liveStockIntervalSeconds,
+    );
+
   const settingsSections = slotRegistry.get<WorkbenchSettingsSlotProps>('workbench.settings');
 
   return (
@@ -737,6 +762,26 @@ function WorkbenchSettingsPanel(props: {
             value={props.compactVariationNames ? 'attrs' : 'full'}
             onChange={(v) => props.onCompactVariationNames(v === 'attrs')}
           />
+        </div>
+        <div
+          class="mt-3 flex items-start justify-between gap-4"
+          data-testid="workbench-setting-live-stock"
+        >
+          <div class="min-w-0">
+            <p class="text-sm text-text">{liveStockLabel()}</p>
+            <p class="mt-0.5 text-xs text-text-muted">
+              {__(
+                'Keeps the stock of the loaded rows current while this page is in view. Their order stays as loaded.',
+              )}
+            </p>
+          </div>
+          <div class="shrink-0 pt-0.5">
+            <Switch
+              checked={props.liveStock}
+              ariaLabel={liveStockLabel()}
+              onChange={(checked) => props.onLiveStock(checked)}
+            />
+          </div>
         </div>
       </SettingsSection>
 
@@ -848,9 +893,7 @@ function WorksheetsModal(props: {
   // The name is required, so it is marked only once a create has been attempted without one.
   const [createAttempted, setCreateAttempted] = createSignal(false);
   const nameError = (): string | null =>
-    createAttempted() && newName().trim() === ''
-      ? __('Enter a name for the new worksheet.')
-      : null;
+    createAttempted() && newName().trim() === '' ? __('Enter a name for the new worksheet.') : null;
   let createRow: HTMLDivElement | undefined;
   const [filterText, setFilterText] = createSignal('');
   const [error, setError] = createSignal<string | null>(null);
@@ -1182,6 +1225,16 @@ export function WorkbenchGrid(
   let toggleLayout: () => void = () => {};
   let openSaveReview: () => void = () => {};
 
+  // The reader's live-stock switch (gear → Display), remembered in this browser.
+  const [liveStock, setLiveStock] = createSignal(loadLiveStock());
+  createEffect(() => {
+    try {
+      localStorage.setItem(LIVE_STOCK_STORAGE_KEY, liveStock() ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  });
+
   // Contribute the workbench's settings panel to the app shell's contextual gear (§11.4): while the
   // Workbench surface is active, the gear popover mounts this panel (foldable Display / Cell components
   // / add-on sections). The component closure reads this view's live state — valid because the view is
@@ -1201,6 +1254,9 @@ export function WorkbenchGrid(
           onLoadSize={(n) => setQuery((q) => ({ ...q, loadSize: n }))}
           compactVariationNames={gridHandles()?.compactVariationNames() ?? true}
           onCompactVariationNames={(compact) => gridHandles()?.setCompactVariationNames(compact)}
+          liveStock={liveStock()}
+          onLiveStock={setLiveStock}
+          liveStockIntervalSeconds={LIVE_STOCK_INTERVAL_MS / 1000}
         />
       ),
     }),
@@ -1280,6 +1336,16 @@ export function WorkbenchGrid(
   const [stableColumns, setStableColumns] = createSignal<WorkbenchColumnMeta[]>([]);
   const [totalCount, setTotalCount] = createSignal(0);
   const [loadedCount, setLoadedCount] = createSignal(0);
+  // Every page of the current query is loaded (see the `searchInBrowser` effect).
+  const [loadComplete, setLoadComplete] = createSignal(false);
+  // The search the server last ran, which may lag `query().search`: once a result set is fully
+  // loaded, a narrower search is answered by the browser alone (see the `searchInBrowser` effect).
+  const [serverSearch, setServerSearch] = createSignal(initialQuery.search.trim());
+  // The rows on screen are the whole answer to the typed search, narrowed in the browser from a
+  // complete set — so what is loaded is also the total, and there is nothing left to load.
+  const searchedInBrowser = (): boolean =>
+    loadComplete() && foldText(searchInput().trim()) !== foldText(serverSearch());
+  const shownTotal = (): number => (searchedInBrowser() ? loadedCount() : totalCount());
   // Mirrors of grid state the shell renders in its own bar (the grid's toolbar is hidden here).
   const [gridDirty, setGridDirty] = createSignal(false);
   const [layoutInfo, setLayoutInfo] = createSignal<{
@@ -1468,6 +1534,38 @@ export function WorkbenchGrid(
     }),
   );
 
+  // Decide who answers a search: the server, or the browser alone. When every row of the current
+  // result set is loaded and the new search can only remove rows from it (it contains the search the
+  // server last ran), filtering what is on screen gives the same answer the server would, so the
+  // server is not asked — and clearing that search later costs nothing either, since the server's
+  // set never lost those rows. The URL still carries `query().search`, so a reload asks the server
+  // and lands on the same rows. Anything else that changes the server query (filters, page size)
+  // sends the search along with it, because the loaded set it narrowed is being replaced. A new sort
+  // does not: a set the browser is narrowing is complete, and the grid re-orders a complete set
+  // without replacing it.
+  const serverQuerySig = createMemo(() => {
+    const q = query();
+    return JSON.stringify([
+      q.loadSize,
+      q.filterValues,
+      q.filterModifiers,
+      q.bringChildren,
+      q.bringParents,
+    ]);
+  });
+  let lastServerQuerySig = untrack(serverQuerySig);
+  createEffect(function searchInBrowser() {
+    const want = query().search.trim();
+    const sig = serverQuerySig();
+    const complete = loadComplete();
+    const othersChanged = sig !== lastServerQuerySig;
+    lastServerQuerySig = sig;
+    const have = untrack(serverSearch);
+    if (want === have) return;
+    if (!othersChanged && complete && foldText(want).includes(foldText(have))) return;
+    setServerSearch(want);
+  });
+
   // ── Query params for the grid's fetch — the EXACT encoding the server expects ──
   // Registry filter values via the shared bridge writer (numeric_ids → dash-joined `post_ids`,
   // everything else → array shape), plus `search` and the `bring_children` server opt-in, plus the
@@ -1482,7 +1580,7 @@ export function WorkbenchGrid(
       const all = tmp.getAll(key);
       params[key] = all.length > 1 ? all : (all[0] ?? '');
     }
-    if (q.search.trim() !== '') params['search'] = q.search.trim();
+    if (serverSearch() !== '') params['search'] = serverSearch();
     if (q.bringChildren) params['bring_children'] = '1';
     // Opt-out: only the departure from the default is sent.
     if (!q.bringParents) params['bring_parents'] = '0';
@@ -1569,16 +1667,12 @@ export function WorkbenchGrid(
       const v = workbenchValueFor(p, sortBy);
       return v === null || v === undefined || v === '';
     };
-    const isHiddenParent = (p: WorkbenchRow): boolean =>
-      hideParentsActive && isAggregateRow(p) && (p.matched === false || sortNull(p));
-    const isHiddenChild = (p: WorkbenchRow): boolean =>
-      q.hideBroughtChildren && p.wcVariationId !== null && p.matched === false;
-
-    // Instant client narrowing on the loaded set (before the debounced server re-query lands).
-    const needle = searchInput().trim().toLowerCase();
+    // Instant client narrowing on the loaded set: while the debounced server re-query is on its way,
+    // or for good once the set is fully loaded (see the `searchInBrowser` effect). Matches as the
+    // server does: the whole trimmed input inside the name or the SKU, ignoring case and accents.
+    const needle = foldText(searchInput().trim());
     const matchesNeedle = (p: WorkbenchRow): boolean =>
-      p.name.toLowerCase().includes(needle) || p.sku.toLowerCase().includes(needle);
-    const hiddenParentIds = new Set(rows.filter(isHiddenParent).map((p) => p.wcProductId));
+      foldText(p.name).includes(needle) || foldText(p.sku).includes(needle);
     const parentMatchesNeedle = new Set(
       needle === ''
         ? []
@@ -1586,9 +1680,25 @@ export function WorkbenchGrid(
             .filter((p) => p.wcVariationId === null && matchesNeedle(p))
             .map((p) => p.wcProductId),
     );
+    // A variation stays when it matches, or when its parent does (a parent-SKU search).
+    const keepsVariation = (p: WorkbenchRow): boolean =>
+      needle === '' || matchesNeedle(p) || parentMatchesNeedle.has(p.wcProductId);
+    // A variable parent kept only for its matching variations is context, as the server marks a
+    // parent it brings along for them — so "hide brought-in parents" hides it the same way.
+    const isSearchContextParent = (p: WorkbenchRow): boolean =>
+      needle !== '' && isVariableParent(p) && !parentMatchesNeedle.has(p.wcProductId);
+
+    const isHiddenParent = (p: WorkbenchRow): boolean =>
+      hideParentsActive &&
+      isAggregateRow(p) &&
+      (p.matched === false || sortNull(p) || isSearchContextParent(p));
+    const isHiddenChild = (p: WorkbenchRow): boolean =>
+      q.hideBroughtChildren && p.wcVariationId !== null && p.matched === false;
+    const hiddenParentIds = new Set(rows.filter(isHiddenParent).map((p) => p.wcProductId));
 
     const aggregateParent = (product: WorkbenchRow): WorkbenchRow => {
-      const children = childrenMap.get(product.wcProductId) ?? [];
+      // Only the variations the search keeps: the parent sums what is listed under it.
+      const children = (childrenMap.get(product.wcProductId) ?? []).filter(keepsVariation);
       if (children.length === 0) return product;
       const atp = children.reduce((sum, c) => sum + c.atp, 0);
       const res = children.reduce((sum, c) => sum + c.res, 0);
@@ -1635,8 +1745,7 @@ export function WorkbenchGrid(
         if (isVariableParent(product)) {
           return (childrenMap.get(product.wcProductId) ?? []).some(matchesNeedle);
         }
-        // Keep a loaded variation whose parent matches the needle (a parent-SKU search + bring-in).
-        if (product.wcVariationId !== null) return parentMatchesNeedle.has(product.wcProductId);
+        if (product.wcVariationId !== null) return keepsVariation(product);
         return false;
       })
       .map((product) => (isVariableParent(product) ? aggregateParent(product) : product));
@@ -2277,10 +2386,10 @@ export function WorkbenchGrid(
                 __('Selected: %d, Loaded: %d, Total: %d'),
                 selectedSubjectIds().length,
                 loadedCount(),
-                totalCount(),
+                shownTotal(),
               )}
             >
-              {selectedSubjectIds().length}/{loadedCount()}/{totalCount()}
+              {selectedSubjectIds().length}/{loadedCount()}/{shownTotal()}
             </span>
             {/* While a multi-chunk save is sending, the readout shows its progress in place of the
                 Load-all link — text over a bar, matching the dispatch queue's packing progress. The
@@ -2289,7 +2398,7 @@ export function WorkbenchGrid(
             <Show
               when={savingBar()}
               fallback={
-                <Show when={loadedCount() < totalCount()}>
+                <Show when={!loadComplete() && loadedCount() < totalCount()}>
                   <Button
                     variant="link"
                     size="sm"
@@ -2453,6 +2562,7 @@ export function WorkbenchGrid(
           // so the grid's own loaded/total footer would just repeat it and cost a row of height.
           showFooterCount={false}
           defaultLayout="grid"
+          liveUpdates={{ intervalMs: LIVE_STOCK_INTERVAL_MS, enabled: liveStock }}
           onDirtyChange={(d) => {
             setGridDirty(d);
             // Surface dirty state to an embedder (the unified app's nav guard + tab signal).
@@ -2535,6 +2645,7 @@ export function WorkbenchGrid(
             setStableTaxonomySpace(m.taxonomySpace);
             setTotalCount(m.total);
             setLoadedCount(m.loaded);
+            setLoadComplete(m.complete);
           }}
           onSelectionChange={(ids) => setSelectedSubjectIds(ids)}
           onFetchingChange={(fetching) => setIsRefreshing(fetching)}

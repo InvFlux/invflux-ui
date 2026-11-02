@@ -44,6 +44,7 @@ import {
   type ManualPaymentInput,
   processCorrections,
   settleManualRefund,
+  type SettleManualRefundInput,
   searchSkuFilterOptions,
   shipOrder,
   reverseShipment,
@@ -192,7 +193,10 @@ export function useDispatchOrderDetailQuery(
 export interface StageLineMutationVariables {
   /** The line's number within the order being staged. */
   lineId: number;
+  /** The absolute quantity to stage; ignored when {@link deltaQty} is set. */
   stagedQty: number;
+  /** A change to the line's current staged quantity instead — see {@link StageLineRequest}. */
+  deltaQty?: number;
   source: StageLineRequest['source'];
 }
 
@@ -219,10 +223,14 @@ export function useStageLineMutation(
 
   return createMutation(() => ({
     mutationFn: (variables: StageLineMutationVariables) =>
-      stageLine(ctx, orderHexId(), variables.lineId, {
-        stagedQty: variables.stagedQty,
-        source: variables.source,
-      }),
+      stageLine(
+        ctx,
+        orderHexId(),
+        variables.lineId,
+        variables.deltaQty !== undefined
+          ? { deltaQty: variables.deltaQty, source: variables.source }
+          : { stagedQty: variables.stagedQty, source: variables.source },
+      ),
     onMutate: async (variables): Promise<StageLineMutationContext> => {
       const queryKey = qk.dispatch.orderDetail(orderHexId());
       await queryClient.cancelQueries({ queryKey });
@@ -507,6 +515,7 @@ export function useCreateCorrectionMutation(
         };
       });
       void queryClient.invalidateQueries({ queryKey: detailKey });
+      void queryClient.invalidateQueries({ queryKey: qk.dispatch.orderEvents(orderHexId()) });
       void queryClient.invalidateQueries({ queryKey: qk.dispatch.queue() });
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : String(e)),
@@ -551,6 +560,7 @@ export function useDeleteCorrectionMutation(
       // The DELETE response is 204; backend recounted unprocessed_corrections
       // and status, so refetch order detail + queue to pull the new numbers.
       void queryClient.invalidateQueries({ queryKey: qk.dispatch.orderDetail(orderHexId()) });
+      void queryClient.invalidateQueries({ queryKey: qk.dispatch.orderEvents(orderHexId()) });
       void queryClient.invalidateQueries({ queryKey: qk.dispatch.queue() });
     },
   }));
@@ -560,7 +570,9 @@ export function useDeleteCorrectionMutation(
  * Process every unprocessed correction on one order in a single batch.
  * On success, patches the cached order header from the response and
  * invalidates the corrections list so the rows pick up their new
- * `processedAt` timestamps.
+ * `processedAt` timestamps, the detail (a scheduled refund raises its
+ * `pendingManualRefunds` counter) and the timeline (fresh
+ * `corrections.processed` event).
  */
 export function useProcessCorrectionsMutation(
   orderHexId: Accessor<string>,
@@ -595,6 +607,8 @@ export function useProcessCorrectionsMutation(
       // Refetch corrections list (rows now have `processedAt` set) and the
       // queue so the order's stagedCount / status change propagates.
       void queryClient.invalidateQueries({ queryKey: qk.dispatch.orderCorrections(orderHexId()) });
+      void queryClient.invalidateQueries({ queryKey: detailKey });
+      void queryClient.invalidateQueries({ queryKey: qk.dispatch.orderEvents(orderHexId()) });
       void queryClient.invalidateQueries({ queryKey: qk.dispatch.queue() });
     },
   }));
@@ -608,12 +622,17 @@ export function useProcessCorrectionsMutation(
  */
 export function useSettleManualRefundMutation(
   orderHexId: Accessor<string>,
-): CreateMutationResult<SettleManualRefundResponse, CorrectionApiError, void, unknown> {
+): CreateMutationResult<
+  SettleManualRefundResponse,
+  CorrectionApiError,
+  SettleManualRefundInput,
+  unknown
+> {
   const ctx = useDispatch();
   const queryClient = useQueryClient();
 
   return createMutation(() => ({
-    mutationFn: () => settleManualRefund(ctx, orderHexId()),
+    mutationFn: (settle: SettleManualRefundInput) => settleManualRefund(ctx, orderHexId(), settle),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: qk.dispatch.orderDetail(orderHexId()) });
       void queryClient.invalidateQueries({ queryKey: qk.dispatch.orderEvents(orderHexId()) });
@@ -689,10 +708,14 @@ function applyOptimisticStage(
   const nowIso = new Date().toISOString();
   const updatedLines = prev.lines.map((line) => {
     if (line.lineId !== variables.lineId) return line;
-    const isStaging = variables.stagedQty > 0;
+    // A delta lands on the count the cache holds now; the server applies the same change to the
+    // stored one, and its answer settles any difference.
+    const target =
+      variables.deltaQty !== undefined ? line.stagedQty + variables.deltaQty : variables.stagedQty;
+    const isStaging = target > 0;
     return {
       ...line,
-      stagedQty: variables.stagedQty,
+      stagedQty: target,
       stagedBy: isStaging ? currentUserId : null,
       stagedAt: isStaging ? nowIso : null,
       stagedSource: isStaging ? variables.source : null,

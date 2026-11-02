@@ -5,20 +5,35 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // registries real, imported straight from the registry module, so the registration assertions
 // run against the same instances the plug-in API uses.
 /**
- * The atomic primitives the bridge hands to add-ons. Shared by the mock and the assertion below so
- * the two cannot drift apart.
+ * The SPA-wide components the bridge hands to add-ons (`sharedPluginUi`). Shared by the mock and the
+ * assertion below so the two cannot drift apart.
  *
  * They are **stubbed**, not imported for real: this suite runs in the `node` environment, and a
  * compiled Solid component carrying an event handler (`Pill`'s dismiss button) calls
  * `delegateEvents` at module load, which needs a `document`. Nothing is lost by stubbing — that the
- * real components exist and are exported is pinned by the bridge's own types (`Button: typeof
- * Button` fails to compile if the export goes away), which is a stronger guarantee than a runtime
- * `typeof === "function"` check. What this test pins is the *shape of the bridge*: that each
- * primitive is actually wired into `installPluginApi`'s `ui` object and reaches `window.invflux`.
+ * real components exist and are exported is pinned by the bridge's own types (`SharedPluginUi` is
+ * `typeof sharedPluginUi`, so a removed export fails to compile), which is a stronger guarantee than
+ * a runtime `typeof === "function"` check. What this test pins is the *shape of the bridge*: that
+ * the shared set is actually wired into `installPluginApi`'s `ui` object and reaches
+ * `window.invflux`.
  */
-const ATOMICS = vi.hoisted(
+const SHARED = vi.hoisted(
   () =>
-    ['Button', 'IconButton', 'Input', 'Select', 'Textarea', 'Checkbox', 'Pill', 'Spinner'] as const,
+    [
+      'Button',
+      'IconButton',
+      'Input',
+      'Select',
+      'Textarea',
+      'Checkbox',
+      'Pill',
+      'Spinner',
+      'Combobox',
+      'Modal',
+      'ModalPanel',
+      'ModalHeader',
+      'ModalFooter',
+    ] as const,
 );
 
 vi.mock('@invflux/ui', async () => {
@@ -26,10 +41,10 @@ vi.mock('@invflux/ui', async () => {
   const slots = await import('../../ui/src/slots');
   const pluginApi = await import('../../ui/src/plugin-api');
   const toastMod = await import('../../ui/src/toast');
+  const stubs = Object.fromEntries(SHARED.map((name) => [name, () => null]));
   return {
-    Combobox: () => null,
-    Modal: () => null,
-    ...Object.fromEntries(ATOMICS.map((name) => [name, () => null])),
+    ...stubs,
+    sharedPluginUi: stubs,
     ...registry,
     ...slots,
     ...pluginApi,
@@ -60,10 +75,8 @@ describe('installPluginApi', () => {
     expect(typeof api.registerBulkAction).toBe('function');
     expect(typeof api.solid.createSignal).toBe('function');
     expect(typeof api.solid.Show).toBe('function');
-    expect(typeof api.ui.Combobox).toBe('function');
-    expect(typeof api.ui.Modal).toBe('function');
-    // The atomic suite — an add-on hand-rolling its own <button> is what this exposure prevents.
-    for (const name of ATOMICS) {
+    // The shared set — an add-on hand-rolling its own <button> or dialog box is what this prevents.
+    for (const name of SHARED) {
       expect(typeof api.ui[name], name).toBe('function');
     }
     expect(typeof api.toast).toBe('function');

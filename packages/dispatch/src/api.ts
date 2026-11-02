@@ -18,6 +18,8 @@ import type {
   ArchivedTagName,
   LabelTranslations,
   TagListResult,
+  StageSource,
+  UnrecordedPaymentAnswer,
 } from './types';
 
 /** WP REST namespace for dispatch endpoints. Matches the PHP `DispatchController`. */
@@ -198,12 +200,16 @@ export async function resolveOrderByExternalId(
 // Stage-line mutation — PATCH /orders/{id}/lines/{lineId}
 // ---------------------------------------------------------------------------
 
-export type StageSource = 'scanner' | 'click';
+export type { StageSource };
 
-export interface StageLineRequest {
-  stagedQty: number;
-  source: StageSource;
-}
+/**
+ * Exactly one of `stagedQty` (the absolute quantity) or `deltaQty` (a signed change to the current
+ * one, applied by the server under the line lock — a scanner's one-per-scan). Out of range is
+ * refused, never clamped.
+ */
+export type StageLineRequest =
+  | { stagedQty: number; deltaQty?: never; source: StageSource }
+  | { deltaQty: number; stagedQty?: never; source: StageSource };
 
 /**
  * The order-level fields returned in every PATCH response per §4.0 — the
@@ -223,6 +229,8 @@ export interface StageLineOrderSnapshot {
 export interface StageLineResponse {
   line: DispatchOrderLine;
   order: StageLineOrderSnapshot;
+  /** The line's bound, qtyOrdered − qtyCanceled − qtyShipped, as the server computed it. */
+  shippableQty?: number;
 }
 
 /**
@@ -279,6 +287,9 @@ export class CorrectionApiError extends ApiError {
     super(status, { code, message });
   }
 }
+
+/** The server's refusal of a refund on an order with no payment on record, until answered. */
+export const NO_PAYMENT_RECORDED = 'invflux_refund_no_payment_recorded';
 
 // ---------------------------------------------------------------------------
 // Order events — GET /orders/{id}/events
@@ -546,19 +557,31 @@ export interface SettleManualRefundResponse {
   settledCount: number;
 }
 
+export interface SettleManualRefundInput {
+  throughGateway: boolean;
+  /** The operator's answer once the server has asked; see `NO_PAYMENT_RECORDED`. */
+  unrecordedPayment?: UnrecordedPaymentAnswer;
+}
+
 /**
- * Settle the order's pending manual refunds (non-refundable gateway). The
- * operator attests (`manualConfirmed: true`) that the money has been / will be
- * moved out-of-band; the backend issues the WC refund record + emits
- * `correction.refund_confirmed(manual_confirmed)` per unsettled manual schedule.
+ * Settle the order's pending manual refunds: through the gateway, where it can refund, or on the
+ * operator's attestation (`manualConfirmed: true`) that the money has been / will be moved
+ * out-of-band. The backend records the WC refund + emits `correction.refund_confirmed` per unsettled
+ * manual schedule.
  */
 export async function settleManualRefund(
   ctx: DispatchContext,
   orderHexId: string,
+  settle: SettleManualRefundInput,
 ): Promise<SettleManualRefundResponse> {
   return api(ctx)
     .post<SettleManualRefundResponse>(route(path`/orders/${orderHexId}/settle-manual-refund`), {
-      manualConfirmed: true,
+      ...(settle.unrecordedPayment === 'nothing_to_refund'
+        ? {}
+        : settle.throughGateway
+          ? { throughGateway: true }
+          : { manualConfirmed: true }),
+      ...(settle.unrecordedPayment ? { unrecordedPayment: settle.unrecordedPayment } : {}),
     })
     .catch(
       typedAs((c, st, ms) => new CorrectionApiError(c, st, ms), 'Settle manual refund failed'),

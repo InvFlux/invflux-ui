@@ -3,6 +3,7 @@ import {
   Button,
   ErrorBanner,
   Input,
+  isOnScreen,
   Modal,
   ModalFooter,
   ModalHeader,
@@ -210,10 +211,13 @@ export function AddressEditModal(props: {
   // form would never see it. Capture phase for the same reason. Ctrl/Cmd+Enter is handled on the
   // form instead: focus is trapped inside the dialog, so there is nowhere else for it to land, and
   // one listener per chord keeps a keystroke from reaching `save()` twice.
+  let panelRef: HTMLDivElement | undefined;
   createEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (!(event.ctrlKey || event.metaKey)) return;
       if (event.key !== 's' && event.key !== 'S') return;
+      // A dialog parked in a hidden surface must not save on the visible page's Ctrl+S.
+      if (!isOnScreen(panelRef)) return;
       event.preventDefault();
       event.stopPropagation();
       void save();
@@ -224,7 +228,7 @@ export function AddressEditModal(props: {
 
   return (
     <Modal onClose={props.onClose} label={title()}>
-      <ModalPanel size="xl">
+      <ModalPanel ref={panelRef} size="xl">
         <ModalHeader
           title={title()}
           subtitle={__('Saved to WooCommerce, which prints the labels and sends the emails.')}

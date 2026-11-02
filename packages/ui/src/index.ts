@@ -27,7 +27,7 @@ export type {
   TaxonomySpaceValue,
 } from './types';
 export { Combobox } from './Combobox';
-export { fuzzyScore, HighlightMatch, wordMatch, wordQueryNarrows } from './fuzzy';
+export { foldText, fuzzyScore, HighlightMatch, wordMatch, wordQueryNarrows } from './fuzzy';
 export type { FuzzyScore } from './fuzzy';
 export { KobalteComboboxFirstFocus } from './KobalteComboboxFirstFocus';
 export { SearchSelect } from './SearchSelect';
@@ -156,6 +156,7 @@ export {
   deepActiveElement,
   focusableWithin,
   FOCUSABLE_SELECTOR,
+  isOnScreen,
   isVisibleFocusable,
   restoreFocusTo,
 } from './focusUtils';
@@ -386,6 +387,8 @@ export type {
 } from './entity-actions';
 export { installPluginApi } from './plugin-api';
 export type { PluginApi, RegistryApi } from './plugin-api';
+export { sharedPluginUi } from './pluginUi';
+export type { SharedPluginUi } from './pluginUi';
 // Spreadsheet-grid primitives (pure, unit-tested) — the cell-selection state machine, clipboard
 // payload builder, and paste-target geometry shared by the DataGrid extraction.
 export {
@@ -495,3 +498,12 @@ export { buildWorkbenchColumns, buildStockColumns, stockSlotOf } from './grid/wo
 export type { WorkbenchColumnDeps, StockColumnDeps, StockSlot } from './grid/workbenchColumns';
 export { decimalOrNull, parseDecimal } from './parseDecimal';
 export type { ParseDecimalOptions, ParsedDecimal } from './parseDecimal';
+export { formatQuantity, parseQuantity, stepQuantity } from './quantity';
+export type {
+  FormatQuantityOptions,
+  ParsedQuantity,
+  ParseQuantityOptions,
+  StepBounds,
+} from './quantity';
+export { QuantityInput } from './QuantityInput';
+export type { QuantityInputProps } from './QuantityInput';

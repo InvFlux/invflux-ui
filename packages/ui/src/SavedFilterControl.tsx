@@ -3,6 +3,7 @@ import { __, _n, _x, sprintf } from '@invflux/i18n';
 import { Button } from './Button';
 import { buttonClass } from './primitives';
 import { DropdownMenu, type DropdownMenuItem } from './DropdownMenu';
+import { FieldError, focusFirstInvalid } from './FieldError';
 import { Input } from './Input';
 import { PaletteSwatchPicker } from './PaletteSwatchPicker';
 import { paletteInk, paletteStyle } from './tagPalette';
@@ -78,6 +79,9 @@ export function SavedFilterControl(props: SavedFilterControlProps) {
   const [savingOpen, setSavingOpen] = createSignal(false);
   const [managingOpen, setManagingOpen] = createSignal(false);
   const [draftName, setDraftName] = createSignal('');
+  /** Whether Save has been pressed since the dialog opened — a required field is marked from then on. */
+  const [attempted, setAttempted] = createSignal(false);
+  let savePanelRef: HTMLDivElement | undefined;
   const [draftColor, setDraftColor] = createSignal(0);
   /** The view the save dialog will overwrite, or null for a new one. */
   const [replaceId, setReplaceId] = createSignal<number | null>(null);
@@ -148,6 +152,10 @@ export function SavedFilterControl(props: SavedFilterControlProps) {
     return id === null ? undefined : props.savedFilters().find((f) => f.id === id);
   };
 
+  /** The name is missing — marked only after a Save attempt; a replaced view keeps its own name. */
+  const nameMissing = (): boolean =>
+    attempted() && replaceTarget() === undefined && draftName().trim() === '';
+
   async function save(): Promise<void> {
     if (busy()) return;
     const target = replaceTarget();
@@ -160,7 +168,12 @@ export function SavedFilterControl(props: SavedFilterControlProps) {
       return;
     }
     const name = draftName().trim();
-    if (name === '') return;
+    if (name === '') {
+      setAttempted(true);
+      focusFirstInvalid(savePanelRef);
+
+      return;
+    }
     if (await guard(props.onCreate(name, resolved(), draftColor()))) {
       setDraftName('');
       setDraftColor(0);
@@ -226,6 +239,7 @@ export function SavedFilterControl(props: SavedFilterControlProps) {
           setDraftName('');
           setDraftColor(0);
           setReplaceId(null);
+          setAttempted(false);
           setSavingOpen(true);
         },
       });
@@ -288,7 +302,7 @@ export function SavedFilterControl(props: SavedFilterControlProps) {
 
       <Show when={savingOpen()}>
         <Modal onClose={() => setSavingOpen(false)} label={__('Save this view')}>
-          <ModalPanel size="sm">
+          <ModalPanel ref={savePanelRef} size="sm">
             <ModalHeader title={__('Save this view')} />
             <div class="p-4">
               {/* The honest consequence of an install-wide scope, said before the operator commits
@@ -339,6 +353,8 @@ export function SavedFilterControl(props: SavedFilterControlProps) {
                 class={`mt-1 w-full ${replaceTarget() !== undefined ? 'cursor-default bg-surface-raised text-text-muted' : ''}`}
                 value={replaceTarget()?.name ?? draftName()}
                 readOnly={replaceTarget() !== undefined}
+                invalid={nameMissing()}
+                aria-required="true"
                 autofocus
                 onInput={(e) => setDraftName(e.currentTarget.value)}
                 onKeyDown={(e) => {
@@ -347,6 +363,10 @@ export function SavedFilterControl(props: SavedFilterControlProps) {
                     void save();
                   }
                 }}
+              />
+              <FieldError
+                message={nameMissing() && __('Enter a name for this view.')}
+                testId="saved-filter-name-error"
               />
 
               <div class="mt-3">
@@ -395,7 +415,7 @@ export function SavedFilterControl(props: SavedFilterControlProps) {
                 variant="primary"
                 size="sm"
                 data-testid="saved-filter-save"
-                disabled={(replaceTarget() === undefined && draftName().trim() === '') || busy()}
+                disabled={busy()}
                 onClick={() => void save()}
               >
                 {replaceTarget() !== undefined

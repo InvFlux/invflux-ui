@@ -88,6 +88,16 @@ describe('sharedRuntime: on', () => {
     }
   });
 
+  it('bridges the browser-only helpers too, which Node resolves to a server build without', async () => {
+    const code = await plugin.load(plugin.resolveId('solid-js/web'));
+
+    // `use` is what a callback ref (`ref={(el) => …}`) compiles to. Solid's server build, the one Node
+    // loads, does not export it, so a bridge built from that build alone fails the add-on's link step.
+    for (const name of ['use', 'render', 'setAttribute', 'className']) {
+      expect(code).toContain(`export const ${name} = runtime["${name}"];`);
+    }
+  });
+
   it('bridges the store package', async () => {
     const code = await plugin.load(plugin.resolveId('solid-js/store'));
 

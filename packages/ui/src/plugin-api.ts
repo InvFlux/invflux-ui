@@ -12,6 +12,7 @@ import {
   type ViewComponent,
 } from './datatypes/registry';
 import { slotRegistry, type SlotContribution } from './slots';
+import { surfaceSettingsRegistry, type SurfaceSettingsPanel } from './surfaceSettings';
 import { filterControlRegistry, type FilterControl } from './filters';
 import { bulkActionRegistry, type BulkAction } from './bulk-actions';
 import {
@@ -78,6 +79,15 @@ export interface RegistryApi {
     scope: string,
     action: EntityAction<Ctx>,
   ): void;
+  /**
+   * Register a panel in a surface's gear popover (§11.4 of the shell), scoped by `surfaceId` — the
+   * first path segment the surface is opened at. A panel the gear should show only while a feature
+   * is licensed gates itself with `enabled`, read every time the gear opens. Returns the disposer.
+   *
+   * An add-on registers here rather than in the registry of its own `@invflux/ui` copy, which no
+   * gear reads.
+   */
+  registerSurfaceSettings(panel: SurfaceSettingsPanel): () => void;
 }
 
 /** A full SPA surface: the shared registry API plus the host-provided runtime bridge. */
@@ -106,6 +116,7 @@ function registryApi(): RegistryApi {
       filterControlRegistry.register(type, id, component, opts),
     registerBulkAction: (action) => bulkActionRegistry.register(action),
     registerEntityAction: (scope, action) => entityActionRegistry.register(scope, action),
+    registerSurfaceSettings: (panel) => surfaceSettingsRegistry.register(panel),
   };
 }
 

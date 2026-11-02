@@ -51,6 +51,11 @@ export function explainConflict(reason: string, column: string): string | null {
         __('%s: changed on the server since you loaded it — review the new value and retry.'),
         column,
       );
+    case 'not_on_worksheet':
+      return sprintf(
+        __('%s: this product is no longer on the worksheet. Reload to see it.'),
+        column,
+      );
     case 'stock_management_locked':
       return sprintf(
         __('%s: this product is busy in a stock workflow and cannot be un-governed yet.'),

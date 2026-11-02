@@ -36,6 +36,36 @@ export interface RoadmapResponse {
   items: RoadmapItem[];
   /** Present when the payload is a last-good copy served because the service was unreachable. */
   stale?: boolean;
+  /**
+   * This account's priority points, absent from a service that predates them. The three fields
+   * are three facts, read as sent and never derived from one another: `priority` lists every
+   * allocation held, including on rows that have since started or shipped, while `priority_left`
+   * counts only the rows that still take points.
+   */
+  priority?: PriorityAllocation;
+  priority_left?: number;
+  priority_budget?: number;
+}
+
+/**
+ * Points per item id, always an object. An early build of the service sent an empty allocation
+ * as `[]` (never deployed); `pointsOn()` still accepts both, and also an absent field.
+ */
+export type PriorityAllocation = Record<string, number> | number[];
+
+/** The answer to setting points on one item: the new allocation, and the account's summary. */
+export interface PointsResponse {
+  item_id: number;
+  points: number;
+  priority: PriorityAllocation;
+  priority_left: number;
+  priority_budget: number;
+}
+
+/** Points this account holds on one item, from either encoding of the map. */
+export function pointsOn(priority: PriorityAllocation | undefined, itemId: number): number {
+  if (undefined === priority || Array.isArray(priority)) return 0;
+  return priority[String(itemId)] ?? 0;
 }
 
 export interface VoteResponse {

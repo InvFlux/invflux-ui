@@ -5,9 +5,11 @@ import {
   Match,
   Show,
   Switch,
+  batch,
   createEffect,
   createMemo,
   createSignal,
+  on,
   onCleanup,
   onMount,
   useContext,
@@ -19,6 +21,7 @@ import {
   ErrorBanner,
   Button,
   DropdownMenu,
+  HighlightMatch,
   Modal,
   Pill,
   SplitActionButton,
@@ -35,6 +38,7 @@ import {
   useHostNav,
   viewRegistry,
   isTypingTarget,
+  isOnScreen,
   cancelPendingShortcut,
   runWhenTypingStops,
   toast,
@@ -65,6 +69,7 @@ import { OrderStatusChip } from '../components/OrderStatusChip';
 import { nativeStatusColor, nativeStatusExplanation, nativeStatusLabel } from '../nativeStatus';
 import { OrderTagsBar } from '../components/OrderTags';
 import { CapturePaymentModal } from '../components/CapturePaymentModal';
+import { noPaymentRecorded } from '../components/NoRecordedPaymentQuestion';
 import { SettleManualRefundModal } from '../components/SettleManualRefundModal';
 import { OrderNotesPanel } from '../components/OrderNotesPanel';
 import {
@@ -78,6 +83,8 @@ import { useDispatch } from '../context';
 import { standaloneOrderPath, useOrderView } from '../orderView';
 import { useHeartbeat } from '../heartbeat';
 import { remainingProgress } from '../lineProgress';
+import { ALL_LINE_FILTER_FIELDS, filterLines } from './lineFilter';
+import { publishQueueSortEntitlements } from '../queueSort';
 import { hasDiscount, netUnitPrice } from '../lineRefund';
 import { useListStore } from '../listStore';
 import {
@@ -103,8 +110,12 @@ import type {
   NativeStatusContext,
   OrderDetailActionSlotProps,
   OrderDetailPanelSlotProps,
+  LineFilterField,
+  LineFilterOptions,
+  OrderDetailLinesHeaderSlotProps,
   OrderDetailToolbarSlotProps,
   OrderStatus,
+  StageSource,
 } from '../types';
 
 /**
@@ -171,6 +182,104 @@ export function OrderDetail() {
 
   const query = useDispatchOrderDetailQuery(() => hexIdForQuery());
   const stageMutation = useStageLineMutation(() => hexIdForQuery());
+
+  // ── The lines header slot: a contribution above the table, such as a scan station ────────────
+  // Essentials has no line filter of its own; a contribution sets one, and the table follows it.
+  // With none mounted the filter is never applied, so the page is exactly what it was.
+  //
+  // A contribution gates itself on `entitlements()`, which the queue publishes when it mounts — but
+  // an order opened in its own tab never passes through the queue, so this page publishes them too.
+  // The source is install-wide, so whichever page published last hands over the same map.
+  publishQueueSortEntitlements(() => ctx.entitlements as unknown as Record<string, boolean>);
+  const LINES_HEADER_SLOT = 'order.detail.lines.header';
+  const linesHeaderSlots = () =>
+    slotRegistry
+      .get<OrderDetailLinesHeaderSlotProps>(LINES_HEADER_SLOT)
+      .filter((slot) => slot.enabled?.() ?? true);
+  const [lineFilter, setLineFilterQuery] = createSignal('');
+  const [lineFilterOptions, setLineFilterOptions] = createSignal<LineFilterOptions>({
+    mode: 'scan',
+  });
+  const setLineFilter = (q: string, opts: LineFilterOptions = { mode: 'scan' }): void => {
+    batch(() => {
+      setLineFilterOptions(opts);
+      setLineFilterQuery(q);
+    });
+  };
+  const visibleLines = createMemo(() => {
+    const lines = query.data?.lines ?? [];
+    return linesHeaderSlots().length > 0
+      ? filterLines(lines, lineFilter(), lineFilterOptions())
+      : lines;
+  });
+  // What the table emphasises: only a typed query, in the fields it searched, while a contribution
+  // drives the filter. A scan matches whole codes, so there is no part of a name to point at.
+  const lineHighlight = createMemo(() => {
+    const opts = lineFilterOptions();
+    if (linesHeaderSlots().length === 0 || opts.mode !== 'typed' || lineFilter().trim() === '') {
+      return undefined;
+    }
+    return { query: lineFilter(), fields: opts.fields ?? ALL_LINE_FILTER_FIELDS };
+  });
+  // The line Enter would stage, as the contribution decided it.
+  const [armedLineId, setArmedLineId] = createSignal<number | null>(null);
+  // Another order is another filter: a query typed for the last one would hide this one's lines.
+  createEffect(
+    on(
+      routeHexId,
+      () => {
+        setLineFilter('');
+        setArmedLineId(null);
+      },
+      { defer: true },
+    ),
+  );
+
+  // The contribution's filter input, handed focus back when the page has moved it elsewhere.
+  const filterFocus = new Set<() => void>();
+  const registerFilterFocus = (focus: () => void): (() => void) => {
+    filterFocus.add(focus);
+    return () => filterFocus.delete(focus);
+  };
+  const focusFilter = (): void => {
+    for (const focus of filterFocus) focus();
+  };
+  let focusedOnLoad = false;
+  createEffect(() => {
+    if (query.data && !focusedOnLoad) {
+      focusedOnLoad = true;
+      queueMicrotask(focusFilter);
+    }
+  });
+
+  // One line's stage requests go out one after another. A delta is applied by the server under the
+  // line lock, so none is lost either way; ordering them keeps each answer arriving after the one
+  // before it, so a fast run of scans never settles the count back to an older figure. Different
+  // lines are independent and run side by side.
+  const stageQueue = new Map<number, Promise<unknown>>();
+  function stage(
+    lineId: number,
+    change: { qty: number } | { delta: number },
+    source: StageSource,
+  ): Promise<{ stagedQty: number; shippableQty: number }> {
+    const run = () =>
+      stageMutation
+        .mutateAsync(
+          'delta' in change
+            ? { lineId, stagedQty: 0, deltaQty: change.delta, source }
+            : { lineId, stagedQty: change.qty, source },
+        )
+        .then((response) => ({
+          stagedQty: response.line.stagedQty,
+          shippableQty: response.shippableQty ?? unshippedQty(response.line),
+        }));
+    const next = (stageQueue.get(lineId) ?? Promise.resolve()).then(run, run);
+    stageQueue.set(
+      lineId,
+      next.catch(() => undefined),
+    );
+    return next;
+  }
   const shipMutation = useShipOrderMutation(() => hexIdForQuery());
   const [shipModalOpen, setShipModalOpen] = createSignal(false);
   /**
@@ -236,6 +345,8 @@ export function OrderDetail() {
   };
   useHeartbeat(() => hexIdForQuery());
 
+  let detailRootEl: HTMLDivElement | undefined;
+
   function openCorrection(lineId: number | null): void {
     setCorrectionPresetLineId(lineId ?? 0);
   }
@@ -259,6 +370,9 @@ export function OrderDetail() {
    */
   onMount(() => {
     const handler = (e: KeyboardEvent) => {
+      // Dispatch stays mounted, hidden, behind whichever surface is in front; the keys typed there
+      // are not for this order.
+      if (!isOnScreen(detailRootEl)) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (correctionPresetLineId() !== null) return;
       if (shipModalOpen()) return;
@@ -374,11 +488,15 @@ export function OrderDetail() {
     const releaseOnly = query.data ? stageBlockedReason(query.data.order) !== undefined : false;
     if (releaseOnly && line.stagedQty === 0) return;
     const targetQty = isFullyStaged || releaseOnly ? 0 : shippable;
-    stageMutation.mutate({
-      lineId: line.lineId,
-      stagedQty: targetQty,
-      source: 'click',
-    });
+    stageMutation.mutate(
+      {
+        lineId: line.lineId,
+        stagedQty: targetQty,
+        source: 'click',
+      },
+      // A scan station's input is where the next code goes, so a click hands focus back to it.
+      { onSettled: focusFilter },
+    );
   }
 
   /**
@@ -542,7 +660,7 @@ export function OrderDetail() {
       : host.routeHref(standaloneOrderPath(hexIdForQuery()));
 
   return (
-    <div class="min-h-screen bg-ground">
+    <div ref={detailRootEl} class="min-h-screen bg-ground">
       <Switch>
         <Match when={query.isLoading}>
           <Header
@@ -714,9 +832,35 @@ export function OrderDetail() {
               object you can pick out rather than a stripe of text in a slab. Its header band still
               reads because `surface-raised` steps *past* the ground rather than sitting between it
               and white — which is exactly the case that forced that token to move. */}
-            <div class="mx-4">
+            <div
+              class="mx-4"
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') focusFilter();
+              }}
+            >
+              <For each={linesHeaderSlots()}>
+                {(slot) => (
+                  <Dynamic
+                    component={slot.component}
+                    orderHexId={routeHexId()}
+                    order={query.data!.order}
+                    lines={query.data!.lines}
+                    visibleLines={visibleLines()}
+                    lineFilter={lineFilter()}
+                    lineFilterOptions={lineFilterOptions()}
+                    setLineFilter={setLineFilter}
+                    armLine={setArmedLineId}
+                    registerFilterFocus={registerFilterFocus}
+                    stage={stage}
+                    stageBlockedReason={stageBlockedReason(query.data!.order)}
+                  />
+                )}
+              </For>
               <LineTable
-                lines={query.data!.lines}
+                lines={visibleLines()}
+                filtered={visibleLines().length !== query.data!.lines.length}
+                highlight={lineHighlight()}
+                armedLineId={linesHeaderSlots().length > 0 ? armedLineId() : null}
                 onToggleStage={toggleStage}
                 stageBlockedReason={stageBlockedReason(query.data!.order)}
                 hideStock={
@@ -737,6 +881,7 @@ export function OrderDetail() {
                 orderHexId={routeHexId()}
                 order={query.data!.order}
                 lines={query.data!.lines}
+                noPaymentRecorded={noPaymentRecorded(query.data!.payments)}
                 onOpenCorrection={openCorrection}
               />
 
@@ -748,6 +893,7 @@ export function OrderDetail() {
                   orderHexId={routeHexId()}
                   order={query.data!.order}
                   hostOrderMissing={query.data!.hostOrderMissing === true}
+                  noPaymentRecorded={noPaymentRecorded(query.data!.payments)}
                   onClose={() => setSettleModalOpen(false)}
                 />
               </Show>
@@ -1113,8 +1259,28 @@ function LineTable(props: {
    * corrections query) collapses back to a single pill, which is honest: unknown is not zero.
    */
   unprocessedCorrectedByLine?: Map<number, number>;
+  /** True when a filter is hiding some of the order's lines, so an empty table says why. */
+  filtered?: boolean;
+  /** A typed filter query, emphasised in the fields it searched. */
+  highlight?: { query: string; fields: readonly LineFilterField[] };
+  /** The line Enter would stage, marked so the operator sees what the key will do. */
+  armedLineId?: number | null;
 }) {
   const hostNav = useHostNav();
+  // A cell's text, with the typed filter's matched characters emphasised when that field was
+  // searched; plain text otherwise, which is every case without a contribution driving the filter.
+  // Wrapped in one span: the name sits in a flex trigger, where each marked character would
+  // otherwise become its own spaced flex item.
+  const highlighted = (text: string, field: LineFilterField): JSX.Element => {
+    const h = props.highlight;
+    return h !== undefined && h.fields.includes(field) ? (
+      <span>
+        <HighlightMatch text={text} query={h.query} mode="fuzzy" />
+      </span>
+    ) : (
+      text
+    );
+  };
 
   // Which optional columns this operator has put away — see `orderLineColumns.ts`.
   const [hiddenColumns, setHiddenColumns] = createSignal<OrderLineColumnId[]>(
@@ -1255,7 +1421,9 @@ function LineTable(props: {
             fallback={
               <tr>
                 <td colspan={emptyColSpan()} class="px-3 py-6 text-center text-text-muted text-sm">
-                  {__('No lines on this order.')}
+                  {props.filtered
+                    ? __('No line on this order matches the filter.')
+                    : __('No lines on this order.')}
                 </td>
               </tr>
             }
@@ -1284,6 +1452,7 @@ function LineTable(props: {
               // pending; settling changes no line, so nothing rebuilt the row again and the button
               // stayed disabled until a reload. Read through a function and it tracks.
               const isPending = (): boolean => props.pendingLineId === line.lineId;
+              const isArmed = (): boolean => props.armedLineId === line.lineId;
               // Nothing to ship AND nothing staged means there is no toggle to make. Either one alone
               // still leaves a move available: stage it, or give the stage back.
               // A line committed stock cannot cover is not staged: the server refuses it, and the
@@ -1296,7 +1465,15 @@ function LineTable(props: {
                 isPending();
               return (
                 <tr
-                  class={`group bg-surface transition-colors ${stage === 'M' ? 'bg-green-50/40' : 'hover:bg-surface-hover'}`}
+                  class={cx(
+                    'group bg-surface transition-colors',
+                    stage === 'M' ? 'bg-green-50/40' : 'hover:bg-surface-hover',
+                    // The armed line: tinted, with a bar down its leading edge. On the cells, since
+                    // a row in this table paints neither a border nor a fill of its own.
+                    isArmed() &&
+                      '[&>td]:bg-primary/10 [&>td:first-child]:shadow-[inset_3px_0_0_var(--color-primary)]',
+                  )}
+                  data-armed={isArmed() ? 'true' : undefined}
                 >
                   {/* The thumbnail is the tallest thing in the row, so its padding sets the row
                     height for every line. `py-0.5` — the image already carries its own visual
@@ -1313,7 +1490,11 @@ function LineTable(props: {
                   */}
                     <Show
                       when={line.links.length > 0}
-                      fallback={<span class="font-medium text-gray-800">{line.name}</span>}
+                      fallback={
+                        <span class="font-medium text-gray-800">
+                          {highlighted(line.name, 'name')}
+                        </span>
+                      }
                     >
                       <DropdownMenu
                         ariaLabel={sprintf(
@@ -1323,7 +1504,7 @@ function LineTable(props: {
                         triggerClass="inline-flex items-center gap-1 text-left font-medium text-gray-800 hover:text-primary cursor-pointer decoration-dotted underline-offset-2 hover:underline"
                         trigger={
                           <>
-                            {line.name}
+                            {highlighted(line.name, 'name')}
                             <span class="text-2xs text-text-muted" aria-hidden="true">
                               ▾
                             </span>
@@ -1340,7 +1521,7 @@ function LineTable(props: {
                     </Show>
                   </td>
                   <td class="px-1.5 py-2 font-mono text-xs text-gray-500">
-                    {line.sku || '—'}
+                    {line.sku ? highlighted(line.sku, 'sku') : '—'}
                     {/* Only when it adds something: plenty of stores use the barcode as the SKU, and
                       printing the same digits twice spends a line saying nothing. Compared with
                       leading zeros stripped — a GTIN is zero-padded to a fixed length, so a UPC-12

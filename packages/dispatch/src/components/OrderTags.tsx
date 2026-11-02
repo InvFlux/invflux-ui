@@ -34,6 +34,7 @@ import {
   ModalFooter,
   ModalHeader,
   ModalPanel,
+  isOnScreen,
 } from '@invflux/ui';
 import {
   useBulkAssignTagsMutation,
@@ -1693,9 +1694,11 @@ export function RowContextMenu(props: {
   const left = (): number => Math.min(props.x, window.innerWidth - MENU_W - 8);
   const top = (): number => Math.min(props.y, window.innerHeight - 320);
 
+  let backdropEl: HTMLDivElement | undefined;
   onMount(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') props.onClose();
+      // Only a menu on screen answers Escape; one left open in a hidden surface is not the page's.
+      if (e.key === 'Escape' && isOnScreen(backdropEl)) props.onClose();
     };
     window.addEventListener('keydown', onKey);
     onCleanup(() => window.removeEventListener('keydown', onKey));
@@ -1705,6 +1708,7 @@ export function RowContextMenu(props: {
     <>
       {/* click-away backdrop */}
       <div
+        ref={backdropEl}
         class="fixed inset-0 z-40"
         onClick={props.onClose}
         onContextMenu={(e) => {

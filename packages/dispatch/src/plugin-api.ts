@@ -1,19 +1,12 @@
 import {
-  Button,
-  Checkbox,
-  Combobox,
-  IconButton,
-  Input,
-  Modal,
-  Pill,
-  Select,
-  Spinner,
+  sharedPluginUi,
+  SettingsSection,
   StagePill,
-  Textarea,
   StockConcernBadge,
   ViewerBadge,
   installPluginApi as installSharedPluginApi,
   type PluginApi,
+  type SharedPluginUi,
 } from '@invflux/ui';
 import { queueSortEntitlements, queueSortRegistry, type QueueSortRule } from './queueSort';
 import {
@@ -61,12 +54,6 @@ export interface DispatchBridge {
     Dynamic: typeof Dynamic;
   };
   /**
-   * Shared UI primitives — keeps plug-in visuals consistent with the host. The atomic set
-   * (`Button` … `Spinner`) is what stops an add-on hand-rolling its own controls; because a bridge
-   * component renders with the **host's** stylesheet, an add-on gets them pre-styled without
-   * generating those utilities into its own sheet.
-   */
-  /**
    * Contribute a ranking rule to the dispatch queue's client-side sort.
    *
    * The queue loads its working set once and then polls for deltas, so after the first page every
@@ -82,20 +69,17 @@ export interface DispatchBridge {
   registerQueueSort: (rule: QueueSortRule) => void;
   /** This install's dispatch entitlements, for gating a contributed rule. */
   entitlements: () => Record<string, boolean>;
-  ui: {
-    Button: typeof Button;
-    IconButton: typeof IconButton;
-    Input: typeof Input;
-    Select: typeof Select;
-    Textarea: typeof Textarea;
-    Checkbox: typeof Checkbox;
-    Pill: typeof Pill;
-    Spinner: typeof Spinner;
-    Combobox: typeof Combobox;
-    Modal: typeof Modal;
+  /**
+   * UI components for add-on markup: the SPA-wide set ({@link SharedPluginUi}: form controls, the
+   * dialog and its frame), plus this surface's own. A bridge component renders with the **host's**
+   * stylesheet, so an add-on gets it pre-styled without generating those utilities into its own sheet.
+   */
+  ui: SharedPluginUi & {
     StagePill: typeof StagePill;
     StockConcernBadge: typeof StockConcernBadge;
     ViewerBadge: typeof ViewerBadge;
+    /** The gear popover's foldable section, for a panel registered with `registerSurfaceSettings`. */
+    SettingsSection: typeof SettingsSection;
   };
 }
 
@@ -124,19 +108,11 @@ export function installPluginApi(): DispatchPluginApi {
     registerQueueSort: (rule) => queueSortRegistry.register(rule),
     entitlements: () => queueSortEntitlements(),
     ui: {
-      Button,
-      IconButton,
-      Input,
-      Select,
-      Textarea,
-      Checkbox,
-      Pill,
-      Spinner,
-      Combobox,
-      Modal,
+      ...sharedPluginUi,
       StagePill,
       StockConcernBadge,
       ViewerBadge,
+      SettingsSection,
     },
   });
 }

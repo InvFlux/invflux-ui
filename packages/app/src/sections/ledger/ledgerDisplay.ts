@@ -22,15 +22,19 @@ export interface LedgerDisplay {
 }
 
 /**
- * Names on, keys off, nothing merged.
+ * Names on, keys off, available and reserved merged.
  *
- * Merging is opt-in because it *hides rows*: a reader who has not asked for it should never wonder
- * where a movement went. The actor key is off because the name is the answer to "who did this" and
- * the key is the answer to a question only an auditor asks — both are one click away.
+ * Merged by default because a reservation only holds stock while the customer pays: an order writes
+ * a reservation row before its commitment row, and a lapsed one writes a release, and neither moves
+ * anything a merchant reads — the units are uncommitted on both sides of it. Merging hides those
+ * rows, and the footer then says how many it is showing of how many, so a reader is never left
+ * wondering where a movement went; one click brings them back. The actor key is off because the name
+ * is the answer to "who did this" and the key is the answer to a question only an auditor asks — one
+ * click away too.
  */
 export const DEFAULT_DISPLAY: LedgerDisplay = {
   stateNames: true,
-  mergeUncommitted: false,
+  mergeUncommitted: true,
   actorKeys: false,
 };
 

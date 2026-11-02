@@ -1,17 +1,9 @@
 import {
-  Button,
-  Checkbox,
-  Combobox,
-  IconButton,
-  Input,
-  Modal,
-  Pill,
-  Select,
-  Spinner,
-  Textarea,
+  sharedPluginUi,
   installPluginApi as installSharedPluginApi,
   toast,
   type PluginApi,
+  type SharedPluginUi,
 } from '@invflux/ui';
 import {
   createEffect,
@@ -69,18 +61,12 @@ export interface ProcurementBridge {
     Match: typeof Match;
     Dynamic: typeof Dynamic;
   };
-  /** Shared UI primitives — same as `@invflux/ui`'s public exports. */
-  ui: {
-    Button: typeof Button;
-    IconButton: typeof IconButton;
-    Input: typeof Input;
-    Select: typeof Select;
-    Textarea: typeof Textarea;
-    Checkbox: typeof Checkbox;
-    Pill: typeof Pill;
-    Spinner: typeof Spinner;
-    Combobox: typeof Combobox;
-    Modal: typeof Modal;
+  /**
+   * UI components for add-on markup: the SPA-wide set ({@link SharedPluginUi}: form controls, the
+   * dialog and its frame), plus this surface's own. A bridge component renders with the **host's**
+   * stylesheet, so an add-on gets it pre-styled without generating those utilities into its own sheet.
+   */
+  ui: SharedPluginUi & {
     toast: typeof toast;
     /** Router link, host-bound: an add-on renders `<A href="/purchase-orders/…">` and navigation
      *  runs on the host's own router instance (signals/context don't cross bundled router copies). */
@@ -114,16 +100,7 @@ export function installPluginApi(): ProcurementPluginApi {
     registerCommitNav: (rule) => commitNavRegistry.register(rule),
     entitlements: () => commitNavEntitlements(),
     ui: {
-      Button,
-      IconButton,
-      Input,
-      Select,
-      Textarea,
-      Checkbox,
-      Pill,
-      Spinner,
-      Combobox,
-      Modal,
+      ...sharedPluginUi,
       toast,
       A,
       StatusPill,

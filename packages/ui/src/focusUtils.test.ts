@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { containsAcrossShadow } from './focusUtils';
+import { containsAcrossShadow, isOnScreen } from './focusUtils';
 
 // The ui package runs its tests in a node environment with no DOM, so these are plain objects with
 // the two links the helper reads: `parentNode`, and `host` on a shadow root (whose `parentNode` is
@@ -58,5 +58,23 @@ describe('containsAcrossShadow', () => {
 
   it('is false for a null node', () => {
     expect(containsAcrossShadow(asNode(el()), null)).toBe(false);
+  });
+});
+
+describe('isOnScreen', () => {
+  const withBoxes = (count: number): Element =>
+    ({ getClientRects: () => ({ length: count }) }) as unknown as Element;
+
+  it('is true for an element with a layout box', () => {
+    expect(isOnScreen(withBoxes(1))).toBe(true);
+  });
+
+  it('is false for an element with none — a hidden surface takes its whole subtree out of layout', () => {
+    expect(isOnScreen(withBoxes(0))).toBe(false);
+  });
+
+  it('is false before the element exists (a ref not yet assigned) and for null', () => {
+    expect(isOnScreen(undefined)).toBe(false);
+    expect(isOnScreen(null)).toBe(false);
   });
 });

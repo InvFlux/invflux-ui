@@ -2,6 +2,7 @@ import { createEffect, createSignal, For, onCleanup, Show, untrack } from 'solid
 import { Dynamic } from 'solid-js/web';
 import { __, sprintf } from '@invflux/i18n';
 import { filterControlRegistry, type FilterDescriptor } from './filters';
+import { isOnScreen } from './focusUtils';
 import { usePortalRootOptional } from './portal';
 import { SearchSelect, type SearchSelectOption } from './SearchSelect';
 
@@ -107,7 +108,9 @@ export function FilterBar(props: FilterBarProps) {
       if (
         (event.ctrlKey || event.metaKey) &&
         event.shiftKey &&
-        (event.key === 'F' || event.key === 'f')
+        (event.key === 'F' || event.key === 'f') &&
+        // A bar in a hidden surface must leave the chord to the page in front.
+        isOnScreen(barRef)
       ) {
         event.preventDefault();
         event.stopPropagation();

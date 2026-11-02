@@ -6,6 +6,8 @@ import { paletteInk, paletteStyle } from './tagPalette';
 import { Button } from './Button';
 import { FoldingSection } from './FoldingSection';
 import { ErrorBanner } from './ErrorBanner';
+import { FieldError, focusFirstInvalid } from './FieldError';
+import { Textarea } from './Textarea';
 import {
   diffTokens,
   isThreadDeleted,
@@ -294,16 +296,26 @@ function Composer(props: {
 
     return __('Add a note…');
   };
-  const canSubmit = (): boolean => {
+  /** Whether what is typed (and ticked) makes a note worth saving. */
+  const complete = (): boolean => {
     const body = text().trim();
-    if (busy()) return false;
     if (noteRequired()) return body !== '';
     return body !== '' || hasDelta();
   };
+  // Marked from the first Save attempt, not before: an empty composer is not yet an error.
+  const [attempted, setAttempted] = createSignal(false);
+  const textMissing = (): boolean => attempted() && !complete();
+  let composerRef: HTMLDivElement | undefined;
 
   const submit = async (): Promise<void> => {
     const body = text().trim();
-    if (!canSubmit()) return;
+    if (busy()) return;
+    if (!complete()) {
+      setAttempted(true);
+      focusFirstInvalid(composerRef);
+
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -319,11 +331,13 @@ function Composer(props: {
   };
 
   return (
-    <div class="mb-3">
-      <textarea
+    <div ref={composerRef} class="mb-3">
+      <Textarea
         ref={(el) => queueMicrotask(() => el.focus())}
-        class="w-full rounded border border-gray-300 px-2 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-        rows={2}
+        class="w-full"
+        lines={2}
+        invalid={textMissing()}
+        aria-required={noteRequired() || undefined}
         placeholder={placeholder()}
         value={text()}
         disabled={busy()}
@@ -342,6 +356,14 @@ function Composer(props: {
           }
         }}
       />
+      <FieldError
+        message={
+          textMissing() &&
+          (noteRequired()
+            ? __('Write the note this tag change requires.')
+            : __('Write a note, or change a tag.'))
+        }
+      />
       <Show when={(props.tags?.length ?? 0) > 0}>
         <div class="mt-1.5 flex flex-wrap items-center gap-2">
           <span class="text-2xs font-semibold uppercase tracking-wide text-text-muted">
@@ -356,7 +378,7 @@ function Composer(props: {
         </div>
       </Show>
       <div class="mt-1.5 flex items-center gap-2">
-        <Button variant="success" size="sm" disabled={!canSubmit()} onClick={() => void submit()}>
+        <Button variant="success" size="sm" disabled={busy()} onClick={() => void submit()}>
           {busy() ? __('Saving…') : __('Save note')}
         </Button>
         <Button variant="quiet" size="sm" disabled={busy()} onClick={() => props.onClose()}>
@@ -439,13 +461,25 @@ function ThreadRow(props: {
 
   const startEdit = (): void => {
     setEditText(current().body ?? '');
+    setEditAttempted(false);
     setError(null);
     setEditing(true);
   };
 
+  // Marked from the first Save attempt, not before.
+  const [editAttempted, setEditAttempted] = createSignal(false);
+  const editMissing = (): boolean => editAttempted() && editText().trim() === '';
+  let editRef: HTMLDivElement | undefined;
+
   const saveEdit = async (): Promise<void> => {
     const body = editText().trim();
-    if (body === '' || busy()) return;
+    if (busy()) return;
+    if (body === '') {
+      setEditAttempted(true);
+      focusFirstInvalid(editRef);
+
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -476,14 +510,16 @@ function ThreadRow(props: {
       <Show
         when={!editing()}
         fallback={
-          <div>
-            <textarea
+          <div ref={editRef}>
+            <Textarea
               aria-label={__('Note')}
               // Autofocus on open so focus lands in the field (not the "Edit" button) — else a
               // global single-key shortcut like "C" fires instead of typing into the note.
               ref={(el) => queueMicrotask(() => el.focus())}
-              class="w-full rounded border border-gray-300 px-2 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-              rows={2}
+              class="w-full"
+              lines={2}
+              invalid={editMissing()}
+              aria-required="true"
               value={editText()}
               disabled={busy()}
               onInput={(e) => setEditText(e.currentTarget.value)}
@@ -499,13 +535,9 @@ function ThreadRow(props: {
                 }
               }}
             />
+            <FieldError message={editMissing() && __("A note can't be empty.")} />
             <div class="mt-1.5 flex items-center gap-2">
-              <Button
-                variant="success"
-                size="sm"
-                disabled={busy() || editText().trim() === ''}
-                onClick={() => void saveEdit()}
-              >
+              <Button variant="success" size="sm" disabled={busy()} onClick={() => void saveEdit()}>
                 {busy() ? __('Saving…') : __('Save')}
               </Button>
               <Button variant="quiet" size="sm" disabled={busy()} onClick={() => setEditing(false)}>

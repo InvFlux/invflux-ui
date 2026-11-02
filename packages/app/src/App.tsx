@@ -397,6 +397,10 @@ function Shell(props: { children?: JSX.Element }): JSX.Element {
       ensureTab({ path: '/licenses', title: __('Licenses & Add-ons') });
       return;
     }
+    if ('/roadmap' === p || p.startsWith('/roadmap/')) {
+      ensureTab({ path: '/roadmap', title: __('Roadmap') });
+      return;
+    }
     if ('/costing/base-currency' === p) {
       ensureTab({ path: '/costing/base-currency', title: __('Base currency') });
       return;
@@ -768,6 +772,13 @@ export function App(props: { context: AppContext; portalRoot: HTMLElement }): JS
               <Route
                 path="/licenses"
                 component={lazy(() => import('./sections/licenses/LicensesSection'))}
+              />
+              {/* The feature board — a direct route reached from a link on Licenses & Add-ons, not a
+                nav.section: it is somewhere to think about what comes next, not a surface to work in,
+                and the launcher lists only the latter. */}
+              <Route
+                path="/roadmap"
+                component={lazy(() => import('./sections/roadmap/RoadmapSection'))}
               />
               {/* Base-currency conversion — a direct route reached from the drift notice, not a
                 nav.section: a one-shot migration a store runs once in its life, if ever. */}

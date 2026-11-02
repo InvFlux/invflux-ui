@@ -1,4 +1,6 @@
 import { formatMoney as formatAmount } from '@invflux/i18n';
+import { parseDecimal } from '@invflux/ui/parseDecimal';
+import { parseQuantity } from '@invflux/ui/quantity';
 
 /**
  * Money on the dispatch surfaces, in integer minor units (cents) — the unit the server's own sums use.
@@ -13,12 +15,8 @@ import { formatMoney as formatAmount } from '@invflux/i18n';
  * `null` when the text is not one. At most two decimals.
  */
 export function toCents(value: string | null | undefined): number | null {
-  if (value === null || value === undefined) return null;
-  const m = /^\s*(-)?(\d+)(?:[.,](\d{1,2}))?\s*$/.exec(value);
-  if (m === null) return null;
-  const cents = Number(m[2]) * 100 + Number((m[3] ?? '').padEnd(2, '0'));
-  if (!Number.isSafeInteger(cents)) return null;
-  return m[1] ? -cents : cents;
+  const parsed = parseQuantity(value ?? '', { scale: 2, negative: true });
+  return parsed.kind === 'ok' ? parsed.scaled : null;
 }
 
 /** Cents as the decimal text the server reads: `9550` → `"95.50"`. */
@@ -32,10 +30,8 @@ export function centsToDecimal(cents: number): string {
  * reads; `null` when it is not one. At most eight decimals.
  */
 export function parseRate(value: string): string | null {
-  const m = /^\s*(\d+)(?:[.,](\d{1,8}))?\s*$/.exec(value);
-  if (m === null) return null;
-  const text = m[2] ? `${m[1]}.${m[2]}` : (m[1] ?? '');
-  return Number(text) > 0 ? text : null;
+  const parsed = parseDecimal(value, { scale: 8 });
+  return parsed.kind === 'ok' && Number(parsed.value) > 0 ? parsed.value : null;
 }
 
 /** `cents` converted at `rate`, rounded as the server rounds a payment's converted amount. */

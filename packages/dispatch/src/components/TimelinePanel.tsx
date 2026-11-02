@@ -16,6 +16,7 @@ import {
   PencilIcon,
 } from '@invflux/ui';
 import { useOrderAnnotationsQuery, useOrderEventsQuery, useTagsQuery } from '../queries';
+import { withoutRoutineRefundSchedules } from './routineRefundSchedules';
 import type { CorrectionType, DispatchCorrection, DispatchOrderLine } from '../types';
 import { differenceReasonLabel, paymentSourceLabel } from '../paymentLabels';
 import { formatMoney, toCents } from '../money';
@@ -209,7 +210,7 @@ export function TimelinePanel(props: {
   };
 
   const events = createMemo<TimelineEvent[]>(() => {
-    const base = (query.data?.events ?? []).map(withItems);
+    const base = withoutRoutineRefundSchedules(query.data?.events ?? []).map(withItems);
     const notes = (annQuery.data?.threads ?? []).map((t) => threadToEvent(t, resolveTag));
     return [...base, ...notes].sort((a, b) =>
       (b.occurredAt ?? '').localeCompare(a.occurredAt ?? ''),
@@ -396,7 +397,8 @@ function RowShell(p: RowShellProps): JSX.Element {
     // account still did the thing, and the reference is the only trace of who.
     if (k === 'user') return name ?? (r ? sprintf(_x('user #%s', 'timeline actor'), r) : '');
     if (k === 'plugin' && r) return r;
-    if (k === 'system' && r) return r;
+    // Internal actor refs name the code path, not anyone a merchant would know.
+    if (k === 'system') return 'InvFlux';
     return k ? `${k}${r ? `:${r}` : ''}` : (r ?? '');
   };
   return (
@@ -1065,7 +1067,11 @@ function CorrectionUnprocessedRow(props: TimelineRowProps): JSX.Element {
 }
 
 function CorrectionsProcessedRow(props: TimelineRowProps): JSX.Element {
-  const p = props.event.payload as { count?: number; items?: string[] } | null;
+  const p = props.event.payload as {
+    count?: number;
+    items?: string[];
+    nothing_paid?: boolean;
+  } | null;
   return (
     <RowShell
       event={props.event}
@@ -1083,6 +1089,7 @@ function CorrectionsProcessedRow(props: TimelineRowProps): JSX.Element {
               ),
               p!.count!,
             )}
+            <Show when={p?.nothing_paid}> · {__('nothing to refund: the customer never paid')}</Show>
             <ItemList items={p?.items} />
           </span>
         </Show>
@@ -1125,6 +1132,15 @@ interface MonetaryPayload {
   currency?: string;
 }
 
+/** How a refund's money moves, in the merchant's words; a pending refund has no answer yet. */
+function refundRouteLabel(mode: string | undefined): string | null {
+  if (mode === 'auto') return _x('through the gateway', 'order timeline: how a refund was paid');
+  if (mode === 'manual_confirmed') {
+    return _x('outside WooCommerce', 'order timeline: how a refund was paid');
+  }
+  return null;
+}
+
 function RefundScheduledRow(props: TimelineRowProps): JSX.Element {
   const p = props.event.payload as { total?: string; mode?: string; currency?: string } | null;
   return (
@@ -1132,16 +1148,33 @@ function RefundScheduledRow(props: TimelineRowProps): JSX.Element {
       event={props.event}
       tone="decision"
       icon={<>⏱</>}
-      label={__('Refund scheduled')}
+      // A manual refund has no due time: it waits for an operator, where the others run by themselves.
+      label={p?.mode === 'manual' ? __('Refund pending') : __('Refund scheduled')}
       detail={
         <Show when={p?.total}>
           <span>
             <Money value={p?.total} currency={p?.currency} />
-            {p?.mode ? ` · ${p.mode}` : ''}
+            {refundRouteLabel(p?.mode) ? ` · ${refundRouteLabel(p?.mode)}` : ''}
           </span>
         </Show>
       }
     />
+  );
+}
+
+/** The id the gateway gave a refund, where it left one to read. */
+function GatewayRefundId(props: { id?: string }): JSX.Element {
+  return (
+    <Show when={props.id}>
+      {' · '}
+      <span
+        class="font-mono"
+        title={_x('Refund ID at the payment gateway', 'order timeline: tooltip')}
+        data-testid="gateway-refund-id"
+      >
+        {props.id}
+      </span>
+    </Show>
   );
 }
 
@@ -1150,18 +1183,23 @@ function RefundConfirmedRow(props: TimelineRowProps): JSX.Element {
     refund_total?: string;
     refund_mode?: string;
     currency?: string;
+    no_payment_on_record?: boolean;
+    gateway_refund_id?: string;
   } | null;
   return (
     <RowShell
       event={props.event}
       tone="lifecycle"
       icon={<>$</>}
-      label={__('Refund confirmed')}
+      // Through the gateway, InvFlux made the refund happen; otherwise an operator says it happened.
+      label={p?.refund_mode === 'auto' ? __('Refund executed') : __('Refund confirmed')}
       detail={
         <Show when={p?.refund_total}>
           <span>
             <Money value={p?.refund_total} currency={p?.currency} />
-            {p?.refund_mode ? ` · ${p.refund_mode}` : ''}
+            {refundRouteLabel(p?.refund_mode) ? ` · ${refundRouteLabel(p?.refund_mode)}` : ''}
+            <GatewayRefundId id={p?.gateway_refund_id} />
+            <Show when={p?.no_payment_on_record}> · {__('no payment on record')}</Show>
           </span>
         </Show>
       }
@@ -1170,7 +1208,11 @@ function RefundConfirmedRow(props: TimelineRowProps): JSX.Element {
 }
 
 function RefundExternalRow(props: TimelineRowProps): JSX.Element {
-  const p = props.event.payload as { refund_total?: string; currency?: string } | null;
+  const p = props.event.payload as {
+    refund_total?: string;
+    currency?: string;
+    gateway_refund_id?: string;
+  } | null;
   return (
     <RowShell
       event={props.event}
@@ -1183,6 +1225,7 @@ function RefundExternalRow(props: TimelineRowProps): JSX.Element {
             <Money value={p?.refund_total} currency={p?.currency} />
             {' · '}
             {__('outside Dispatch')}
+            <GatewayRefundId id={p?.gateway_refund_id} />
           </span>
         </Show>
       }
@@ -1210,8 +1253,19 @@ function RefundFailedRow(props: TimelineRowProps): JSX.Element {
 }
 
 function RefundCanceledRow(props: TimelineRowProps): JSX.Element {
+  const p = props.event.payload as { extras?: { reason?: string } } | null;
   return (
-    <RowShell event={props.event} tone="execution" icon={<>⊘</>} label={__('Refund cancelled')} />
+    <RowShell
+      event={props.event}
+      tone="execution"
+      icon={<>⊘</>}
+      label={__('Refund cancelled')}
+      detail={
+        <Show when={p?.extras?.reason === 'nothing_paid'}>
+          <span>{__('nothing to refund: the customer never paid')}</span>
+        </Show>
+      }
+    />
   );
 }
 

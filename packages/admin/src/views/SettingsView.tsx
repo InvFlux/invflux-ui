@@ -35,6 +35,7 @@ import {
   ModalPanel,
   Spinner,
   WarningIcon,
+  isOnScreen,
 } from '@invflux/ui';
 import { ImportAliasSection, IMPORT_ALIASES_QUERY_KEY } from './ImportAliasSection';
 import {
@@ -592,9 +593,18 @@ export function SettingsView(props: SettingsViewProps) {
     }
   };
 
+  let rootEl: HTMLDivElement | undefined;
   // Ctrl/Cmd+Enter opens the review modal when there are staged changes (the workbench gesture).
   const onKeyDown = (e: KeyboardEvent): void => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !modalOpen() && pendingCount() > 0) {
+    // Settings stays mounted, hidden, behind whichever surface is in front, and the Workbench uses
+    // this same chord for its own save review.
+    if (
+      (e.ctrlKey || e.metaKey) &&
+      e.key === 'Enter' &&
+      !modalOpen() &&
+      pendingCount() > 0 &&
+      isOnScreen(rootEl)
+    ) {
       e.preventDefault();
       setModalOpen(true);
     }
@@ -797,6 +807,7 @@ export function SettingsView(props: SettingsViewProps) {
 
   return (
     <div
+      ref={rootEl}
       class="flex flex-col bg-surface text-text max-w-5xl mx-auto"
       style={{ height: 'calc(100vh - 46px)' }}
     >

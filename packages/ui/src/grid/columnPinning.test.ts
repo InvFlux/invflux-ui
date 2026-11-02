@@ -7,7 +7,9 @@ import {
   pinColumn,
   pinDropAction,
   pinnedLeafOrder,
+  pinnedEdgeScrollStep,
   pinnedWidthExceeded,
+  storedPinIndex,
   unpinColumn,
 } from './columnPinning';
 
@@ -132,8 +134,29 @@ describe('pinDropAction', () => {
     });
   });
 
-  it('unpins a pinned column dropped below the divider', () => {
-    expect(pinDropAction(pinned, 'name', 'atp')).toEqual({ kind: 'unpin', columnId: 'name' });
+  it('pins at the end of the group when dropped on the far half of the last pinned column', () => {
+    expect(pinDropAction(pinned, 'atp', 'sku', true)).toEqual({
+      kind: 'pin',
+      columnId: 'atp',
+      atIndex: 2,
+    });
+  });
+
+  it('counts a reorder within the group without the moved column, on either side', () => {
+    const three = ['name', 'sku', 'atp'];
+    // name before atp: [sku, atp] without it, so in front of atp is 1; after atp is 2.
+    expect(pinDropAction(three, 'name', 'atp')).toMatchObject({ toIndex: 1 });
+    expect(pinDropAction(three, 'name', 'atp', true)).toMatchObject({ toIndex: 2 });
+  });
+
+  it('unpins a pinned column dropped among the free ones, beside the column it was dropped on', () => {
+    expect(pinDropAction(pinned, 'name', 'atp')).toEqual({
+      kind: 'unpin',
+      columnId: 'name',
+      targetId: 'atp',
+      after: false,
+    });
+    expect(pinDropAction(pinned, 'name', 'atp', true)).toMatchObject({ after: true });
   });
 
   it('is an ordinary reorder when neither end is pinned', () => {
@@ -141,15 +164,57 @@ describe('pinDropAction', () => {
       kind: 'reorder-free',
       columnId: 'atp',
       targetId: 'total',
+      after: false,
     });
   });
 
   it('reads a drop with nothing pinned as a plain reorder', () => {
-    expect(pinDropAction([], 'atp', 'total')).toEqual({
+    expect(pinDropAction([], 'atp', 'total', true)).toEqual({
       kind: 'reorder-free',
       columnId: 'atp',
       targetId: 'total',
+      after: true,
     });
+  });
+});
+
+describe('pinnedEdgeScrollStep', () => {
+  it('does not scroll while the pointer is outside the group', () => {
+    expect(pinnedEdgeScrollStep(0, 300)).toBe(0);
+    expect(pinnedEdgeScrollStep(-40, 300)).toBe(0);
+    expect(pinnedEdgeScrollStep(10, 0)).toBe(0);
+  });
+
+  it('creeps just inside the edge and speeds up the deeper the pointer goes', () => {
+    const shallow = pinnedEdgeScrollStep(5, 300);
+    const middle = pinnedEdgeScrollStep(150, 300);
+    const deep = pinnedEdgeScrollStep(300, 300);
+    expect(shallow).toBeGreaterThan(0);
+    expect(shallow).toBeLessThan(middle);
+    expect(middle).toBeLessThan(deep);
+  });
+
+  it('holds the top speed past the far side of the group', () => {
+    expect(pinnedEdgeScrollStep(900, 300)).toBe(pinnedEdgeScrollStep(300, 300));
+  });
+});
+
+describe('storedPinIndex', () => {
+  it('is the same position when nothing is locked in front', () => {
+    expect(storedPinIndex(['name', 'sku'], ['name', 'sku'], 1)).toBe(1);
+  });
+
+  it('follows the neighbor, not the arithmetic, past a locked column that is shown but not stored', () => {
+    // `id` is locked: shown first, never stored. In front of `sku` is shown index 2, stored index 1.
+    expect(storedPinIndex(['name', 'sku'], ['id', 'name', 'sku'], 2)).toBe(1);
+  });
+
+  it('puts a column dropped in front of a locked one at the stored front', () => {
+    expect(storedPinIndex(['name'], ['id', 'name'], 0)).toBe(0);
+  });
+
+  it('reads a position past the end as last', () => {
+    expect(storedPinIndex(['name', 'sku'], ['id', 'name', 'sku'], 3)).toBe(2);
   });
 });
 

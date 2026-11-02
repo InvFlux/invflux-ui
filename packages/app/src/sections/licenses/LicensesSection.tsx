@@ -1,4 +1,4 @@
-import { __, formatDate, sprintf } from '@invflux/i18n';
+import { __, _x, formatDate, sprintf } from '@invflux/i18n';
 import { Button, ConfirmModal, buttonClass, toast } from '@invflux/ui';
 import { A } from '@solidjs/router';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
@@ -661,6 +661,15 @@ function LicensesPanel(): JSX.Element {
           </div>
         </section>
       </Show>
+
+      {/* What is coming next lives on its own page; the way in is here, beside the products it is
+          about, rather than in the launcher, which lists surfaces a merchant works in. */}
+      <p class="mb-6 text-sm text-slate-600" data-testid="licenses-roadmap-link">
+        {__('Wondering what is coming next, or want a say in it?')}{' '}
+        <A href="/roadmap" class="text-primary underline hover:no-underline">
+          {_x('See the roadmap and vote', 'licenses page: link to the roadmap and its voting')}
+        </A>
+      </p>
 
       {/* One list for the whole family: what is running here, what this account owns, and what
           exists but isn't bought — because they are the same products in three states, and the gap
