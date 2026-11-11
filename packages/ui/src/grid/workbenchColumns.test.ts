@@ -3,7 +3,7 @@ import { stockSlotOf } from './stockSlot';
 import type { GridColumnMeta } from '../types';
 
 /** Minimal column meta — stockSlotOf only inspects `id` (and, in future, `dataType`). */
-function meta(id: string, dataType = 'number'): GridColumnMeta {
+function meta(id: string, dataType = 'integer'): GridColumnMeta {
   return { id, dataType } as GridColumnMeta;
 }
 

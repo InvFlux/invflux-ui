@@ -53,6 +53,9 @@ import { Select } from './Select';
 import type { GridColumnMeta, TaxonomySpace } from './types';
 import { orderTaxonomyValues } from './taxonomyOrder';
 import type { WorkbenchRow } from './workbenchGridTypes';
+import { enumMultiValues, enumOptions } from './datatypes/enumMulti';
+import { isWholeNumberDataType } from './datatypes/dataTypeNames';
+import { FieldError } from './FieldError';
 
 /**
  * One selected cell: the row it belongs to, that row's identity in the host's own terms, and the
@@ -90,14 +93,27 @@ export interface BulkEditModalProps<TRow = WorkbenchRow> {
   onClose: () => void;
   /** Portal the modal to this root (shadow-DOM / transformed-ancestor surfaces). */
   mount?: HTMLElement;
+  /**
+   * Create a term in a taxonomy and give it back. When set, a term-list picker offers to create what
+   * was typed when no term has that name; the term is created then, not at save, and is picked. The
+   * host also names it wherever the grid shows terms. Absent: nothing is ever offered.
+   */
+  onCreateTerm?: (taxonomy: string, name: string) => Promise<{ id: number; name: string }>;
+  /**
+   * A link beside a term-list column's label to the host's page that edits that taxonomy's terms,
+   * opened in another tab, or undefined for none (a user who may not edit terms, a host without the
+   * page).
+   */
+  termsLink?: (taxonomy: string) => { href: string; label: string } | undefined;
 }
 
 const bulkNormalize = (value: unknown): string =>
   value === null || value === undefined ? '' : String(value);
 
-const sameIdSet = (a: number[], b: number[]): boolean =>
+/** Whether two lists hold the same values, in any order (term ids, or an `enum-multi`'s values). */
+const sameSet = (a: readonly unknown[], b: readonly unknown[]): boolean =>
   a.length === b.length &&
-  [...a].sort((x, y) => x - y).join(',') === [...b].sort((x, y) => x - y).join(',');
+  JSON.stringify(a.map(String).sort()) === JSON.stringify(b.map(String).sort());
 
 export function BulkEditModal<TRow = WorkbenchRow>(props: BulkEditModalProps<TRow>) {
   interface Descriptor {
@@ -112,6 +128,13 @@ export function BulkEditModal<TRow = WorkbenchRow>(props: BulkEditModalProps<TRo
     removeOptions: Array<{ value: string; label: string; depth?: number }>;
     /** Numeric column → the operator row (set / add / subtract / the four percentage forms). */
     numeric: boolean;
+    /** A term list's taxonomy, or '' for any other column. */
+    taxonomy: string;
+    /** Multi-value: a cell's list as option values, and option values back as the cell stores them. */
+    toOptions: (value: unknown) => string[];
+    fromOptions: (values: string[]) => unknown[];
+    /** The cell's value as the save compares it with what is stored. */
+    originalOf: (value: unknown) => unknown;
     /** Money is emitted as a fixed-decimal string, everything else as a number. */
     money: boolean;
     decimals: number;
@@ -125,23 +148,34 @@ export function BulkEditModal<TRow = WorkbenchRow>(props: BulkEditModalProps<TRo
   const descriptors: Descriptor[] = props.columns.map((column) => {
     const multi = column.meta.kind === 'editable_multi';
     if (multi) {
+      // A term list holds term ids, named from the taxonomy space; an `enum-multi` holds some of its
+      // own options' values.
+      const enumMulti = column.meta.dataType === 'enum-multi';
       const taxonomy =
         typeof column.meta.editorConfig.taxonomy === 'string'
           ? column.meta.editorConfig.taxonomy
           : '';
       const space = props.taxonomySpace?.[taxonomy];
-      const options = space
-        ? orderTaxonomyValues(space).map((v) => ({
-            value: String(v.id),
-            label: v.name,
-            depth: v.depth,
-          }))
-        : [];
-      const rowSets = column.targets.map((t) =>
-        Array.isArray(t.value) ? (t.value as number[]) : [],
-      );
+      const options = enumMulti
+        ? enumOptions(column.meta.editorConfig)
+        : space
+          ? orderTaxonomyValues(space).map((v) => ({
+              value: String(v.id),
+              label: v.name,
+              depth: v.depth,
+            }))
+          : [];
+      const toOptions = (value: unknown): string[] =>
+        enumMulti
+          ? enumMultiValues(value)
+          : Array.isArray(value)
+            ? (value as unknown[]).map(String)
+            : [];
+      const fromOptions = (values: string[]): unknown[] =>
+        enumMulti ? values : values.map(Number);
+      const rowSets = column.targets.map((t) => toOptions(t.value));
       // Uniform (incl. a single cell) → one combobox showing the shared set; mixed → add/remove deltas.
-      const uniform = rowSets.every((set) => sameIdSet(set, rowSets[0] ?? []));
+      const uniform = rowSets.every((set) => sameSet(set, rowSets[0] ?? []));
       const union = new Set(rowSets.flat());
       return {
         meta: column.meta,
@@ -149,9 +183,15 @@ export function BulkEditModal<TRow = WorkbenchRow>(props: BulkEditModalProps<TRo
         multi,
         uniform,
         uniformValue: '',
-        uniformIds: uniform ? (rowSets[0] ?? []).map(String) : [],
+        uniformIds: uniform ? (rowSets[0] ?? []) : [],
         options,
-        removeOptions: options.filter((o) => union.has(Number(o.value))),
+        removeOptions: options.filter((o) => union.has(o.value)),
+        taxonomy: enumMulti ? '' : taxonomy,
+        toOptions,
+        fromOptions,
+        // A term list as its ids; an `enum-multi` as it is, which may be one value kept from when
+        // the column held one.
+        originalOf: (value: unknown) => (enumMulti ? value : fromOptions(toOptions(value))),
         numeric: false,
         money: false,
         decimals: 0,
@@ -183,6 +223,10 @@ export function BulkEditModal<TRow = WorkbenchRow>(props: BulkEditModalProps<TRo
       uniformIds: [],
       options,
       removeOptions: [],
+      taxonomy: '',
+      toOptions: () => [],
+      fromOptions: (values) => values,
+      originalOf: (value) => value,
       numeric,
       money,
       decimals: numeric ? decimalsForValues(money, values) : 0,
@@ -213,6 +257,59 @@ export function BulkEditModal<TRow = WorkbenchRow>(props: BulkEditModalProps<TRo
     };
   }
   const [state, setState] = createStore<Record<string, ColState>>(initial);
+
+  // Terms created from a picker, by column, offered beside the column's own; and a creation's refusal.
+  const [created, setCreated] = createStore<
+    Record<string, Array<{ value: string; label: string }>>
+  >({});
+  const [createErrors, setCreateErrors] = createStore<Record<string, string | undefined>>({});
+  const optionsOf = (d: Descriptor): Descriptor['options'] => [
+    ...d.options,
+    ...(created[d.meta.id] ?? []),
+  ];
+  const creatable = (d: Descriptor): boolean =>
+    d.multi && ((d.taxonomy !== '' && props.onCreateTerm !== undefined) || takesOwnValues(d));
+  /** A list that takes values of its own (a custom attribute's column on a worksheet): no term to
+   *  create, the typed value is simply used. */
+  const takesOwnValues = (d: Descriptor): boolean =>
+    d.meta.dataType === 'enum-multi' && d.meta.editorConfig.allowNew === true;
+  const createLabel = (d: Descriptor): ((text: string) => string) | undefined =>
+    takesOwnValues(d)
+      ? (text) =>
+          sprintf(
+            /* translators: %s: a value the operator typed, which no product has yet; it is kept on this worksheet line. */
+            _x('Use “%s”', 'picker option: use the typed value, new to this list'),
+            text,
+          )
+      : undefined;
+  /** Create the typed term and pick it, in the set or in the terms to add. */
+  const createTerm = async (d: Descriptor, field: 'set' | 'add', name: string): Promise<void> => {
+    if (name === '') return;
+    if (takesOwnValues(d)) {
+      if (!optionsOf(d).some((o) => o.value === name)) {
+        setCreated(d.meta.id, [...(created[d.meta.id] ?? []), { value: name, label: name }]);
+      }
+      const picked = state[d.meta.id][field];
+      if (!picked.includes(name)) setState(d.meta.id, field, [...picked, name]);
+      return;
+    }
+    if (props.onCreateTerm === undefined) return;
+    setCreateErrors(d.meta.id, undefined);
+    try {
+      const term = await props.onCreateTerm(d.taxonomy, name);
+      const value = String(term.id);
+      if (!optionsOf(d).some((o) => o.value === value)) {
+        setCreated(d.meta.id, [...(created[d.meta.id] ?? []), { value, label: term.name }]);
+      }
+      const picked = state[d.meta.id][field];
+      if (!picked.includes(value)) setState(d.meta.id, field, [...picked, value]);
+    } catch (error) {
+      setCreateErrors(
+        d.meta.id,
+        error instanceof Error ? error.message : __('The term could not be created.'),
+      );
+    }
+  };
 
   // Auto-focus the first edit control on open (skip the "Modify" checkbox; a Combobox's focusable
   // element is its inner <input>). A numeric field leads with its operator <select>, but the value
@@ -358,34 +455,31 @@ export function BulkEditModal<TRow = WorkbenchRow>(props: BulkEditModalProps<TRo
       const s = state[d.meta.id];
       if (d.multi) {
         if (d.uniform) {
-          // One shared set → replace every row's terms with the edited set (pruned when unchanged).
-          const set = s.set.map(Number);
+          // One shared set → replace every row's set with the edited one (pruned when unchanged).
           for (const t of d.targets) {
-            const current = Array.isArray(t.value) ? (t.value as number[]) : [];
-            if (!sameIdSet(current, set)) {
+            if (!sameSet(d.toOptions(t.value), s.set)) {
               edits.push({
                 key: t.key,
                 columnId: d.meta.id,
-                original: current,
-                newValue: set,
+                original: d.originalOf(t.value),
+                newValue: d.fromOptions(s.set),
                 row: t.row,
               });
             }
           }
           continue;
         }
-        const add = s.add.map(Number);
-        const remove = new Set(s.remove.map(Number));
-        if (add.length === 0 && remove.size === 0) continue;
+        if (s.add.length === 0 && s.remove.length === 0) continue;
+        const remove = new Set(s.remove);
         for (const t of d.targets) {
-          const current = Array.isArray(t.value) ? (t.value as number[]) : [];
-          const next = [...new Set([...current, ...add])].filter((id) => !remove.has(id));
-          if (!sameIdSet(current, next)) {
+          const current = d.toOptions(t.value);
+          const next = [...new Set([...current, ...s.add])].filter((v) => !remove.has(v));
+          if (!sameSet(current, next)) {
             edits.push({
               key: t.key,
               columnId: d.meta.id,
-              original: current,
-              newValue: next,
+              original: d.originalOf(t.value),
+              newValue: d.fromOptions(next),
               row: t.row,
             });
           }
@@ -415,11 +509,11 @@ export function BulkEditModal<TRow = WorkbenchRow>(props: BulkEditModalProps<TRo
         continue;
       }
       // Coerce to the column's value shape so no-op pruning + in-grid display work: bool → boolean,
-      // integer (`number`) → number|null, decimals/text/enum stay strings (WC stores decimals as strings).
+      // integer / quantity → number|null, decimals/text/enum stay strings (WC stores decimals as strings).
       let newValue: unknown;
       if (d.meta.dataType === 'bool') {
         newValue = s.value === 'true';
-      } else if (d.meta.dataType.startsWith('number')) {
+      } else if (isWholeNumberDataType(d.meta.dataType)) {
         const trimmed = s.value.trim();
         if (trimmed === '') {
           newValue = null;
@@ -587,16 +681,35 @@ export function BulkEditModal<TRow = WorkbenchRow>(props: BulkEditModalProps<TRo
                       </>
                     }
                   >
-                    <label class="text-sm font-medium text-text">{d.meta.label}</label>
+                    <div class="flex items-baseline justify-between gap-2">
+                      <label class="text-sm font-medium text-text">{d.meta.label}</label>
+                      <Show when={d.taxonomy !== '' ? props.termsLink?.(d.taxonomy) : undefined}>
+                        {(link) => (
+                          <a
+                            href={link().href}
+                            target="_blank"
+                            rel="noopener"
+                            class="shrink-0 text-xs text-primary hover:underline"
+                            data-testid="bulk-edit-terms-link"
+                          >
+                            {link().label} ↗
+                          </a>
+                        )}
+                      </Show>
+                    </div>
                     <Show
                       when={d.uniform}
                       fallback={
                         // Rows disagree → edit by delta (add / remove) rather than a single set.
                         <div class="flex flex-col gap-1">
                           <Combobox
-                            options={d.options}
+                            options={optionsOf(d)}
                             selected={state[d.meta.id].add}
                             onChange={(sel) => setState(d.meta.id, 'add', sel)}
+                            onCreate={
+                              creatable(d) ? (text) => void createTerm(d, 'add', text) : undefined
+                            }
+                            createLabel={createLabel(d)}
                             placeholder={__('Add…')}
                           />
                           <Combobox
@@ -611,15 +724,20 @@ export function BulkEditModal<TRow = WorkbenchRow>(props: BulkEditModalProps<TRo
                     >
                       {/* Single cell, or all rows share the same terms → edit the set directly. */}
                       <Combobox
-                        options={d.options}
+                        options={optionsOf(d)}
                         selected={state[d.meta.id].set}
                         onChange={(sel) => setState(d.meta.id, 'set', sel)}
+                        onCreate={
+                          creatable(d) ? (text) => void createTerm(d, 'set', text) : undefined
+                        }
+                        createLabel={createLabel(d)}
                         placeholder={_x(
                           'Choose…',
                           'bulk edit placeholder: pick the categories or tags every selected product gets',
                         )}
                       />
                     </Show>
+                    <FieldError message={createErrors[d.meta.id]} />
                   </Show>
                 </div>
               )}

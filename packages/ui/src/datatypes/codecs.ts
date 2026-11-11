@@ -2,6 +2,9 @@ import type { Codec, CodecContext } from './registry';
 import { codecRegistry } from './registry';
 import { isoDateValue, parseDateValue } from './dateValue';
 import { STOCK_CONCERN_LABEL } from '../stockConcernLabels';
+import { __, _n, sprintf } from '@invflux/i18n';
+import { parseDecimal, type ParseDecimalOptions } from '../parseDecimal';
+import { enumMultiText, parseEnumMulti } from './enumMulti';
 
 /**
  * Built-in datatype codecs (§11.8): the round-trippable text representations used for
@@ -13,7 +16,7 @@ import { STOCK_CONCERN_LABEL } from '../stockConcernLabels';
 const asString = (value: unknown): string =>
   value === null || value === undefined ? '' : String(value);
 
-const numberCodec: Codec = {
+const integerCodec: Codec = {
   format: (value) => (typeof value === 'number' ? String(value) : ''),
   parse: (text, ctx) => {
     const t = text.trim();
@@ -71,9 +74,56 @@ function withinBounds(value: string | null, ctx: CodecContext): string | null {
   return value;
 }
 
+/**
+ * A decimal someone typed, read by {@link parseDecimal}: the comma or the dot is the decimal point and
+ * nothing else is accepted, so a figure is never reinterpreted. The column's own limits apply, and its
+ * `scale` when it declares one (more decimals than that is refused, never rounded). A minus is
+ * allowed unless the column's `min` rules it out.
+ */
+function typedOptions(ctx: CodecContext): ParseDecimalOptions {
+  const min = typeof ctx.config.min === 'number' ? ctx.config.min : undefined;
+  const max = typeof ctx.config.max === 'number' ? ctx.config.max : undefined;
+
+  return {
+    scale: typeof ctx.config.scale === 'number' ? ctx.config.scale : undefined,
+    negative: undefined === min || min < 0,
+    min,
+    max,
+  };
+}
+
+function parseTyped(text: string, ctx: CodecContext): string | null {
+  const parsed = parseDecimal(text, typedOptions(ctx));
+
+  return 'ok' === parsed.kind ? parsed.value : null;
+}
+
+/** What to tell someone whose typed figure was refused. Null when it was not refused (or was empty). */
+function rejectTyped(text: string, ctx: CodecContext): string | null {
+  const parsed = parseDecimal(text, typedOptions(ctx));
+  switch (parsed.kind) {
+    case 'invalid':
+      return __(
+        'Type the number with a comma or a dot for the decimals, and no thousands separator.',
+      );
+    case 'too_many_decimals':
+      return sprintf(
+        /* translators: %d is the most decimal places the field accepts. */
+        _n('At most %d decimal place.', 'At most %d decimal places.', parsed.scale),
+        parsed.scale,
+      );
+    case 'out_of_range':
+      return __('The value is outside what this field allows.');
+    default:
+      return null;
+  }
+}
+
 const decimalCodec: Codec = {
   format: asString,
-  parse: (text, ctx) => withinBounds(normalizeNumeric(text), ctx),
+  parse: (text, ctx) =>
+    'typed' === ctx.source ? parseTyped(text, ctx) : withinBounds(normalizeNumeric(text), ctx),
+  reject: rejectTyped,
 };
 
 const moneyCodec: Codec = {
@@ -86,7 +136,11 @@ const moneyCodec: Codec = {
   },
   // Money often arrives with a currency symbol / code around the number ("1 096,90 €", "$12.50"):
   // strip anything that isn't a digit / separator / sign / whitespace, then normalize like a decimal.
-  parse: (text, ctx) => withinBounds(normalizeNumeric(text.replace(/[^\d.,\-\s]/g, '')), ctx),
+  parse: (text, ctx) =>
+    'typed' === ctx.source
+      ? parseTyped(text, ctx)
+      : withinBounds(normalizeNumeric(text.replace(/[^\d.,\-\s]/g, '')), ctx),
+  reject: rejectTyped,
 };
 
 const textCodec: Codec = {
@@ -196,7 +250,7 @@ const dateCodec: Codec = {
   parse: () => null,
 };
 
-codecRegistry.register('number', 'core.number', numberCodec, { default: true });
+codecRegistry.register('integer', 'core.integer', integerCodec, { default: true });
 codecRegistry.register('decimal', 'core.decimal', decimalCodec, { default: true });
 codecRegistry.register('decimal:money', 'core.money', moneyCodec, { default: true });
 codecRegistry.register('text', 'core.text', textCodec, { default: true });
@@ -207,6 +261,15 @@ codecRegistry.register('image:url', 'core.image', imageUrlCodec, { default: true
 codecRegistry.register('term-picker:wc-taxonomy', 'core.term-list', termPickerCodec, {
   default: true,
 });
+codecRegistry.register(
+  'enum-multi',
+  'core.enum-multi',
+  {
+    format: (value, ctx) => enumMultiText(value, ctx.config),
+    parse: (text, ctx) => parseEnumMulti(text, ctx.config),
+  },
+  { default: true },
+);
 codecRegistry.register('stock-concerns', 'core.stock-concerns', stockConcernsCodec, {
   default: true,
 });

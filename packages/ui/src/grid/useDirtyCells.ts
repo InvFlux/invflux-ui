@@ -39,6 +39,8 @@ export interface CellPatch {
   /** Snapshotted onto the row for the review modal, which has no access to the grid's rows. */
   name: string;
   sku: string;
+  /** Stage this edit as the consequence of another column's edit in the same row (see {@link DirtyEdit.linkedTo}). */
+  linkedTo?: string;
 }
 
 export interface DirtyCellsStore {
@@ -74,7 +76,10 @@ export interface DirtyCellsStore {
    * as a stalled modal at a few hundred cells. Prefer this over a loop, always.
    */
   patchMany: (edits: readonly CellPatch[]) => void;
-  /** Drop the staged edits for a set of cells (select-and-revert). Empties + prunes rows. */
+  /**
+   * Drop the staged edits for a set of cells (select-and-revert). Empties + prunes rows. A linked
+   * edit goes with the edit it is linked to, in either direction: neither makes sense alone.
+   */
   revert: (cells: Array<{ subjectId: number; columnId: string }>) => void;
   /** Drop every staged edit + clear the pending set. */
   discardAll: () => void;
@@ -203,12 +208,16 @@ export function useDirtyCells(): DirtyCellsStore {
       // the map between two edits of one pass, so the intermediate clones would be pure waste.
       // `prev`'s own maps are never mutated, which is what keeps the update immutable.
       const copied = new Set<number>();
-      for (const { subjectId, columnId, original, next, name, sku } of edits) {
+      for (const { subjectId, columnId, original, next, name, sku, linkedTo } of edits) {
         const row = map.get(subjectId) ?? { name, sku, cells: new Map<string, DirtyEdit>() };
         const cells = copied.has(subjectId) ? row.cells : new Map(row.cells);
         copied.add(subjectId);
         if (next === original) cells.delete(columnId);
-        else cells.set(columnId, { original, new: next });
+        else
+          cells.set(
+            columnId,
+            linkedTo === undefined ? { original, new: next } : { original, new: next, linkedTo },
+          );
         if (cells.size === 0) map.delete(subjectId);
         else map.set(subjectId, { ...row, cells });
       }
@@ -232,6 +241,10 @@ export function useDirtyCells(): DirtyCellsStore {
         const row = map.get(subjectId);
         if (!row) continue;
         const cells = new Map(row.cells);
+        // The edit this one is linked to, and every edit linked to it, go too.
+        const linkedTo = cells.get(columnId)?.linkedTo;
+        if (linkedTo !== undefined) cells.delete(linkedTo);
+        for (const [other, edit] of row.cells) if (edit.linkedTo === columnId) cells.delete(other);
         cells.delete(columnId);
         if (cells.size === 0) map.delete(subjectId);
         else map.set(subjectId, { ...row, cells });

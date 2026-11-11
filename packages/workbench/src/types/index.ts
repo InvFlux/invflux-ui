@@ -67,6 +67,36 @@ export interface WorkbenchWorksheet {
   description: string | null;
   visibility: string;
   itemCount: number;
+  /** The worksheet's own columns, in order; absent from an older server. */
+  columns?: WorksheetColumnDef[];
+}
+
+/** One of a worksheet's own columns, as the worksheet list returns it. */
+export interface WorksheetColumnDef {
+  /** Its key within the worksheet (`c3`), which never changes. */
+  key: string;
+  /** Its Workbench column id (`worksheet.{id}.c3`). */
+  columnId: string;
+  name: string;
+  /** Its plain type, or null when it is made like another column. */
+  type: string | null;
+  /** The Workbench column it is made like, or null. */
+  like: string | null;
+  /** That column's label, or null when it is no longer available. */
+  likeLabel: string | null;
+  /** Where that column's values come from ("Global attribute", "Custom field", its group), or null. */
+  likeOrigin?: string | null;
+  /** How many lines hold a value in it. */
+  values: number;
+}
+
+/** A Workbench column a worksheet column may be made like. */
+export interface WorksheetColumnSource {
+  id: string;
+  label: string;
+  dataType: string;
+  /** Where its values come from ("Global attribute", "Custom field", its group), or null. */
+  origin?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -177,6 +207,19 @@ export interface WorkbenchCapabilities {
   manageSettings?: boolean;
   /** May open a goods-receiving session (the inventory capability, not the correction one). Absent ⇒ no. */
   receiveStock?: boolean;
+  /**
+   * May write to worksheets: create, rename and delete one, add and remove its products. Absent ⇒ no.
+   * Without it the worksheets can still be listed and filtered on; their own columns arrive read-only
+   * from the server.
+   */
+  editWorksheets?: boolean;
+  /** May create a product term where a picker offers it (WordPress's `manage_product_terms`). Absent ⇒ no. */
+  manageProductTerms?: boolean;
+  /**
+   * May manage purchase orders and suppliers: gates the bulk actions that read the supplier list
+   * (adding to a supplier's catalog, creating a replenishment order). Absent ⇒ no.
+   */
+  managePurchaseOrders?: boolean;
 }
 
 /** Role a registered component plays for a datatype (§5.4). Codecs are not merchant-choosable. */

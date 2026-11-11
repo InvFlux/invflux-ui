@@ -377,3 +377,11 @@ export function useReplicatedQueue(): WorkingSet {
 
   return set;
 }
+
+/**
+ * The replicated set when an ancestor owns one, `undefined` when none does — for a component that
+ * also renders where no queue exists, such as an order opened in a tab of its own.
+ */
+export function useReplicatedQueueIfAny(): WorkingSet | undefined {
+  return useContext(WorkingSetCtx);
+}

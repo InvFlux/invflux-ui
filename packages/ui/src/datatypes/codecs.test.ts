@@ -17,8 +17,8 @@ const codec = (dataType: string) => {
 };
 
 describe('built-in codecs', () => {
-  it('number: parses integers, rejects non-integers, honors min/max', () => {
-    const c = codec('number');
+  it('integer: parses integers, rejects non-integers, honors min/max', () => {
+    const c = codec('integer');
     expect(c.parse('12', ctx())).toBe(12);
     expect(c.parse(' 7 ', ctx())).toBe(7);
     expect(c.parse('1.5', ctx())).toBeNull();
@@ -29,6 +29,12 @@ describe('built-in codecs', () => {
     expect(c.format(12, ctx())).toBe('12');
     expect(c.format(null, ctx())).toBe('');
     expect(c.parse(c.format(8, ctx()), ctx())).toBe(8); // round-trip
+  });
+
+  it('quantity and an earlier `number` read with the integer codec', () => {
+    expect(codec('quantity:stock').parse('3', ctx())).toBe(3);
+    expect(codec('quantity').parse('2.5', ctx())).toBeNull();
+    expect(codec('number').parse('12', ctx())).toBe(12);
   });
 
   it('text: trims surrounding whitespace (a stray space in a SKU/name is never intended)', () => {
@@ -139,5 +145,40 @@ describe('built-in codecs', () => {
     expect(c.parse('shoes', cfg)).toEqual([3]); // case-insensitive
     expect(c.parse('', cfg)).toEqual([]); // clears
     expect(c.parse('Shoes, Nope', cfg)).toBeNull(); // any unresolved → reject
+  });
+});
+
+describe('decimal codecs: typed text is read strictly, pasted text tolerantly', () => {
+  const typed = (config: Record<string, unknown> = {}) => ({ config, source: 'typed' as const });
+  const pasted = (config: Record<string, unknown> = {}) => ({ config, source: 'paste' as const });
+
+  it('typed: one separator is the decimal point, and nothing is repaired', () => {
+    expect(codec('decimal').parse('12,5', typed())).toBe('12.5');
+    expect(codec('decimal').parse('12.50', typed())).toBe('12.50');
+    expect(codec('decimal').parse('1 096,90', typed())).toBeNull();
+    expect(codec('decimal').parse('1.234,56', typed())).toBeNull();
+    expect(codec('decimal:money').parse('12.50 €', typed())).toBeNull();
+  });
+
+  it('pasted (and a call that says nothing): the tolerant reading is unchanged', () => {
+    expect(codec('decimal').parse('1 096,90', pasted())).toBe('1096.90');
+    expect(codec('decimal').parse('1.234,56', pasted())).toBe('1234.56');
+    expect(codec('decimal:money').parse('1 096,90 €', pasted())).toBe('1096.90');
+    expect(codec('decimal:money').parse('1 096,90 €', ctx())).toBe('1096.90');
+  });
+
+  it('typed: a declared scale refuses a lone 1,234 in a two-decimal column, and never rounds', () => {
+    expect(codec('decimal:money').parse('1,234', typed({ scale: 2 }))).toBeNull();
+    expect(codec('decimal:money').parse('1,23', typed({ scale: 2 }))).toBe('1.23');
+    // No scale declared: the reading is the plain rule, which takes the comma as the point.
+    expect(codec('decimal:money').parse('1,234', typed())).toBe('1.234');
+    // Pasted text is not held to the scale: a spreadsheet's 1,234 is a thousand there.
+    expect(codec('decimal:money').parse('1,234', pasted({ scale: 2 }))).toBe('1.234');
+  });
+
+  it("typed: a minus is allowed unless the column's min rules it out, and limits still apply", () => {
+    expect(codec('decimal').parse('-5', typed())).toBe('-5');
+    expect(codec('decimal').parse('-5', typed({ min: 0 }))).toBeNull();
+    expect(codec('decimal').parse('11', typed({ max: 10 }))).toBeNull();
   });
 });

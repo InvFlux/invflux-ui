@@ -3,6 +3,7 @@ import {
   Button,
   GearIcon,
   iconButtonClass,
+  SettingsSectionsProvider,
   surfaceSettingsRegistry,
   usePortalRootOptional,
 } from '@invflux/ui';
@@ -84,7 +85,8 @@ export function GearMenu(props: {
             </Button>
           </div>
           {/* Body — the active surface's panel(s), each with its own foldable sections, in one scroll. */}
-          <div class="max-h-[70vh] overflow-y-auto px-4 py-1">
+          {/* A column, so a section's `order` places it among the others whichever panel rendered it. */}
+          <div class="flex max-h-[70vh] flex-col overflow-y-auto px-4 py-1 *:shrink-0">
             <Show
               when={panels().length > 0}
               fallback={
@@ -97,11 +99,21 @@ export function GearMenu(props: {
                 </p>
               }
             >
-              <For each={panels()}>
-                {(panel) => (
-                  <Dynamic component={panel.component} onRequestClose={() => setOpen(false)} />
+              {/* Keyed on the surface: the arrangement a reader made belongs to one surface's gear. */}
+              <Show when={props.activeId()} keyed>
+                {(surfaceId) => (
+                  <SettingsSectionsProvider surfaceId={surfaceId}>
+                    <For each={panels()}>
+                      {(panel) => (
+                        <Dynamic
+                          component={panel.component}
+                          onRequestClose={() => setOpen(false)}
+                        />
+                      )}
+                    </For>
+                  </SettingsSectionsProvider>
                 )}
-              </For>
+              </Show>
             </Show>
           </div>
         </Popover.Content>

@@ -8,6 +8,7 @@ import { drilldownRegistry } from './registry';
 import { iconButtonClass } from '../primitives';
 import { ErrorBanner } from '../ErrorBanner';
 import { createSearchFailure } from '../searchFailure';
+import { ProductCodesDrilldown } from './productCodesDrilldown';
 
 /**
  * Built-in per-cell drill-down components (§11.7), keyed by datatype slug and registered into
@@ -375,5 +376,10 @@ function ConstituentsDrilldown(props: DrilldownProps) {
 }
 
 drilldownRegistry.register('text:product-type', 'core.constituents', ConstituentsDrilldown, {
+  default: true,
+});
+
+// A product's barcodes, from any column that shows its barcode: the receiving grid's GTIN cell.
+drilldownRegistry.register('text:gtin', 'core.product-codes', ProductCodesDrilldown, {
   default: true,
 });

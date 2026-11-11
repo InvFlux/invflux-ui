@@ -131,6 +131,7 @@ export function PoLinesEditor(props: EditorProps): JSX.Element {
       sku: item?.sku ?? null,
       supplierSku: item?.supplierSku ?? null,
       gtin: item?.gtin ?? null,
+      codes: [],
       imageUrl: item?.imageUrl ?? null,
       exists: true,
       qtyRequested: qty,

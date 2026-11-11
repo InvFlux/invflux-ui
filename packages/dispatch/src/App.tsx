@@ -9,9 +9,10 @@ import {
 import { createSignal, onCleanup, type ParentProps, Show } from 'solid-js';
 import { DispatchSettingsPanel } from './components/DispatchSettings';
 import { TagManagerModal } from './components/OrderTags';
-import { DispatchCtx } from './context';
+import { DispatchCtx, useDispatch } from './context';
 import { ListStoreCtx, createListStore } from './listStore';
 import { PortalCtx } from './portal';
+import { publishQueueRank, publishQueueSortEntitlements } from './queueSort';
 import { WorkingSetProvider } from './useWorkingSet';
 import { OrderList } from './routes/OrderList';
 import { OrderDetail } from './routes/OrderDetail';
@@ -31,6 +32,18 @@ import type { DispatchContext } from './types';
  */
 function DispatchSurface(props: ParentProps) {
   const surface = useSurface();
+  const ctx = useDispatch();
+
+  // The queue's local sort, published for the whole surface: the queue orders its rows with it, and
+  // an order page reached without passing through the queue orders its previous and next by it.
+  // Hand the sort seam this install's entitlements, so a contributed ranking rule can gate itself on
+  // the license the way the server's fragment does. Read through a getter rather than copied,
+  // because the context is fetched lazily and a snapshot taken here would freeze the pre-fetch
+  // defaults.
+  publishQueueSortEntitlements(() => ctx.entitlements as unknown as Record<string, boolean>);
+  // And the shop's queue order, read the same way: the server resolved it, and the local sort
+  // follows it so a polled row lands where the server's own page would put it.
+  publishQueueRank(() => ctx.settings?.queueRank);
   const [tagManagerOpen, setTagManagerOpen] = createSignal(false);
 
   // Guarded rather than asserted: the context is optional by type, and a surface mounted outside a

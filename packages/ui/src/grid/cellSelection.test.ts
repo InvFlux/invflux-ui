@@ -3,6 +3,11 @@ import {
   addRange,
   selectionRectsFromCells,
   clampCoord,
+  coveredColumns,
+  coveredRows,
+  fullColumnsOf,
+  fullRowsOf,
+  withCells,
   EMPTY_SELECTION,
   extendTo,
   isActive,
@@ -276,5 +281,47 @@ describe('selectionRectsFromCells', () => {
     expect(covered(selectionRectsFromCells(input))).toEqual(
       new Set(input.map((c) => `${c.row},${c.col}`)),
     );
+  });
+});
+
+describe('extending a selection', () => {
+  // Rows 1 and 4, across columns 2 and 5: two disjoint cells.
+  const sparse = withCells(EMPTY_SELECTION, [
+    { row: 1, col: 2 },
+    { row: 4, col: 5 },
+  ]);
+
+  it('reads the rows and columns a selection covers', () => {
+    expect(coveredRows(sparse)).toEqual([1, 4]);
+    expect(coveredColumns(sparse)).toEqual([2, 5]);
+    expect(coveredRows(selectRows(2, 4, 3))).toEqual([2, 3, 4]);
+  });
+
+  it('takes full rows of the rows covered only, keeping the active cell', () => {
+    const rows = fullRowsOf(sparse, 6);
+    expect(rows.ranges).toEqual([
+      { r1: 1, c1: 0, r2: 1, c2: 5 },
+      { r1: 4, c1: 0, r2: 4, c2: 5 },
+    ]);
+    expect(rows.active).toEqual({ row: 1, col: 2 });
+    expect(isSelected(rows, 2, 0), 'a skipped row stays unselected').toBe(false);
+  });
+
+  it('takes full columns of the columns covered only', () => {
+    expect(fullColumnsOf(sparse, 10).ranges).toEqual([
+      { r1: 0, c1: 2, r2: 9, c2: 2 },
+      { r1: 0, c1: 5, r2: 9, c2: 5 },
+    ]);
+  });
+
+  it('adds cells, skipping those already selected', () => {
+    const start = selectCell({ row: 0, col: 0 });
+    const more = withCells(start, [
+      { row: 0, col: 0 },
+      { row: 3, col: 1 },
+    ]);
+    expect(more.active).toEqual({ row: 0, col: 0 });
+    expect(more.ranges).toEqual([...start.ranges, { r1: 3, c1: 1, r2: 3, c2: 1 }]);
+    expect(withCells(more, [{ row: 3, col: 1 }]), 'nothing new: unchanged').toBe(more);
   });
 });

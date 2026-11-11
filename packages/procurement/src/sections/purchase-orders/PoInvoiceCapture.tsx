@@ -1,4 +1,4 @@
-import { __, _n, formatMoney, sprintf } from '@invflux/i18n';
+import { __, _n, formatDateOnly, formatMoney, sprintf } from '@invflux/i18n';
 import {
   Button,
   COMMON_ALIASES,
@@ -22,7 +22,8 @@ import {
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
 import { type ColumnDef, createColumnHelper } from '@tanstack/solid-table';
 import type { RowSelectionState, SortingState } from '@tanstack/solid-table';
-import { createMemo, createSignal, type JSX, Show } from 'solid-js';
+import { createEffect, createMemo, createSignal, type JSX, on, onMount, Show } from 'solid-js';
+import { ApiError } from '@invflux/ui/api';
 import { useProcurement } from '../../context';
 import { registerReceiptEditor } from '../../grid/receiptEditor';
 import { createApi } from '../../lib/api';
@@ -30,7 +31,7 @@ import { supplierDocHeading } from './supplierDocKinds';
 import { atSupplierPrecision, formatDiscount, netOfDiscount } from './linePrice';
 import { SkuCell } from './SkuCell';
 import { orderedQty } from '../../lib/variance';
-import type { PoLine } from './types';
+import type { PoLine, SupplierInvoiceDoc } from './types';
 
 // The numeric editor (blank-start, `.`-fill, clamp) shared with the receive and draft grids.
 registerReceiptEditor();
@@ -100,6 +101,8 @@ export function PoInvoiceCapture(props: {
   currency: string;
   /** Decimal places this supplier's prices are written in. */
   costDecimals: number;
+  /** Open on this recorded invoice, to correct it — the timeline's Correct link. */
+  correctInvoiceId?: number | null;
   onDone: () => void;
 }): JSX.Element {
   const ctx = useProcurement();
@@ -118,6 +121,89 @@ export function PoInvoiceCapture(props: {
   // A discount typed here — `null` included, which states "no discount" rather than "not typed" — so
   // presence in the map is what separates the operator's word from the line's standing discount.
   const [discount, setDiscount] = createSignal<Record<number, string | null>>({});
+
+  // ── Which document this is ──────────────────────────────────────────────────────────────────────
+  // The number comes first and is checked on leaving the field: a number already on this order is
+  // that invoice, loaded here to correct rather than entered a second time beside it (the server
+  // refuses the duplicate anyway). Entry waits for the check, so loading recorded figures can never
+  // overwrite figures typed before it.
+  const invoicesQuery = createQuery(() => ({
+    queryKey: ['procurement', 'purchase-orders', String(props.poId), 'invoices'],
+    queryFn: () =>
+      api.get<{ invoices: SupplierInvoiceDoc[] }>(
+        `/procurement/purchase-orders/${props.poId}/invoices`,
+      ),
+  }));
+  const normalize = (r: string): string => r.trim().toLowerCase();
+  const recordedAs = (r: string): SupplierInvoiceDoc | undefined =>
+    '' === normalize(r)
+      ? undefined
+      : invoicesQuery.data?.invoices.find((i) => normalize(i.reference) === normalize(r));
+  /** The recorded invoice being corrected; null while this is a new one. */
+  const [correcting, setCorrecting] = createSignal<SupplierInvoiceDoc | null>(null);
+  /** The number has been checked against the order's invoices, so the figures may be entered. */
+  const [numberChecked, setNumberChecked] = createSignal(false);
+  const [numberTouched, setNumberTouched] = createSignal(false);
+  const entryOpen = (): boolean => numberChecked() && '' !== reference().trim();
+  /** Another recorded invoice under the number typed — one this form may not take. */
+  const clash = (): SupplierInvoiceDoc | undefined => {
+    const hit = recordedAs(reference());
+    return hit && hit.id !== correcting()?.id ? hit : undefined;
+  };
+  const hasTypedFigures = (): boolean =>
+    Object.keys(qty()).length > 0 ||
+    Object.keys(rate()).length > 0 ||
+    Object.keys(discount()).length > 0;
+
+  /** Fill the form from a recorded invoice: its header, and its figures staged on their lines. */
+  const load = (inv: SupplierInvoiceDoc): void => {
+    setReference(inv.reference);
+    setInvoicedAt(inv.invoicedAt ?? '');
+    setCurrency(inv.currency);
+    setStatedTotal(inv.statedTotal ?? '');
+    setNote(inv.note ?? '');
+    const q: Record<number, number | null> = {};
+    const r: Record<number, string | null> = {};
+    const d: Record<number, string | null> = {};
+    for (const l of inv.lines) {
+      q[l.subjectId] = (q[l.subjectId] ?? 0) + l.qty;
+      r[l.subjectId] = l.unitCost;
+      d[l.subjectId] = l.discountPct;
+    }
+    setQty(q);
+    setRate(r);
+    setDiscount(d);
+    setCorrecting(inv);
+    setNumberChecked(true);
+  };
+
+  /** Leaving the number field, or Enter in it: mark it if empty, else check it against the order. */
+  const checkNumber = (): void => {
+    setNumberTouched(true);
+    if ('' === reference().trim()) return;
+    const hit = clash();
+    // A new invoice whose number is already recorded becomes the correction of that one, unless
+    // figures were typed first — then nothing is overwritten and the choice is offered instead.
+    if (hit && null === correcting() && !hasTypedFigures()) {
+      load(hit);
+      return;
+    }
+    setNumberChecked(true);
+  };
+
+  // Opened from the timeline on a given invoice, once the order's invoices are in.
+  createEffect(
+    on(
+      () => [props.correctInvoiceId, invoicesQuery.data] as const,
+      ([id, data]) => {
+        if (null == id || !data) return;
+        const inv = data.invoices.find((i) => i.id === id);
+        if (inv && correcting()?.id !== id) load(inv);
+      },
+    ),
+  );
+
+  const [confirmingDelete, setConfirmingDelete] = createSignal(false);
 
   const qtyFor = (id: number): number | null => qty()[id] ?? null;
   const typedRateFor = (id: number): string | null => rate()[id] ?? null;
@@ -164,6 +250,13 @@ export function PoInvoiceCapture(props: {
     null === qtyFor(line.subjectId) ||
     (null === typedRateFor(line.subjectId) && null === line.unitCostInvoiced);
 
+  /** Units billed on this line by the order's OTHER invoices — the one being corrected left out. */
+  const billedSoFar = (line: PoLine): number =>
+    (line.qtyInvoiced ?? 0) -
+    (correcting()
+      ?.lines.filter((l) => l.subjectId === line.subjectId)
+      .reduce((n, l) => n + l.qty, 0) ?? 0);
+
   const billedLines = createMemo(() => props.lines.filter((l) => (qtyFor(l.subjectId) ?? 0) > 0));
   // A line billed at no price at all: nothing typed, and nothing on the order to fall back to. The
   // server drops such a line, so it is flagged here rather than silently going missing from a saved
@@ -187,12 +280,17 @@ export function PoInvoiceCapture(props: {
   // pressing it is how the operator learns what is still needed. An unpriced line is already said
   // in words below the fields as soon as it exists.
   const [tried, setTried] = createSignal(false);
-  const referenceMissing = (): boolean => tried() && '' === reference().trim();
+  const referenceMissing = (): boolean => (tried() || numberTouched()) && '' === reference().trim();
   const nothingBilled = (): boolean => tried() && 0 === billedLines().length;
   let barEl: HTMLDivElement | undefined;
   const submit = (): void => {
     setTried(true);
-    if ('' === reference().trim() || 0 === billedLines().length || unpricedLines().length > 0) {
+    if (
+      '' === reference().trim() ||
+      undefined !== clash() ||
+      0 === billedLines().length ||
+      unpricedLines().length > 0
+    ) {
       focusFirstInvalid(barEl);
       return;
     }
@@ -366,32 +464,56 @@ export function PoInvoiceCapture(props: {
   const money = (v: number | string | null): string =>
     null === v || '' === v ? '—' : Number(v).toFixed(props.costDecimals);
 
+  const invalidate = (): void => {
+    void queryClient.invalidateQueries({
+      queryKey: ['procurement', 'purchase-orders', String(props.poId)],
+    });
+    void queryClient.invalidateQueries({ queryKey: ['procurement', 'purchase-orders'] });
+  };
+  const body = () => ({
+    reference: reference().trim(),
+    invoicedAt: invoicedAt() || null,
+    currency: currency().trim().toUpperCase(),
+    statedTotal: statedTotal().trim() || null,
+    note: note().trim() || null,
+    lines: billedLines().map((l) => ({
+      subjectId: l.subjectId,
+      qty: qtyFor(l.subjectId) ?? 0,
+      // The rate before the discount, and the discount; the server computes the net from them.
+      unitCost: effectiveRate(l),
+      discountPct: effectiveDiscount(l),
+    })),
+  });
   const save = createMutation(() => ({
-    mutationFn: () =>
-      api.post(`/procurement/purchase-orders/${props.poId}/invoices`, {
-        reference: reference().trim(),
-        invoicedAt: invoicedAt() || null,
-        currency: currency().trim().toUpperCase(),
-        statedTotal: statedTotal().trim() || null,
-        note: note().trim() || null,
-        lines: billedLines().map((l) => ({
-          subjectId: l.subjectId,
-          qty: qtyFor(l.subjectId) ?? 0,
-          // The rate before the discount, and the discount; the server computes the net from them.
-          unitCost: effectiveRate(l),
-          discountPct: effectiveDiscount(l),
-        })),
-      }),
+    mutationFn: () => {
+      const inv = correcting();
+      return null === inv
+        ? api.post(`/procurement/purchase-orders/${props.poId}/invoices`, body())
+        : api.put(`/procurement/purchase-orders/${props.poId}/invoices/${inv.id}`, body());
+    },
     onSuccess: () => {
-      void queryClient.invalidateQueries({
-        queryKey: ['procurement', 'purchase-orders', String(props.poId)],
-      });
-      void queryClient.invalidateQueries({ queryKey: ['procurement', 'purchase-orders'] });
-      toast.success(__('Invoice recorded.'));
+      invalidate();
+      toast.success(null === correcting() ? __('Invoice recorded.') : __('Invoice corrected.'));
+      props.onDone();
+    },
+    onError: (e: unknown) => {
+      // Recorded meanwhile — another tab, a double submit: the list this form checked was stale.
+      if (e instanceof ApiError && 'invflux_duplicate_supplier_invoice' === e.code) {
+        void invoicesQuery.refetch();
+      }
+      toast.error(e instanceof Error ? e.message : __('Could not record the invoice.'));
+    },
+  }));
+  const remove = createMutation(() => ({
+    mutationFn: () =>
+      api.del(`/procurement/purchase-orders/${props.poId}/invoices/${correcting()?.id ?? 0}`),
+    onSuccess: () => {
+      invalidate();
+      toast.success(__('Invoice deleted.'));
       props.onDone();
     },
     onError: (e: unknown) =>
-      toast.error(e instanceof Error ? e.message : __('Could not record the invoice.')),
+      toast.error(e instanceof Error ? e.message : __('Could not delete the invoice.')),
   }));
 
   // ── DataGrid wiring ────────────────────────────────────────────────────────────────────────────
@@ -430,10 +552,10 @@ export function PoInvoiceCapture(props: {
         header: () => __('Billed so far'),
         cell: (info) => (
           <Show
-            when={info.row.original.qtyInvoiced > 0}
+            when={billedSoFar(info.row.original) > 0}
             fallback={<span class="block text-right text-slate-300">—</span>}
           >
-            <span class="block text-right tabular-nums">{info.row.original.qtyInvoiced}</span>
+            <span class="block text-right tabular-nums">{billedSoFar(info.row.original)}</span>
           </Show>
         ),
       }) as ColumnDef<PoLine, unknown>,
@@ -529,7 +651,7 @@ export function PoInvoiceCapture(props: {
     colMeta({
       id: 'billed_so_far',
       label: __('Billed so far'),
-      description: __('Units already billed by earlier invoices on this line'),
+      description: __('Units billed on this line by the order’s other invoices'),
       dataType: 'number',
       copyable: true,
       defaultWidth: 110,
@@ -597,7 +719,7 @@ export function PoInvoiceCapture(props: {
       case 'ordered':
         return row.qtyRequested;
       case 'billed_so_far':
-        return row.qtyInvoiced;
+        return billedSoFar(row);
       case 'qty':
         return qtyFor(row.subjectId);
       case 'unit_cost':
@@ -631,7 +753,9 @@ export function PoInvoiceCapture(props: {
   };
 
   const EDITABLE = new Set(['qty', 'unit_cost', 'discount_pct']);
-  const canEdit = (_row: PoLine, meta: GridColumnMeta): boolean => EDITABLE.has(meta.id);
+  // Nothing is entered until the number is checked — see {@link checkNumber}.
+  const canEdit = (_row: PoLine, meta: GridColumnMeta): boolean =>
+    entryOpen() && EDITABLE.has(meta.id);
   const resolveClearedValue = (
     _row: PoLine,
     meta: GridColumnMeta,
@@ -671,30 +795,110 @@ export function PoInvoiceCapture(props: {
   // The shared field skin, so a missing value can show as invalid like everywhere else.
   const FIELD = inputClass('sm', false, 'min-w-0');
 
+  // The number is the first thing asked for; opened on a recorded invoice, the panel is brought into
+  // view instead, since the link that opened it sits further down the page.
+  let numberEl: HTMLInputElement | undefined;
+  onMount(() => {
+    if (null == props.correctInvoiceId) numberEl?.focus();
+    else barEl?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  });
+  /** Import fills the same cells, so it waits for the number too — pressing it says so. */
+  const openImport = (): void => {
+    if (!entryOpen()) {
+      checkNumber();
+      numberEl?.focus();
+      return;
+    }
+    setImporting(true);
+  };
+
   return (
     <div>
       <div ref={barEl} class="mb-3 rounded border border-slate-200 bg-slate-50 p-2.5">
         {/* The heading names the document rather than the category — the kind was chosen at the
             entry button, and nothing else in this bar would say which one. */}
-        <h3 class="text-sm font-medium text-slate-600">{supplierDocHeading('invoice')}</h3>
+        <h3 class="text-sm font-medium text-slate-600">
+          <Show when={correcting()} fallback={supplierDocHeading('invoice')}>
+            {(inv) =>
+              sprintf(
+                /* translators: %s is the supplier's invoice number, e.g. "INV-2610-342". */
+                __('Correcting invoice %s'),
+                inv().reference,
+              )
+            }
+          </Show>
+        </h3>
 
         <div class="mt-2 flex flex-wrap items-end gap-x-3 gap-y-2">
           <label class="flex flex-col gap-1">
             <span class="text-xs text-slate-500">{__('Invoice number')}</span>
             <input
+              ref={numberEl}
               type="text"
               value={reference()}
               onInput={(e) => setReference(e.currentTarget.value)}
+              onBlur={checkNumber}
+              onKeyDown={(e) => {
+                if ('Enter' === e.key) {
+                  e.preventDefault();
+                  checkNumber();
+                }
+              }}
               placeholder={__('As printed by the supplier')}
-              class={inputClass('sm', referenceMissing(), 'min-w-0 w-56')}
+              class={inputClass('sm', referenceMissing() || undefined !== clash(), 'min-w-0 w-56')}
               aria-required="true"
-              aria-invalid={referenceMissing() || undefined}
+              aria-invalid={referenceMissing() || undefined !== clash() || undefined}
               data-testid="invoice-reference"
             />
             <FieldError
-              message={referenceMissing() && __('Enter the supplier’s invoice number.')}
+              message={
+                (referenceMissing() && __('Enter the supplier’s invoice number.')) ||
+                (numberChecked() &&
+                  clash() &&
+                  sprintf(
+                    /* translators: %s is the supplier's invoice number. */
+                    __('%s is already recorded on this order.'),
+                    clash()?.reference ?? '',
+                  ))
+              }
               testId="invoice-reference-error"
             />
+            <Show when={numberChecked() ? clash() : undefined}>
+              {(other) => (
+                <button
+                  type="button"
+                  class="self-start text-xs text-primary hover:underline"
+                  onClick={() => load(other())}
+                  data-testid="invoice-load-recorded"
+                >
+                  {__('Load that invoice to correct it')}
+                </button>
+              )}
+            </Show>
+            <Show when={!clash() ? correcting() : undefined}>
+              {(inv) => (
+                <span class="max-w-72 text-xs text-slate-600" data-testid="invoice-correcting-note">
+                  {normalize(inv().reference) === normalize(reference())
+                    ? sprintf(
+                        /* translators: 1: the supplier's invoice number, 2: its date, 3: how many lines it bills. */
+                        _n(
+                          '%1$s is already recorded on this order (%2$s, %3$d line). Saving replaces it.',
+                          '%1$s is already recorded on this order (%2$s, %3$d lines). Saving replaces it.',
+                          inv().lines.length,
+                        ),
+                        inv().reference,
+                        formatDateOnly(inv().invoicedAt ?? inv().recordedAt?.slice(0, 10)),
+                        inv().lines.length,
+                      )
+                    : sprintf(
+                        /* translators: 1: the invoice number as recorded, 2: the number it will be saved under. */
+                        __('Correcting %1$s — saving renames it to %2$s.'),
+                        inv().reference,
+                        reference().trim(),
+                      )}
+                </span>
+              )}
+            </Show>
           </label>
           <label class="flex flex-col gap-1">
             <span class="text-xs text-slate-500">{__('Invoice date')}</span>
@@ -741,14 +945,47 @@ export function PoInvoiceCapture(props: {
           </label>
           {/* Right-aligned and allowed to wrap under the fields when the row runs out of room. */}
           <div class="ml-auto flex flex-wrap items-center gap-2">
-            <Button variant="secondary" size="sm" onClick={() => setImporting(true)}>
+            <Show when={correcting()}>
+              <Show
+                when={confirmingDelete()}
+                fallback={
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setConfirmingDelete(true)}
+                    data-testid="invoice-delete"
+                  >
+                    {__('Delete this invoice')}
+                  </Button>
+                }
+              >
+                <span class="text-xs text-slate-600">{__('Delete it for good?')}</span>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  disabled={remove.isPending}
+                  onClick={() => remove.mutate()}
+                  data-testid="invoice-delete-confirm"
+                >
+                  {__('Delete')}
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setConfirmingDelete(false)}>
+                  {__('Keep it')}
+                </Button>
+              </Show>
+            </Show>
+            <Button variant="secondary" size="sm" onClick={openImport}>
               {__('Import / paste')}
             </Button>
             <Button variant="ghost" size="sm" onClick={() => props.onDone()}>
               {__('Cancel')}
             </Button>
             <Button size="sm" disabled={save.isPending} onClick={submit}>
-              {save.isPending ? __('Saving…') : __('Record invoice')}
+              {save.isPending
+                ? __('Saving…')
+                : null === correcting()
+                  ? __('Record invoice')
+                  : __('Save correction')}
             </Button>
           </div>
         </div>
@@ -812,7 +1049,14 @@ export function PoInvoiceCapture(props: {
         />
       </Show>
 
-      <div class="flex max-h-[70vh] flex-col pt-2">
+      <Show when={!entryOpen()}>
+        <p class="pt-2 text-xs text-slate-500" data-testid="invoice-entry-locked">
+          {__(
+            'Enter the invoice number first. If it is already recorded on this order, its figures load here to be corrected.',
+          )}
+        </p>
+      </Show>
+      <div class="flex max-h-[70vh] flex-col pt-2" classList={{ 'opacity-50': !entryOpen() }}>
         <DataGrid<PoLine>
           rows={() => props.lines}
           getRowId={(l) => String(l.subjectId)}

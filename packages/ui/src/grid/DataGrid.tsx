@@ -15,7 +15,6 @@
  */
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { IconButton } from '../IconButton';
-import { SegmentedControl } from '../SegmentedControl';
 import { Button } from '../Button';
 import { Dynamic } from 'solid-js/web';
 import type { JSX } from 'solid-js';
@@ -55,8 +54,12 @@ import {
 import { makeGenericColumn } from './genericColumn';
 import {
   clampCoord,
+  coveredColumns,
+  coveredRows,
   EMPTY_SELECTION,
   extendTo,
+  fullColumnsOf,
+  fullRowsOf,
   isActive as cellIsActive,
   isMultiCell,
   isRectangularSelection as selectionIsRectangular,
@@ -69,6 +72,7 @@ import {
   selectionEdges,
   selectRows,
   toggleCell,
+  withCells,
   type CellCoord,
   type SelectionState,
 } from './cellSelection';
@@ -86,6 +90,29 @@ import {
   unpinColumn,
 } from './columnPinning';
 import { mergeColumnOrder } from './columnOrder';
+import { createHeaderDnd } from './headerDnd';
+import {
+  ContextMenu,
+  type ContextMenuItem,
+  toContextMenuItem,
+  type DataGridMenuItem,
+} from './ContextMenu';
+import { GridDisplaySettingsControls, GridSettingsModal } from './GridDisplaySettings';
+import {
+  cellDensityTextFor,
+  cellWrapClassFor,
+  DENSITY_BASE_PX,
+  DENSITY_PADDING,
+  headerLookFor,
+  loadGridSettings,
+  saveGridSettings,
+  TEXT_SIZE_BUMP_PX,
+  TEXT_SIZE_CLASS,
+  type GridSettings,
+  type GridWrap,
+} from './gridSettings';
+import { sortFromHeader } from './tableSort';
+import { GridHeaderCell, type HeaderLook } from './GridHeaderCell';
 import {
   isColumnOrder,
   isNumberRecord,
@@ -98,11 +125,11 @@ import { pasteTargets, resolvePastedCell } from './paste';
 import { parseSpreadsheetTsv } from '../excel-tsv-parser';
 import type { GridColumnMeta, TaxonomySpace } from '../types';
 import { __, _n, _x, sprintf } from '@invflux/i18n';
-import { menuItemClass } from '../primitives';
 import { fuzzyScore } from '../fuzzy';
 import { SortLevelsEditor, type SortableColumn } from './SortLevelsEditor';
 import { addSortLevel, type SortLevels } from './sortLevels';
 import { ErrorBanner } from '../ErrorBanner';
+import { isWholeNumberDataType } from '../datatypes/dataTypeNames';
 
 // Single owner of the column-meta augmentation.
 declare module '@tanstack/table-core' {
@@ -163,90 +190,8 @@ function columnGroupLabel(
  */
 export type DataGridLayout = 'grid' | 'record';
 
-// ── Grid display settings (density / wrap / text size) — grid-internal, persisted per `settingsKey` ──
-export type GridDensity = 'compact' | 'normal' | 'large';
-export type GridWrap = 'wrap' | 'no-wrap';
-export type GridTextSize = 'small' | 'normal' | 'large';
-export interface GridSettings {
-  density: GridDensity;
-  wrap: GridWrap;
-  textSize: GridTextSize;
-  /** How many lines a column name may occupy, 1–{@link MAX_HEADER_LINES}. `1` is the single-line
-   *  default; above that the name wraps and is clamped to that many lines, so a long name in a
-   *  narrow column costs a bounded amount of height instead of however much it happens to need. */
-  headerLines: number;
-  /** Per-column override of {@link GridSettings.wrap}; a column absent here follows the grid-wide
-   *  setting. One long free-text column among twenty numeric ones is the case this exists for —
-   *  flipping the whole grid to wrap to read that one column costs height on every other. */
-  columnWrap: Record<string, GridWrap>;
-}
-
-const DEFAULT_GRID_SETTINGS: GridSettings = {
-  density: 'normal',
-  wrap: 'no-wrap',
-  textSize: 'normal',
-  headerLines: 1,
-  columnWrap: {},
-};
-/** The ceiling on {@link GridSettings.headerLines}. Past three the header stops being a label and
- *  starts being a paragraph, and the height it costs is charged to every screen of rows. */
-const MAX_HEADER_LINES = 3;
-const DENSITY_PADDING: Record<GridDensity, string> = {
-  compact: 'py-1',
-  normal: 'py-2',
-  large: 'py-3',
-};
-const TEXT_SIZE_CLASS: Record<GridTextSize, string> = {
-  small: 'text-xs',
-  normal: 'text-sm',
-  large: 'text-base',
-};
-// One step down from the cell size, for a wrapped header. A column name is read once and then
-// recognized by shape; the rows under it are read continuously — so the two lines a wrapped name
-// costs should be cheaper than two lines of data, not the same price.
-const TEXT_SIZE_CLASS_SMALLER: Record<GridTextSize, string> = {
-  small: 'text-2xs',
-  normal: 'text-xs',
-  large: 'text-sm',
-};
-// Approximate single-line row height (px) per density × text size, for the virtualizer estimate
-// (1px border + vertical padding + content/line). Wrapped rows are taller — accepted as today (the
-// fixed-estimate virtualizer is "good enough" for wrap; overscan absorbs the slack).
-const DENSITY_BASE_PX: Record<GridDensity, number> = { compact: 38, normal: 49, large: 60 };
-const TEXT_SIZE_BUMP_PX: Record<GridTextSize, number> = { small: -2, normal: 0, large: 4 };
-
-function loadGridSettings(key: string, defaults?: Partial<GridSettings>): GridSettings {
-  const base: GridSettings = { ...DEFAULT_GRID_SETTINGS, ...defaults };
-  try {
-    const raw = localStorage.getItem(`invflux:grid-settings:${key}`);
-    // Stored user preference wins over the surface default, which wins over the global default.
-    if (raw !== null) {
-      const stored = JSON.parse(raw) as Partial<GridSettings>;
-      const merged = { ...base, ...stored };
-      // A blob written before per-column wrapping existed carries no map, and a hand-edited one may
-      // carry anything; both must still yield an indexable object.
-      if (merged.columnWrap === null || typeof merged.columnWrap !== 'object')
-        merged.columnWrap = {};
-      // Same for the line count: it reaches CSS and a row height, so clamp rather than trust it.
-      merged.headerLines = Number.isFinite(merged.headerLines)
-        ? Math.min(MAX_HEADER_LINES, Math.max(1, Math.round(merged.headerLines)))
-        : 1;
-
-      return merged;
-    }
-  } catch {
-    /* ignore unavailable / malformed storage */
-  }
-  return base;
-}
-
-function saveGridSettings(key: string, settings: GridSettings): void {
-  try {
-    localStorage.setItem(`invflux:grid-settings:${key}`, JSON.stringify(settings));
-  } catch {
-    /* ignore quota / private-mode failures */
-  }
-}
+export type { GridDensity, GridSettings, GridTextSize, GridWrap } from './gridSettings';
+export type { DataGridMenuItem } from './ContextMenu';
 
 /** Record-layout column widths (field-label column + the uniform record columns), persisted per key. */
 function loadRecordWidth(key: string, which: 'field' | 'col', fallback: number): number {
@@ -278,23 +223,6 @@ export interface StagedCell {
   pending?: boolean;
 }
 
-/** A context-menu item the host contributes (e.g. Save / Revert / domain actions). */
-export interface DataGridMenuItem {
-  id: string;
-  label: string;
-  disabled?: boolean;
-  /** Native tooltip — typically the reason a `disabled` item is disabled. */
-  title?: string;
-  /** Renders the same `✓` the grid marks its own current-state items with. For an item that names a
-   *  setting's value (one arm of a three-way choice), not for a command. */
-  checked?: boolean;
-  /** Leaf action. Omit for a submenu parent (carries `children`); a parent with BOTH runs on click. */
-  run?: () => void;
-  /** Present ⇒ this item is a submenu parent (hover-opens `children`). */
-  children?: DataGridMenuItem[];
-}
-
-/** Role a datatype component plays — mirrors @invflux/ui's ComponentRole. */
 export type DataGridComponentRole = 'view' | 'edit' | 'drilldown';
 
 /**
@@ -367,6 +295,11 @@ export interface DataGridProps<TRow> {
    *  term-picker-on-a-variation case (was the genericColumn-specific `dataType + variation` check).
    *  Distinct from `isInherited` (the boundary map flags they can differ). */
   isGenericColumnInherited?: (row: TRow, meta: GridColumnMeta) => boolean;
+  /**
+   * The field error on a generic (datatype-view) cell, from its staged-or-saved value: the cell is
+   * ringed and the message is its tooltip. A host's bespoke cells show their own. Undefined = none.
+   */
+  cellFieldError?: (row: TRow, columnId: string) => string | undefined;
   /** Stage an edit into the host dirty model (was patchDirtyCell). */
   onStageEdit: (row: TRow, columnId: string, original: unknown, next: unknown) => void;
   /** Clear a set of cells (Clear / Cut / paste-empty). */
@@ -415,6 +348,17 @@ export interface DataGridProps<TRow> {
     row: TRow;
     meta: GridColumnMeta;
   }) => DataGridMenuItem[];
+  /**
+   * Host-contributed entries for the cell menu's "Extend selection to…" submenu, after its full rows
+   * and full columns: each a set of cells the selection can take on (the workbench's staged cells).
+   * The grid counts the cells it can place that are not selected yet (a hidden column or a folded
+   * row has none), names the entry with `label(count)`, and leaves it out when the count is zero.
+   */
+  selectionExtensions?: () => Array<{
+    id: string;
+    label: (count: number) => string;
+    cells: Array<{ rowId: string; columnId: string }>;
+  }>;
   /**
    * Host-contributed items appended to a COLUMN HEADER's menu — the header counterpart of
    * {@link contextMenuExtras}, and the seam for an action that belongs to one column rather than to
@@ -566,10 +510,16 @@ export interface DataGridApi<TRow> {
    *  been typed). Lets a host bind a custom key/button to edit-entry — e.g. a domain "fill" shortcut —
    *  through keyHandlersInGrid, instead of the grid special-casing the key. No-op if no editable active cell. */
   enterEdit: (seed?: string) => void;
+  /** Leave edit mode without committing, as Escape in the editor does; no-op when not editing. */
+  cancelEdit: () => void;
   /** Focus a cell addressed by (rowId, columnId), scroll it into view, and optionally enter edit mode.
    *  Lets a host drive the active cell after a data change it owns — e.g. jumping into the qty editor of
    *  a freshly-added line. No-op if the row/column isn't found (or, in edit mode, isn't editable). */
   focusCellById: (rowId: string, columnId: string, editMode?: boolean) => void;
+  /** Make a cell addressed by (rowId, columnId) the active one and open its drill-down, as Alt+Enter
+   *  on it does — for a control drawn inside the cell that leads to its detail. No-op if the row or
+   *  column isn't found or the column declares no drill-down. */
+  openDrilldownById: (rowId: string, columnId: string) => void;
   /** Toggle the column-manager modal (the host's toolbar opens it). */
   openColumnManager: () => void;
   /** Open the grid display-settings modal (density / wrap / text size). */
@@ -1425,40 +1375,6 @@ export function ColumnManagerModal<TRow>(props: {
   );
 }
 
-interface ContextMenuItem {
-  key: string;
-  label: string;
-  shortcut?: string;
-  /** Leaf action. Omitted for a submenu parent (which carries `children` instead). */
-  run?: () => void;
-  /** Present ⇒ this item is a submenu parent (hover-opens a flyout of `children`); `run` is ignored. */
-  children?: ContextMenuItem[];
-  /** Disabled items render grayed, don't run, and show `title` as a tooltip (e.g. a Pro upgrade hint). */
-  disabled?: boolean;
-  title?: string;
-}
-
-/**
- * A host-contributed {@link DataGridMenuItem} as an internal menu item. Recursive, so an extra may be
- * a submenu parent. Shared by the cell menu and the header menu — the two differ in *what* they hand
- * the host, never in how a contribution is rendered.
- *
- * `checked` becomes the same `✓` the grid's own three-way choices use, rather than exposing the
- * internal `shortcut` slot: a host contributing a settings-style submenu should get the grid's mark,
- * not have to spell a glyph into its label and hope it lines up.
- */
-function toContextMenuItem(m: DataGridMenuItem): ContextMenuItem {
-  return {
-    key: m.id,
-    label: m.label,
-    disabled: m.disabled,
-    title: m.title,
-    shortcut: m.checked === true ? '✓' : undefined,
-    run: m.run,
-    children: m.children?.map(toContextMenuItem),
-  };
-}
-
 export function DataGrid<TRow>(props: DataGridProps<TRow>) {
   const ch = createColumnHelper<TRow>();
 
@@ -1528,11 +1444,18 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
 
   let scrollContainerRef!: HTMLDivElement;
 
-  // Header drag-reorder vs resize coordination + drop indicator.
-  const [resizingActive, setResizingActive] = createSignal(false); // true from grip press to mouseup
-  const [draggingColId, setDraggingColId] = createSignal<string | null>(null); // column being dragged
-  const [dropTargetId, setDropTargetId] = createSignal<string | null>(null); // column the cursor is over
-  const [dropAfter, setDropAfter] = createSignal(false); // the cursor is on that column's far half
+  // Header drag-reorder vs resize coordination + drop indicator (shared with every table header).
+  const dnd = createHeaderDnd({
+    refused: columnDropRefused,
+    drop: dropColumn,
+    onDragStart: startEdgeScroll,
+    onDragStop: stopEdgeScroll,
+  });
+  const setResizingActive = dnd.setResizing;
+  const draggingColId = dnd.dragging;
+  const setDraggingColId = dnd.setDragging;
+  const dropTargetId = dnd.dropTarget;
+  const setDropTargetId = dnd.setDropTarget;
 
   const [draggingSelection, setDraggingSelection] = createSignal(false);
   // Per-cell edit (6b.4): which cell is currently being edited, and the typed-char seed.
@@ -1546,19 +1469,8 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
     | { x: number; y: number; coord?: undefined; columnId: string }
     | null
   >(null);
-  // Open submenu key PER DEPTH (0 = top level). Lets an ancestor chain stay open while siblings close,
-  // so the context menu supports arbitrary submenu nesting.
-  const [openByDepth, setOpenByDepth] = createSignal<Record<number, string>>({});
   // Hovering an item at `depth`: open its submenu (or clear, for a leaf), keeping ancestors (shallower
   // depths) open and dropping any deeper-open submenus.
-  const hoverAt = (depth: number, key: string | null): void => {
-    setOpenByDepth((prev) => {
-      const next: Record<number, string> = {};
-      for (const [d, k] of Object.entries(prev)) if (Number(d) < depth) next[Number(d)] = k;
-      if (key !== null) next[depth] = key;
-      return next;
-    });
-  };
   // Per-cell drill-down (6b.7): the open detail view's column/subject + fetched payload.
   const [drilldown, setDrilldown] = createSignal<{
     columnId: string;
@@ -1688,53 +1600,13 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
   };
-  // Reactive cell classes derived from the settings. Density drives vertical padding, text size the font,
-  // wrap toggles single-line-truncate vs the default wrapping.
-  const cellDensityText = (): string =>
-    `${DENSITY_PADDING[gridSettings().density]} ${TEXT_SIZE_CLASS[gridSettings().textSize]}`;
-  /** The wrap mode in force for one column: its own override, else the grid-wide setting. */
-  const wrapForColumn = (columnId: string): GridWrap =>
-    gridSettings().columnWrap[columnId] ?? gridSettings().wrap;
-  // No-wrap truncates the cell's direct children (block content like the product name/sub-lines) — a
-  // `text-ellipsis` on the <td> can't reach nested blocks, so target the children instead.
-  const cellWrapClass = (columnId: string): string =>
-    wrapForColumn(columnId) === 'no-wrap' ? ' whitespace-nowrap [&>*]:truncate' : '';
-  // Header classes. The size step is chosen here rather than appended to `cellDensityText()`: two
-  // font-size utilities on one element are resolved by stylesheet order, not by the order they were
-  // concatenated in, so "append a smaller one to win" is a coin flip that happens to land right.
+  // Reactive classes derived from the settings (the rules live in gridSettings.ts, shared with
+  // every table).
+  const cellDensityText = (): string => cellDensityTextFor(gridSettings());
+  const cellWrapClass = (columnId: string): string => cellWrapClassFor(gridSettings(), columnId);
+  const headerLook = (): HeaderLook => headerLookFor(gridSettings());
   const headerLines = (): number => gridSettings().headerLines;
-  const headerDensityText = (): string =>
-    `${DENSITY_PADDING[gridSettings().density]} ${
-      headerLines() > 1
-        ? TEXT_SIZE_CLASS_SMALLER[gridSettings().textSize]
-        : TEXT_SIZE_CLASS[gridSettings().textSize]
-    }`;
-  // Centered when wrapping, matching the single-line case (a table cell's default) and the sort
-  // affordance, so a one-line name beside a two-line one reads as one row of labels rather than as
-  // text at two different heights. `hyphens-auto` first and `break-words` only as the fallback: a
-  // column narrower than its own one-word name is common here ("Disponible", "Réservé"), and a
-  // hyphenated break reads as language while a bare mid-word split reads as damage. Hyphenation
-  // follows the document language, which the host sets.
-  const headerWrapClass = (): string =>
-    headerLines() > 1
-      ? 'whitespace-normal hyphens-auto break-words align-middle leading-tight'
-      : 'whitespace-nowrap';
-  /**
-   * Bound the header content to the allowed number of lines; the rest is clipped.
-   *
-   * A height cap on a block wrapper, not `-webkit-line-clamp`. The clamp is the obvious tool and it
-   * is wrong here twice: `max-height` does not apply to a `table-cell` so it needs a wrapper either
-   * way, and a clamp box is *inline-level*, so it shares a line box with the header's own strut and
-   * the sort arrows — which reserves close to an extra line (measured: 61px of cell for two 15px
-   * lines of text, i.e. a visible third line's worth of empty space). A block box is laid out from
-   * its own content and has no such interaction.
-   *
-   * `em` rather than `px` so one expression covers all three text sizes, and 1.25 to match the
-   * `leading-tight` the wrapping header sets. Inline style because the count is runtime state —
-   * Tailwind only emits classes it can read in the source.
-   */
-  const headerBoundStyle = (): JSX.CSSProperties | undefined =>
-    headerLines() > 1 ? { 'max-height': `calc(${headerLines()} * 1.25em)` } : undefined;
+  const headerBoundStyle = (): JSX.CSSProperties | undefined => headerLook().boundStyle;
 
   /** Pin one column's wrap mode against the grid-wide default, or (`null`) hand it back to it. */
   function setColumnWrap(columnId: string, wrap: GridWrap | null): void {
@@ -1763,6 +1635,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
       getValue: props.getValue,
       getStagedValue: props.getStagedValue,
       isGenericColumnInherited: props.isGenericColumnInherited,
+      fieldError: props.cellFieldError,
       componentChoiceId: props.componentChoiceId,
       taxonomySpace,
       wrap: () => gridSettings().wrap,
@@ -2118,9 +1991,17 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
     };
   };
 
+  // A refresh never lands under an open editor. Each new row array from the host rebuilds every
+  // TanStack row, and a rebuilt row is a new `<tr>`: the editor inside it would be unmounted while
+  // the operator types, and its blur would commit whatever was half-typed. So while a cell is being
+  // edited the grid keeps the rows it has, and takes the host's latest the moment the edit ends.
+  const tableRows = createMemo<TRow[]>((prev) =>
+    editingCell() !== null && prev !== undefined ? prev : props.rows(),
+  );
+
   const table = createSolidTable({
     get data() {
-      return props.rows();
+      return tableRows();
     },
     get columns() {
       return columns();
@@ -2216,24 +2097,12 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
   const isRightAlignedCol = (columnId: string): boolean => {
     if (RIGHT_ALIGNED.has(columnId)) return true;
     const dt = columnMetaById().get(columnId)?.dataType ?? '';
-    return dt.startsWith('number') || dt.startsWith('decimal') || dt.endsWith(':count');
+    return isWholeNumberDataType(dt) || dt.startsWith('decimal') || dt.endsWith(':count');
   };
 
-  /**
-   * A header click, spreadsheet-style. A plain click makes that column the whole sort: a column
-   * already sorting alone cycles its direction, any other click replaces every level with this
-   * column in its first direction. Shift+click (multi-sort grids) adds the column as the next level,
-   * or cycles it where it already is. TanStack's own handler differs on one case — a plain click on
-   * the LAST of several levels only flips that level — which reads as the click not having taken.
-   */
-  function sortFromHeader(column: Column<TRow, unknown>, event: MouseEvent): void {
-    const sorting = table.getState().sorting;
-    const alone = sorting.length === 1 && sorting[0].id === column.id;
-    if ((props.multiSort && event.shiftKey) || alone || sorting.length === 0) {
-      column.getToggleSortingHandler()?.(event);
-      return;
-    }
-    table.setSorting([{ id: column.id, desc: column.getFirstSortDir() === 'desc' }]);
+  /** A header click; the rules live in {@link sortFromHeader}, shared with every table header. */
+  function sortFromHeaderClick(column: Column<TRow, unknown>, event: MouseEvent): void {
+    sortFromHeader(table, column, event, props.multiSort === true);
   }
 
   // ─── Footer totals ────────────────────────────────────────────────────────
@@ -2578,6 +2447,61 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
     for (const row of covered) row.toggleSelected(!allSelected);
   }
 
+  /**
+   * The cell menu's "Extend selection to…" entries: the full rows and the full columns the selection
+   * covers, each offered only when it would add cells, then the host's {@link
+   * DataGridProps.selectionExtensions}.
+   */
+  function extendSelectionItems(): ContextMenuItem[] {
+    const sel = props.cellSelection();
+    const rows = selRowCount();
+    const cols = selColCount();
+    if (sel.ranges.length === 0 || rows === 0 || cols === 0) return [];
+    const coveredRowCount = coveredRows(sel).length;
+    const coveredColCount = coveredColumns(sel).length;
+    const items: ContextMenuItem[] = [];
+    if (coveredColCount < cols) {
+      items.push({
+        key: 'extend-rows',
+        /* translators: %d = how many rows the cell selection covers. */
+        label: sprintf(_n('%d full row', '%d full rows', coveredRowCount), coveredRowCount),
+        shortcut: 'Shift+Space',
+        run: () => props.setCellSelection(fullRowsOf(sel, cols)),
+      });
+    }
+    if (coveredRowCount < rows) {
+      items.push({
+        key: 'extend-columns',
+        /* translators: %d = how many columns the cell selection covers. */
+        label: sprintf(_n('%d full column', '%d full columns', coveredColCount), coveredColCount),
+        shortcut: 'Ctrl+Space',
+        run: () => props.setCellSelection(fullColumnsOf(sel, rows)),
+      });
+    }
+    const extensions = props.selectionExtensions?.() ?? [];
+    if (extensions.length > 0) {
+      const rowIndex = new Map(visibleRows().map((row, i) => [row.id, i]));
+      const colIndex = new Map(selectableColumnIds().map((id, i) => [id, i]));
+      for (const extension of extensions) {
+        const coords: CellCoord[] = [];
+        for (const cell of extension.cells) {
+          const row = rowIndex.get(cell.rowId);
+          const col = colIndex.get(cell.columnId);
+          if (row !== undefined && col !== undefined && !cellIsSelected(sel, row, col)) {
+            coords.push({ row, col });
+          }
+        }
+        if (coords.length === 0) continue;
+        items.push({
+          key: `extend-${extension.id}`,
+          label: extension.label(coords.length),
+          run: () => props.setCellSelection(withCells(sel, coords)),
+        });
+      }
+    }
+    return items;
+  }
+
   /** Number of selectable rows that own a selected cell, and whether they're all selected —
    *  drives the "Select N rows" / "Deselect N rows" context-menu label. */
   function selectionRowToggleState(): { count: number; allSelected: boolean } {
@@ -2702,7 +2626,10 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
       const outcome = resolvePastedCell(
         target.text,
         clearedValueForRow(meta, row),
-        codec ? (t) => codec.parse(t, { config: meta.editorConfig, taxonomySpace: space }) : null,
+        codec
+          ? (t) =>
+              codec.parse(t, { config: meta.editorConfig, taxonomySpace: space, source: 'paste' })
+          : null,
       );
       if (outcome.kind === 'skip') continue;
       if (outcome.kind === 'reject') {
@@ -2836,20 +2763,20 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
 
   function commitEdit(value: unknown, move: EditMove): void {
     const cell = editingCell();
+    // Resolved while the edited rows are still on screen: ending the edit lets a refresh that
+    // waited for it land, and the row at this position may then be a different one.
+    const target = cell !== null ? editorColumn(cell) : null;
     setEditingCell(null);
     setEditEntryText(undefined);
     let committed: { row: TRow; columnId: string } | null = null;
-    if (cell !== null) {
-      const target = editorColumn(cell);
-      if (target) {
-        props.onStageEdit(
-          target.row,
-          target.columnId,
-          persistedEditorValue(target.row, target.columnId, target.meta),
-          value,
-        );
-        committed = { row: target.row, columnId: target.columnId };
-      }
+    if (target) {
+      props.onStageEdit(
+        target.row,
+        target.columnId,
+        persistedEditorValue(target.row, target.columnId, target.meta),
+        value,
+      );
+      committed = { row: target.row, columnId: target.columnId };
     }
     // Host may take over focus after a commit (e.g. a scanner loop back to a filter); if so, skip the
     // default move + focus-restore.
@@ -2985,7 +2912,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
     const active = props.cellSelection().active;
     if (active === null || !canEditCoord(active)) return false;
     const target = editorColumn(active);
-    if (!target || !target.meta.dataType.startsWith('number')) return false;
+    if (!target || !isWholeNumberDataType(target.meta.dataType)) return false;
 
     const persisted = props.getValue(target.row, target.columnId);
     const staged = props.getStagedValue(target.row, target.columnId);
@@ -3094,10 +3021,22 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
     if (editMode) enterEdit();
   }
 
+  function openDrilldownById(rowId: string, columnId: string): void {
+    const rowIdx = visibleRows().findIndex((r) => props.getRowId(r.original) === rowId);
+    const colIdx = colIndexById().get(columnId);
+    if (rowIdx < 0 || colIdx === undefined) return;
+    const coord = { row: rowIdx, col: colIdx };
+    if (!canDrilldownCoord(coord)) return;
+    props.setCellSelection(selectCell(coord));
+    void openDrilldown(coord);
+  }
+
   props.apiRef?.({
     focusGrid,
     enterEdit: (seed) => enterEdit(seed),
+    cancelEdit: () => cancelEdit(),
     focusCellById,
+    openDrilldownById,
     openColumnManager: () => {
       setColManagerQuery('');
       setShowColManager((v) => !v);
@@ -3228,29 +3167,54 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
         run: () => clearCell(coord),
       });
     }
-    // Toggle the bulk-action checkbox selection for the row(s) the selection covers (when selectable).
+    // Toggle the bulk-action checkbox selection for the row(s) the selection covers — only on a grid
+    // that shows those checkboxes: a grid without them has no bulk actions, and marking a row there
+    // would change nothing anyone can see.
     const rowToggle = selectionRowToggleState();
-    if (rowToggle.count > 0) {
+    const hasRowCheckboxes = table.getVisibleLeafColumns().some((c) => c.id === 'select');
+    if (hasRowCheckboxes && rowToggle.count > 0) {
       items.push({
         key: 'toggle-select',
         label: sprintf(
           rowToggle.allSelected
-            ? _n('Deselect %d row', 'Deselect %d rows', rowToggle.count)
-            : _n('Select %d row', 'Select %d rows', rowToggle.count),
+            ? _n(
+                'Unmark %d row for bulk actions',
+                'Unmark %d rows for bulk actions',
+                rowToggle.count,
+              )
+            : _n('Mark %d row for bulk actions', 'Mark %d rows for bulk actions', rowToggle.count),
           rowToggle.count,
         ),
         run: () => toggleRowSelectionForSelection(),
       });
     }
+    const extend = extendSelectionItems();
+    if (extend.length > 0) {
+      items.push({ key: 'extend-selection', label: __('Extend selection to…'), children: extend });
+    }
     // Host-contributed extras (Save / Revert / domain actions / a Bulk-actions submenu). Mapped
     // recursively so an extra can be a submenu parent (children) with disabled + tooltip.
     if (target) {
+      // Where an extra joins the editing commands, it goes after the last of them shown.
+      const editingKeys = new Set(['edit', 'bulk-edit', 'copy', 'cut', 'paste', 'clear']);
       for (const extra of props.contextMenuExtras?.({
         coord,
         row: target.row,
         meta: target.meta,
       }) ?? []) {
-        items.push(toContextMenuItem(extra));
+        const item = toContextMenuItem(extra);
+        if (extra.placement === 'editing') {
+          let at = -1;
+          items.forEach((it, i) => {
+            if (editingKeys.has(it.key)) at = i;
+          });
+          if (at >= 0) {
+            editingKeys.add(item.key);
+            items.splice(at + 1, 0, item);
+            continue;
+          }
+        }
+        items.push(item);
       }
     }
     return items;
@@ -3271,12 +3235,35 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
       props.setCellSelection(selectCell(coord));
     }
     focusGrid();
+    openCellMenuAt(coord, event.clientX, event.clientY);
+  }
+
+  function openCellMenuAt(coord: CellCoord, clientX: number, clientY: number): void {
     // Clamp so the menu stays on-screen (rough size estimate; flips near the right/bottom edge).
     const MENU_W = 200;
     const MENU_H = 8 + contextMenuItems(coord).length * 32;
-    const x = Math.min(event.clientX, window.innerWidth - MENU_W - 4);
-    const y = Math.min(event.clientY, window.innerHeight - MENU_H - 4);
+    const x = Math.min(clientX, window.innerWidth - MENU_W - 4);
+    const y = Math.min(clientY, window.innerHeight - MENU_H - 4);
     setContextMenu({ x: Math.max(4, x), y: Math.max(4, y), coord });
+  }
+
+  /**
+   * The keyboard's Menu key, and Shift+F10, fire `contextmenu` on the focused element: the grid
+   * itself, not a cell, while the keyboard is on it. The cell menu opens at the active cell, below
+   * its left edge, as a right-click on it would. A right-click on a cell is handled by the cell; a
+   * field focused inside the grid (an editor) keeps the browser's own menu.
+   */
+  function handleKeyboardContextMenu(event: MouseEvent): void {
+    if (event.defaultPrevented || event.target !== scrollContainerRef) return;
+    const active = props.cellSelection().active;
+    if (active === null) return;
+    event.preventDefault();
+    scrollActiveCellIntoView();
+    const cellEl = scrollContainerRef.querySelector(
+      `[data-cell-row="${active.row}"][data-cell-col="${active.col}"]`,
+    ) as HTMLElement | null;
+    const rect = (cellEl ?? scrollContainerRef).getBoundingClientRect();
+    openCellMenuAt(active, rect.left + 8, cellEl === null ? rect.top + 8 : rect.bottom);
   }
 
   /** Build the column-header menu: select-whole-column, sort controls (when sortable) + Hide. */
@@ -3421,30 +3408,23 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
     setContextMenu({ x: Math.max(4, x), y: Math.max(4, y), columnId });
   }
 
+  /**
+   * Every exit from a menu, by an item or by dismissal, hands the keyboard back to the grid, so cell
+   * navigation resumes from the cell the menu was opened on. The menu closes before its item runs, so
+   * an item that opens a modal moves focus on from here.
+   */
   function closeContextMenu(): void {
     setContextMenu(null);
-    setOpenByDepth({});
+    focusGrid();
   }
 
-  // Dismiss the context menu on Escape, scroll, or resize (outside-click is handled by the backdrop).
+  // The menu dismisses itself on Escape and resize and by an outside click; scrolling the grid under it
+  // is the grid's to say.
   createEffect(() => {
     if (contextMenu() === null) return;
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        closeContextMenu();
-      }
-    };
-    const onScrollOrResize = (): void => closeContextMenu();
-    document.addEventListener('keydown', onKey, true);
-    window.addEventListener('resize', onScrollOrResize);
-    scrollContainerRef?.addEventListener('scroll', onScrollOrResize, { passive: true });
-    onCleanup(() => {
-      document.removeEventListener('keydown', onKey, true);
-      window.removeEventListener('resize', onScrollOrResize);
-      scrollContainerRef?.removeEventListener('scroll', onScrollOrResize);
-    });
+    const onScroll = (): void => closeContextMenu();
+    scrollContainerRef?.addEventListener('scroll', onScroll, { passive: true });
+    onCleanup(() => scrollContainerRef?.removeEventListener('scroll', onScroll));
   });
 
   const virtualItems = createMemo(() => virtualizer.getVirtualItems());
@@ -3476,7 +3456,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
 
   // Re-measure whenever the row set changes (the host's `rows` accessor drives this memo).
   createEffect(() => {
-    props.rows();
+    tableRows();
     virtualizer.measure();
   });
 
@@ -3556,8 +3536,18 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
       // The closest('input') guard below is defeated in the Shadow DOM (events are retargeted to
       // the host before reaching this document-level listener), so gate on the edit state instead.
       if (editingCell() !== null) return;
-      const target = event.target as HTMLElement | null;
+      // The real target, not the retargeted one: across a shadow boundary `event.target` is the host,
+      // which is never an input or a button.
+      const target = (event.composedPath()[0] ?? event.target) as HTMLElement | null;
       if (target?.closest('input, textarea, select, [contenteditable]')) return;
+      // A focused button or link keeps the keys that activate it. Enter would otherwise move the
+      // active cell and then be prevented, which cancels the click — so the header's sort button,
+      // reachable by Tab, could never be used from the keyboard.
+      if (
+        ('Enter' === event.key || ' ' === event.key) &&
+        target?.closest('button, a[href], [role="button"]')
+      )
+        return;
 
       // Copy whenever the grid (not an input) is focused, read or edit mode. Paste is NOT handled here:
       // Ctrl/Cmd+V fires a native `paste` event (listener in onMount) that reads clipboardData directly
@@ -3596,12 +3586,16 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
         }
         if (event.ctrlKey || event.metaKey) {
           event.preventDefault();
-          props.setCellSelection(selectColumns(b.c1, b.c2, rows));
+          props.setCellSelection(
+            sel.ranges.length > 0 ? fullColumnsOf(sel, rows) : selectColumns(b.c1, b.c2, rows),
+          );
           return;
         }
         if (event.shiftKey) {
           event.preventDefault();
-          props.setCellSelection(selectRows(b.r1, b.r2, cols));
+          props.setCellSelection(
+            sel.ranges.length > 0 ? fullRowsOf(sel, cols) : selectRows(b.r1, b.r2, cols),
+          );
           return;
         }
       }
@@ -4141,125 +4135,18 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
 
       {/* ── Right-click context menu (6b.5, §11.9) ── */}
       <Show when={contextMenu()}>
-        {(menu) => {
-          const items = (): ContextMenuItem[] => {
-            const m = menu();
-            return m.columnId !== undefined
-              ? headerMenuItems(m.columnId)
-              : contextMenuItems(m.coord);
-          };
-          // Flyout direction: open submenus to the left when the menu sits in the right ~third of the
-          // viewport, so a right-anchored submenu doesn't run off-screen.
-          const submenuOnLeft = menu().x > window.innerWidth * 0.62;
-          // Keep a submenu fully on-screen vertically: shift up by any bottom overflow. Measured in a
-          // rAF (not synchronously in the ref) so the flyout's children are laid out and its true height
-          // is known; the shift is clamped so a taller-than-viewport submenu doesn't run off the top.
-          const positionSubmenu = (el: HTMLUListElement): void => {
-            requestAnimationFrame(() => {
-              if (!el.isConnected) return;
-              el.style.top = '0px';
-              const rect = el.getBoundingClientRect();
-              const bottomOverflow = rect.bottom - (window.innerHeight - 8);
-              if (bottomOverflow > 0) el.style.top = `${-Math.min(bottomOverflow, rect.top - 8)}px`;
-            });
-          };
-          const btnClass = (item: ContextMenuItem): string =>
-            menuItemClass(false, !!item.disabled, 'justify-between gap-6');
-          // Recursive item render supporting arbitrary submenu nesting (`depth` keys the open state).
-          const renderItem = (item: ContextMenuItem, depth: number): JSX.Element => {
-            if (!item.children || item.children.length === 0) {
-              return (
-                <li onMouseEnter={() => hoverAt(depth, null)}>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    // aria-disabled (not the native attr) so the item still receives hover + `title`.
-                    aria-disabled={item.disabled ? 'true' : undefined}
-                    title={item.title}
-                    class={btnClass(item)}
-                    onClick={() => {
-                      if (item.disabled) return;
-                      closeContextMenu();
-                      item.run?.();
-                    }}
-                  >
-                    <span>{item.label}</span>
-                    <Show when={item.shortcut}>
-                      <span class="text-xs text-text-muted">{item.shortcut}</span>
-                    </Show>
-                  </button>
-                </li>
-              );
+        {(menu) => (
+          <ContextMenu
+            x={menu().x}
+            y={menu().y}
+            items={
+              menu().columnId !== undefined
+                ? headerMenuItems(menu().columnId!)
+                : contextMenuItems(menu().coord!)
             }
-            return (
-              <li class="relative" onMouseEnter={() => hoverAt(depth, item.key)}>
-                <button
-                  type="button"
-                  role="menuitem"
-                  aria-haspopup="true"
-                  aria-disabled={item.disabled ? 'true' : undefined}
-                  title={item.title}
-                  class={btnClass(item)}
-                  // A parent that ALSO carries `run` (e.g. "Copy") acts on click; a pure parent toggles.
-                  onClick={() => {
-                    if (item.disabled) return;
-                    if (item.run) {
-                      closeContextMenu();
-                      item.run();
-                    } else {
-                      hoverAt(depth, openByDepth()[depth] === item.key ? null : item.key);
-                    }
-                  }}
-                >
-                  <span>{item.label}</span>
-                  <span class="flex items-center gap-2">
-                    <Show when={item.shortcut}>
-                      <span class="text-xs text-text-muted">{item.shortcut}</span>
-                    </Show>
-                    <span class="text-xs text-text-muted" aria-hidden="true">
-                      ▸
-                    </span>
-                  </span>
-                </button>
-                <Show when={openByDepth()[depth] === item.key}>
-                  <ul
-                    role="menu"
-                    ref={positionSubmenu}
-                    class={`absolute top-0 z-submenu min-w-44 rounded-md border border-border bg-surface py-1 shadow-lg ${submenuOnLeft ? 'right-full' : 'left-full'}`}
-                  >
-                    <For each={item.children}>{(child) => renderItem(child, depth + 1)}</For>
-                  </ul>
-                </Show>
-              </li>
-            );
-          };
-          return (
-            <>
-              {/* Transparent backdrop: any click (or another right-click) dismisses the menu. */}
-              <div
-                class="fixed inset-0 z-menu-backdrop"
-                onMouseDown={closeContextMenu}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  closeContextMenu();
-                }}
-              />
-              <ul
-                role="menu"
-                class="fixed z-menu min-w-44 rounded-md border border-border bg-surface py-1 text-sm shadow-lg"
-                style={{ left: `${menu().x}px`, top: `${menu().y}px` }}
-                onMouseDown={(e) => e.stopPropagation()}
-              >
-                <For
-                  each={items()}
-                  fallback={<li class="px-3 py-1.5 text-text-muted">{__('No actions')}</li>}
-                >
-                  {(item) => renderItem(item, 0)}
-                </For>
-              </ul>
-            </>
-          );
-        }}
+            onClose={closeContextMenu}
+          />
+        )}
       </Show>
 
       {/* ── Scrollable table ── */}
@@ -4267,6 +4154,7 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
         <div
           ref={scrollContainerRef}
           tabindex="0"
+          onContextMenu={handleKeyboardContextMenu}
           class="min-h-0 flex-1 select-none overflow-auto rounded border border-border bg-surface shadow-sm outline-none"
           onWheel={(event) => {
             // Shift+wheel → horizontal scroll. Browsers vary: some report it on deltaY, others remap to
@@ -4435,303 +4323,29 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
                   {(hg) => (
                     <tr>
                       <For each={hg.headers}>
-                        {(header) => {
-                          const canSort = header.column.getCanSort();
-                          // No `isRightAlignedCol` here: that answers for the column's *data*, and
-                          // the header no longer follows it — names align to the reading start, and
-                          // the sort affordance is pinned to the logical end regardless.
-                          const isSelectCol = header.column.id === 'select';
-                          return (
-                            <th
-                              data-col-id={header.column.id}
-                              scope="col"
-                              // The sort state, spoken. Without it a screen reader announces the
-                              // column name and nothing about which column the table is ordered by
-                              // — the one thing the arrows convey visually. `none` on the other
-                              // sortable columns is what makes them announce as sortable at all.
-                              aria-sort={
-                                !canSort
-                                  ? undefined
-                                  : 'asc' === header.column.getIsSorted()
-                                    ? 'ascending'
-                                    : 'desc' === header.column.getIsSorted()
-                                      ? 'descending'
-                                      : 'none'
-                              }
-                              title={columnMetaById().get(header.column.id)?.description}
-                              class={[
-                                `relative select-none overflow-hidden ${headerWrapClass()} ${headerDensityText()}`,
-                                'border-r border-border last:border-r-0',
-                                'px-2', // same as the data cells, so a label sits over its column's values
-                                // Header names align to the reading start regardless of the column's
-                                // own alignment: a numeric column right-aligns its *figures* so
-                                // digits line up, which is a property of the data, not of its label.
-                                // Logical (`text-start`, not `text-left`) so an RTL locale flips it.
-                                'text-start',
-                                canSort || isSelectCol
-                                  ? ' cursor-pointer hover:bg-surface-hover'
-                                  : '',
-                                // NAMED, not a bare `group`: `group-hover:` answers to ANY ancestor
-                                // carrying `group`, and this component's outer wrapper is one — so
-                                // a plain variant on the sort arrows lights up every header's
-                                // arrows whenever the pointer is anywhere in the grid.
-                                canSort ? 'group/sort' : '',
-                                // A pinned header needs an opaque background of its own: it now
-                                // slides over other headers, and `thead`'s tint paints behind the
-                                // row rather than the cell.
-                                isPinned(pinnedColumnIds(), header.column.id)
-                                  ? 'bg-surface-raised'
-                                  : '',
-                              ].join(' ')}
-                              style={pinnedCellStyle(header.column, 'header')}
-                              // Not draggable while a resize is in progress — flipped off
-                              // synchronously on grip-press so a leftward narrowing drag can't be
-                              // hijacked into a native header drag before it starts.
-                              draggable={!isSelectCol && !resizingActive()}
-                              onDragStart={(event) => {
-                                if (resizingActive() || header.column.getIsResizing()) {
-                                  event.preventDefault();
-                                  return;
-                                }
-                                setDraggingColId(header.column.id);
-                                event.dataTransfer?.setData('text/x-invflux-col', header.column.id);
-                                if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
-                                startEdgeScroll();
-                              }}
-                              onDragOver={(event) => {
-                                const src = draggingColId();
-                                if (isSelectCol || src === null || src === header.column.id) return;
-                                // A refused drop (past the pin budget, a locked pin leaving the
-                                // group) keeps the no-drop cursor and draws no marker.
-                                if (columnDropRefused(src, header.column.id)) {
-                                  if (dropTargetId() === header.column.id) setDropTargetId(null);
-                                  return;
-                                }
-                                event.preventDefault(); // allow drop
-                                const box = event.currentTarget.getBoundingClientRect();
-                                setDropAfter(event.clientX > box.left + box.width / 2);
-                                setDropTargetId(header.column.id);
-                              }}
-                              onDragLeave={() => {
-                                if (dropTargetId() === header.column.id) setDropTargetId(null);
-                              }}
-                              onDrop={(event) => {
-                                event.preventDefault();
-                                const sourceId =
-                                  draggingColId() ??
-                                  event.dataTransfer?.getData('text/x-invflux-col') ??
-                                  '';
-                                if (sourceId && sourceId !== header.column.id)
-                                  dropColumn(sourceId, header.column.id, dropAfter());
-                                stopEdgeScroll();
-                                setDraggingColId(null);
-                                setDropTargetId(null);
-                              }}
-                              onDragEnd={() => {
-                                stopEdgeScroll();
-                                setDraggingColId(null);
-                                setDropTargetId(null);
-                              }}
-                              onClick={
-                                isSelectCol
-                                  ? () => table.toggleAllPageRowsSelected()
-                                  : canSort
-                                    ? (event) => {
-                                        // The affordance is a real button now, for the keyboard.
-                                        // Clicking it would otherwise toggle twice — once on the
-                                        // button, once here as it bubbles — landing back where it
-                                        // started, so the control would look broken to a mouse.
-                                        if ((event.target as HTMLElement).closest('button')) return;
-                                        sortFromHeader(header.column, event);
-                                      }
-                                    : undefined
-                              }
-                              onContextMenu={
-                                isSelectCol
-                                  ? undefined
-                                  : (e) => handleHeaderContextMenu(e, header.column.id)
-                              }
-                            >
-                              {/* Drop-insertion cursor: the column lands before the one under the
-                              pointer, or after it from its far half, and the bar sits on that edge. */}
-                              <Show when={dropTargetId() === header.column.id}>
-                                <div
-                                  data-drop-target
-                                  data-drop-side={dropAfter() ? 'after' : 'before'}
-                                  class="pointer-events-none absolute inset-y-0 z-20 w-0.5 bg-blue-500"
-                                  classList={{ 'left-0': !dropAfter(), 'right-0': dropAfter() }}
-                                />
-                              </Show>
-                              {/* A wrapped header pins its sort affordance to the cell corner and
-                              reserves a strip for it; only the NAME is height-capped.
-                              Both alternatives are worse, and both were measured: leaving the
-                              arrows inline inside the capped box clips them away entirely on a name
-                              that overruns its budget (a sortable column with no sort indicator —
-                              "Disponible (ATP)" at two lines), while making them a flex sibling
-                              charges their width to EVERY line of the name, not just the last, which
-                              is enough to shred a narrow column into "DIS-/PO-". Out of flow, the
-                              affordance costs one fixed strip and the name keeps the rest.
-                              At one line none of this applies and the markup is as it always was. */}
-                              {/* No padding reserved for the sort affordance. Reserving a strip on
-                              every sortable header charges the columns that can least afford it —
-                              it turned "ATP (Disponible)" into "ATP (DIS" and "Réservé" into
-                              "Réser". The affordance overlays instead, on its own opaque ground, so
-                              a name that fits is untouched and only one that overruns is occluded,
-                              at the very edge, where it is already being clipped by the cell. */}
-                              <div>
-                                <span
-                                  class={headerLines() > 1 ? 'block overflow-hidden' : undefined}
-                                  style={headerBoundStyle()}
-                                >
-                                  {flexRender(header.column.columnDef.header, header.getContext())}
-                                </span>
-                                {/* Sort indicator — the WooCommerce/WP Products-table look: a stacked
-                              up/down triangle pair. The active direction is solid; the idle pair is
-                              faint and brightens on header hover (so a sortable-but-unsorted column
-                              still hints it's clickable). asc = up, desc = down. */}
-                                <Show when={canSort}>
-                                  <button
-                                    type="button"
-                                    // The keyboard's way in. The `<th>` click sorts for a mouse, but
-                                    // a table header takes no focus and fires no key event, so
-                                    // without this the whole sort feature was pointer-only. It is
-                                    // this element rather than a wrapper around the name because the
-                                    // cell is `draggable` for column reorder, and the name is where
-                                    // people grab to drag.
-                                    aria-label={sprintf(
-                                      /* translators: %s is a column name. */
-                                      __('Sort by %s'),
-                                      // Same fallback chain the column manager uses. Server meta
-                                      // carries the merchant's own name where there is one, but it
-                                      // does not cover every column, and dropping straight to the id
-                                      // announces "Sort by name" for a column headed "Produit".
-                                      columnMetaById().get(header.column.id)?.label ??
-                                        ('string' === typeof header.column.columnDef.header
-                                          ? header.column.columnDef.header
-                                          : header.column.id),
-                                    )}
-                                    onClick={(event) => sortFromHeader(header.column, event)}
-                                    // Always at the cell's right edge, out of flow, at every line
-                                    // count. Inline, it is the first thing a narrow column clips —
-                                    // which is how a sortable column ends up showing no sort
-                                    // indicator at all. `right-2` clears the resize grip's 6px.
-                                    //
-                                    // Anchored to the `<th>`, never to the name wrapper: the
-                                    // wrapper's box follows the name and can run past the cap, so
-                                    // anchoring there would drag the arrows out of the cell with it.
-                                    // The th is the nearest positioned ancestor (it carries
-                                    // `relative`) and the wrapper sets no `position`, so this holds
-                                    // — but it holds *by omission*, so do not add positioning to
-                                    // that div without moving this.
-                                    //
-                                    // `bottom-0` + the cell's own vertical padding rather than a
-                                    // fixed offset: that lands the arrows on the text's last line
-                                    // instead of the cell floor, and keeps them there when the
-                                    // density setting changes the padding under them.
-                                    // `bg-surface-raised` is the occlusion: the same ground the header row
-                                    // paints, so an overrunning name reads as running underneath the
-                                    // affordance rather than colliding with it.
-                                    //
-                                    // Anchored to the cell edge, NOT inset. An inset leaves a gutter
-                                    // beyond the occluder that the clipped name shows through, so the
-                                    // name appears to resume after the arrows ("ATP (D⇅SI"). The
-                                    // ground has to reach the edge; `px-1` is what keeps the glyphs
-                                    // off it and off the name. Logical `end-0`, so it stays where the
-                                    // name runs out rather than sitting over its start under RTL.
-                                    //
-                                    // `inset-y-0` + `justify-center` rather than a centered glyph:
-                                    // the occluder has to span the FULL cell height or a two- and
-                                    // three-line name shows above and below a band-shaped ground.
-                                    // Spanning it also centers the glyphs for free, at every
-                                    // density, with no offset to keep in step with the padding.
-                                    // Not <Button>/<IconButton>: this sits on the header's own ground
-                                    // and inherits its color, where every Button variant commits to
-                                    // one. It still owes the suite's rules, so the pointer and the
-                                    class="absolute inset-y-0 end-0 inline-flex shrink-0 cursor-pointer flex-col items-center justify-center bg-surface-raised pe-1 ps-0.5 leading-none focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-                                  >
-                                    <svg
-                                      viewBox="0 0 8 5"
-                                      class="h-1 w-2 fill-current transition-opacity"
-                                      classList={{
-                                        'opacity-90': header.column.getIsSorted() === 'asc',
-                                        'opacity-20 group-hover/sort:opacity-60':
-                                          header.column.getIsSorted() !== 'asc',
-                                      }}
-                                    >
-                                      <path d="M4 0 8 5 0 5Z" />
-                                    </svg>
-                                    <svg
-                                      viewBox="0 0 8 5"
-                                      class="mt-[2px] h-1 w-2 fill-current transition-opacity"
-                                      classList={{
-                                        'opacity-90': header.column.getIsSorted() === 'desc',
-                                        'opacity-20 group-hover/sort:opacity-60':
-                                          header.column.getIsSorted() !== 'desc',
-                                      }}
-                                    >
-                                      <path d="M0 0 8 0 4 5Z" />
-                                    </svg>
-                                    {/* The level number, once there is more than one level: which
-                                        sort decides first is the one thing the arrows cannot say. */}
-                                    <Show
-                                      when={
-                                        table.getState().sorting.length > 1 &&
-                                        header.column.getSortIndex() >= 0
-                                      }
-                                    >
-                                      <span
-                                        class="mt-[2px] text-[9px] font-semibold leading-none tabular-nums"
-                                        data-testid={`sort-level-${header.column.id}`}
-                                      >
-                                        {header.column.getSortIndex() + 1}
-                                      </span>
-                                    </Show>
-                                  </button>
-                                </Show>
-                              </div>
-                              {/* Resize grip: drag to size; double-click to reset to the default. */}
-                              <Show when={header.column.getCanResize()}>
-                                <div
-                                  role="separator"
-                                  aria-orientation="vertical"
-                                  class={`absolute top-0 right-0 z-30 h-full w-1.5 cursor-col-resize touch-none select-none hover:bg-blue-400/60${
-                                    header.column.getIsResizing() ? ' bg-blue-500' : ''
-                                  }`}
-                                  onMouseDown={(event) => {
-                                    event.stopPropagation();
-                                    // Block header drag for this whole gesture (any direction), reset on release.
-                                    setResizingActive(true);
-                                    window.addEventListener(
-                                      'mouseup',
-                                      () => setResizingActive(false),
-                                      { once: true },
-                                    );
-                                    header.getResizeHandler()(event);
-                                  }}
-                                  onTouchStart={(event) => {
-                                    event.stopPropagation();
-                                    setResizingActive(true);
-                                    window.addEventListener(
-                                      'touchend',
-                                      () => setResizingActive(false),
-                                      { once: true },
-                                    );
-                                    header.getResizeHandler()(event);
-                                  }}
-                                  onClick={(event) => event.stopPropagation()}
-                                  onDblClick={(event) => {
-                                    event.stopPropagation();
-                                    setColumnSizing((prev) => {
-                                      const next = { ...prev };
-                                      delete next[header.column.id];
-                                      return next;
-                                    });
-                                  }}
-                                />
-                              </Show>
-                            </th>
-                          );
-                        }}
+                        {(header) => (
+                          <GridHeaderCell
+                            header={header}
+                            table={table}
+                            dnd={dnd}
+                            look={headerLook}
+                            label={columnMetaById().get(header.column.id)?.label}
+                            description={columnMetaById().get(header.column.id)?.description}
+                            fixed={header.column.id === 'select'}
+                            onActivate={() => table.toggleAllPageRowsSelected()}
+                            onSort={sortFromHeaderClick}
+                            onContextMenu={handleHeaderContextMenu}
+                            onResetSize={(columnId) =>
+                              setColumnSizing((prev) => {
+                                const next = { ...prev };
+                                delete next[columnId];
+                                return next;
+                              })
+                            }
+                            pinned={isPinned(pinnedColumnIds(), header.column.id)}
+                            style={pinnedCellStyle(header.column, 'header')}
+                          />
+                        )}
                       </For>
                     </tr>
                   )}
@@ -4853,118 +4467,5 @@ export function DataGrid<TRow>(props: DataGridProps<TRow>) {
         </div>
       </div>
     </>
-  );
-}
-
-/** A labeled row of mutually-exclusive choices — the shared control plus its caption. */
-function Segmented<T extends string>(props: {
-  label: string;
-  value: T;
-  options: Array<{ value: T; label: string }>;
-  onSelect: (value: T) => void;
-}): JSX.Element {
-  return (
-    <div>
-      <div class="mb-1 text-sm font-medium text-text">{props.label}</div>
-      <SegmentedControl
-        ariaLabel={props.label}
-        options={props.options}
-        value={props.value}
-        onChange={(v: T) => props.onSelect(v)}
-      />
-    </div>
-  );
-}
-
-/**
- * Grid display settings — density, text wrapping, and text size. Grid-internal + persisted (per the
- * host's `settingsKey`); a sibling to the column manager. Pure presentation, so the host never sees it.
- */
-/**
- * The grid display-settings controls (row height / text wrapping / text size). Shared by the
- * standalone {@link GridSettingsModal} (used outside the unified app) and the "Data Grid" section the
- * grid contributes to the app shell's gear popover.
- */
-function GridDisplaySettingsControls(props: {
-  settings: GridSettings;
-  onChange: (next: GridSettings) => void;
-}): JSX.Element {
-  const set = <K extends keyof GridSettings>(key: K, value: GridSettings[K]): void =>
-    props.onChange({ ...props.settings, [key]: value });
-
-  return (
-    <div class="space-y-4">
-      <Segmented
-        label={__('Row height')}
-        value={props.settings.density}
-        options={[
-          { value: 'compact', label: __('Compact') },
-          { value: 'normal', label: __('Normal') },
-          { value: 'large', label: __('Large') },
-        ]}
-        onSelect={(v) => set('density', v)}
-      />
-      <Segmented
-        label={__('Text wrapping')}
-        value={props.settings.wrap}
-        options={[
-          { value: 'no-wrap', label: __('No wrap') },
-          { value: 'wrap', label: __('Wrap') },
-        ]}
-        onSelect={(v) => set('wrap', v)}
-      />
-      {/* A line budget rather than an on/off, and separate from cell wrapping on purpose. A header
-          is a fixed label read once, a cell holds data of unknown length, so wanting one to wrap
-          says nothing about wanting the other to — and unlike a cell, a header's height is paid
-          once but occupies the top of every screen, which is what the budget bounds. `1` is the
-          single-line default; above it the name wraps and is clamped, with an ellipsis. */}
-      <Segmented
-        label={__('Column name lines')}
-        value={String(props.settings.headerLines)}
-        options={Array.from({ length: MAX_HEADER_LINES }, (_, i) => ({
-          value: String(i + 1),
-          label: String(i + 1),
-        }))}
-        onSelect={(v) => set('headerLines', Number(v))}
-      />
-      <Segmented
-        label={__('Text size')}
-        value={props.settings.textSize}
-        options={[
-          { value: 'small', label: __('Small') },
-          { value: 'normal', label: __('Normal') },
-          { value: 'large', label: __('Large') },
-        ]}
-        onSelect={(v) => set('textSize', v)}
-      />
-    </div>
-  );
-}
-
-function GridSettingsModal(props: {
-  settings: GridSettings;
-  onChange: (next: GridSettings) => void;
-  onClose: () => void;
-}): JSX.Element {
-  return (
-    <Modal
-      onClose={props.onClose}
-      backdropClass="flex items-start justify-center bg-black/30 p-6 pt-16"
-      label={__('Grid display')}
-    >
-      <ModalPanel size="sm">
-        <ModalHeader
-          title={__('Grid display')}
-          actions={
-            <IconButton size="sm" label={__('Close')} onClick={props.onClose}>
-              ✕
-            </IconButton>
-          }
-        />
-        <div class="p-4">
-          <GridDisplaySettingsControls settings={props.settings} onChange={props.onChange} />
-        </div>
-      </ModalPanel>
-    </Modal>
   );
 }

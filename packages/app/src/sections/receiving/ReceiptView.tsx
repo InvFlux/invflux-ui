@@ -4,6 +4,7 @@ import { Button, ErrorBanner, Pill } from '@invflux/ui';
 import { A } from '@solidjs/router';
 import { createQuery } from '@tanstack/solid-query';
 import { createSignal, For, type JSX, Show } from 'solid-js';
+import { hasCapability } from '../../capabilities';
 import { useApp } from '../../context';
 import { createApi } from '../../lib/api';
 import { costText, currencyDecimals, derivedCostText, fullPrecision } from './costText';
@@ -232,7 +233,11 @@ export function ReceiptView(props: { id: number }): JSX.Element {
                     : _x('Corrected', 'goods receipt status: figures corrected after posting')}
                 </Pill>
               </Show>
-              <Show when={r().lines.length > 0 && !reversed(r())}>
+              {/* Correcting a posted receipt changes stock already counted: inventory management,
+                  not receiving, and the correction routes refuse anyone without it. */}
+              <Show
+                when={r().lines.length > 0 && !reversed(r()) && hasCapability('manageInventory')}
+              >
                 <Button
                   variant="secondary"
                   size="sm"
@@ -336,6 +341,7 @@ export function ReceiptView(props: { id: number }): JSX.Element {
               empty={__('This receipt has no lines.')}
               totalLabel={__('Total value')}
               testId="receipt-lines"
+              scope="receipt-lines"
             />
 
             <Show when={corrected(r())}>

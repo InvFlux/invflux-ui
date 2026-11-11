@@ -1,6 +1,6 @@
 import type { JSX } from 'solid-js';
 import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
-import { PortalCtx, WorkbenchGrid } from '@invflux/ui';
+import { keepUnchanged, PortalCtx, WorkbenchGrid } from '@invflux/ui';
 import type { WorkbenchGridCapabilities, WorkbenchHandles } from '@invflux/ui';
 import type { ProductTabContext } from './types';
 
@@ -44,7 +44,9 @@ export interface EmbeddedWorkbenchProps {
 export function EmbeddedWorkbench(props: EmbeddedWorkbenchProps) {
   // One QueryClient per mount — the tab is a short-lived surface; no cross-tab cache sharing wanted.
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
+    defaultOptions: {
+      queries: { retry: 1, refetchOnWindowFocus: false, reconcile: keepUnchanged },
+    },
   });
 
   const ctx = {

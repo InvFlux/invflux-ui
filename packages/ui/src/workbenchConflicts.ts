@@ -61,6 +61,14 @@ export function explainConflict(reason: string, column: string): string | null {
         __('%s: this product is busy in a stock workflow and cannot be un-governed yet.'),
         column,
       );
+    case 'sale_not_below_regular':
+      return sprintf(
+        /* translators: %s = column label, "Price" or "Sale price" */
+        __(
+          '%s: the sale price must be below the regular price, and needs one. Lower the sale price or raise the regular price.',
+        ),
+        column,
+      );
     case 'forbidden':
       return sprintf(__('%s: you do not have permission to change this.'), column);
     case 'subject_not_resolvable':

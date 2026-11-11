@@ -145,7 +145,12 @@ export interface PoLine {
   governed?: boolean | null;
   /** Product GTIN/EAN/UPC barcode (WC global_unique_id), null if none. Helps match physical goods at GR. */
   gtin: string | null;
+  /** Every code a scan may match this line by: the product's barcodes, primary first, pack codes left
+   *  out. Empty when it has none. */
+  codes: string[];
   imageUrl: string | null;
+  /** Every size of the same picture, as an HTML `srcset`, where the surface sends it (receiving). */
+  imageSrcset?: string | null;
   exists: boolean;
   /** How many units the line orders — **null on a draft means it inherits {@link suggestedQty}**,
    *  the same way a null {@link unitCost} inherits {@link catalogUnitCost}. Resolved into a stored
@@ -239,6 +244,24 @@ export interface PoTimelineEvent {
   /** The goods receipt a `receipt.logged` or `receipt.corrected` row opens on; null on every other
    *  event, and on a receipt logged before its event recorded which receipt it was. */
   receiptId?: number | null;
+  /** The invoice this row offers to correct: set only on the latest recording or correction of an
+   *  invoice still on the order. `correctable` is the server's answer; `reason` says why not, when
+   *  there is something for the operator to read (a closed accounting period), and is null when
+   *  there is not (no permission). */
+  invoice?: { id: number; correctable: boolean; reason: string | null } | null;
+}
+
+/** One recorded supplier invoice — `GET /procurement/purchase-orders/{id}/invoices`. */
+export interface SupplierInvoiceDoc {
+  id: number;
+  reference: string;
+  currency: string;
+  invoicedAt: string | null;
+  recordedAt: string | null;
+  statedTotal: string | null;
+  note: string | null;
+  /** As entered: the stated price before its discount, and the discount. */
+  lines: { subjectId: number; qty: number; unitCost: string; discountPct: string | null }[];
 }
 
 /** `GET /procurement/purchase-orders/{id}/events` response envelope. */

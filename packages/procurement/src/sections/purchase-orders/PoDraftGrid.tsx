@@ -273,6 +273,7 @@ export function PoDraftGrid(props: PoDraftGridProps): JSX.Element {
     sku: null,
     supplierSku: null,
     gtin: null,
+    codes: [],
     imageUrl: null,
     exists: true,
     qtyRequested: 0,

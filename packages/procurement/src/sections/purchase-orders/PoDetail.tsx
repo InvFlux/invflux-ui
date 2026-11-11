@@ -652,8 +652,11 @@ export function PoDetail(props: { id: string }): JSX.Element {
     [],
   );
   const [columnsOpen, setColumnsOpen] = createSignal(false);
+  // An invoice recorded on any line: what the supplier billed then has columns of its own.
+  const invoiced = (): boolean =>
+    lines().some((l) => l.qtyInvoiced > 0 || null !== l.unitCostInvoiced);
   const offeredColumns = (): PickableColumn<PoLineColumnId>[] =>
-    availablePoLineColumns(preReception());
+    availablePoLineColumns(preReception(), invoiced());
   const shows = (id: PoLineColumnId): boolean => !hiddenColumns().includes(id);
   const toggleColumn = (id: PoLineColumnId): void => {
     setHiddenColumns((prev) => (prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]));
@@ -762,6 +765,18 @@ export function PoDetail(props: { id: string }): JSX.Element {
           cell: (l) => l.qtyOpen,
         });
     }
+    // What the supplier billed, as plain figures: an invoice can come before, with or after the
+    // goods, so these are not tied to reception. Comparing them with what was ordered or received
+    // — and deciding anything from that — is not this table's job.
+    if (invoiced() && shows('invoiced'))
+      cols.push({
+        id: 'invoiced',
+        header: _x('Invoiced', 'quantity the supplier has billed'),
+        title: __('Units billed on the supplier invoices recorded against this order'),
+        kind: 'num',
+        width: 'w-20',
+        cell: (l) => (l.qtyInvoiced > 0 ? l.qtyInvoiced : dash()),
+      });
     if (shows('status'))
       cols.push({
         id: 'status',
@@ -799,6 +814,15 @@ export function PoDetail(props: { id: string }): JSX.Element {
         width: 'w-28',
         cell: (l) => fmt(l.unitCost),
       });
+    if (invoiced() && shows('invoiced_cost'))
+      cols.push({
+        id: 'invoiced_cost',
+        header: _x('Invoiced cost', 'unit price on the supplier invoice'),
+        title: __('The unit price on the latest supplier invoice for this line'),
+        kind: 'num',
+        width: 'w-28',
+        cell: (l) => (null === l.unitCostInvoiced ? dash() : fmt(l.unitCostInvoiced)),
+      });
     if (shows('line_total'))
       cols.push({
         id: 'line_total',
@@ -820,6 +844,12 @@ export function PoDetail(props: { id: string }): JSX.Element {
   // The kind lives here rather than inside either capture screen so switching between them keeps one
   // continuous picker — the control stays put and the body under it changes.
   const [capturing, setCapturing] = createSignal<SupplierDocKind | null>(null);
+  // The recorded invoice the capture panel opens on — set by the timeline's Correct link.
+  const [correctInvoiceId, setCorrectInvoiceId] = createSignal<number | null>(null);
+  const correctInvoice = (id: number): void => {
+    setCorrectInvoiceId(id);
+    setCapturing('invoice');
+  };
   // An acknowledgement or a shipping notice states what is still *coming*, so both are offered
   // while something still is. A second notice is ordinary on a multi-shipment order — after an
   // acknowledgement, and after a first delivery has been received — so those stages are not the
@@ -1877,7 +1907,10 @@ export function PoDetail(props: { id: string }): JSX.Element {
                               // hint says what the document is, which is what tells the merchant
                               // whether to wait for this one or reach for another.
                               tooltip: blocked,
-                              run: () => setCapturing(kind),
+                              run: () => {
+                                setCorrectInvoiceId(null);
+                                setCapturing(kind);
+                              },
                             }))}
                           />
                         </Show>
@@ -1930,6 +1963,7 @@ export function PoDetail(props: { id: string }): JSX.Element {
                         columns={readColumns()}
                         rows={lines()}
                         empty={__('No lines on this purchase order.')}
+                        scope="po-lines"
                         fillGutter={
                           receipts().length > 0 || recordedShortfall().length > 0
                             ? readFooterGutter(
@@ -1962,7 +1996,11 @@ export function PoDetail(props: { id: string }): JSX.Element {
                       lines={lines()}
                       currency={p().currency}
                       costDecimals={p().costDecimals}
-                      onDone={() => setCapturing(null)}
+                      correctInvoiceId={correctInvoiceId()}
+                      onDone={() => {
+                        setCapturing(null);
+                        setCorrectInvoiceId(null);
+                      }}
                     />
                   </Show>
                 </Show>
@@ -2150,7 +2188,11 @@ export function PoDetail(props: { id: string }): JSX.Element {
                   </Show>
                 }
               >
-                <PoTimeline events={events()} loading={eventsQuery.isPending} />
+                <PoTimeline
+                  events={events()}
+                  loading={eventsQuery.isPending}
+                  onCorrectInvoice={correctInvoice}
+                />
               </FoldingSection>
             </div>
           </>
@@ -2550,7 +2592,12 @@ function EventDescription(props: {
  * The PO activity timeline — who did what, when (server-rendered descriptions + resolved actor names).
  * A read-only vertical list; the Essentials basic surface. Pro will add documents, export, and cross-PO audit.
  */
-function PoTimeline(props: { events: PoTimelineEvent[]; loading: boolean }): JSX.Element {
+function PoTimeline(props: {
+  events: PoTimelineEvent[];
+  loading: boolean;
+  /** Open the capture panel on a recorded invoice, to correct it. */
+  onCorrectInvoice: (invoiceId: number) => void;
+}): JSX.Element {
   const hostNav = useHostNav();
   const fmt = (iso: string | null): string => {
     if (null === iso) return '';
@@ -2597,6 +2644,41 @@ function PoTimeline(props: { events: PoTimelineEvent[]; loading: boolean }): JSX
                             )}
                           </a>
                         </>
+                      )}
+                    </Show>
+                    {/* The server says whether this invoice can be corrected; the page only
+                        reflects it. Without the permission there is nothing to show; a reason
+                        (a closed accounting period) is shown rather than the link vanishing. */}
+                    <Show when={e.invoice}>
+                      {(inv) => (
+                        <Show
+                          when={inv().correctable}
+                          fallback={
+                            <Show when={inv().reason}>
+                              {(why) => (
+                                <>
+                                  {' · '}
+                                  <span class="text-text-muted" title={why()}>
+                                    {_x(
+                                      'Period closed',
+                                      'accounting period, invoice cannot be corrected',
+                                    )}
+                                  </span>
+                                </>
+                              )}
+                            </Show>
+                          }
+                        >
+                          {' · '}
+                          <button
+                            type="button"
+                            class="text-primary hover:underline"
+                            onClick={() => props.onCorrectInvoice(inv().id)}
+                            data-testid="timeline-correct-invoice"
+                          >
+                            {_x('Correct', 'action: correct a recorded supplier invoice')}
+                          </button>
+                        </Show>
                       )}
                     </Show>
                   </div>

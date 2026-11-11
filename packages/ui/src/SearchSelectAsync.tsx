@@ -72,8 +72,11 @@ export function SearchSelectAsync(props: SearchSelectAsyncProps): JSX.Element {
     }
   });
 
+  const [open, setOpen] = createSignal(false);
+
   return (
     <Combobox.Root
+      onOpenChange={setOpen}
       options={props.options}
       value={props.value}
       onChange={(opt: SearchSelectOption | null) => props.onChange(opt)}
@@ -104,7 +107,12 @@ export function SearchSelectAsync(props: SearchSelectAsyncProps): JSX.Element {
       <Show when={props.autoFocusFirst}>
         <KobalteComboboxFirstFocus firstKey={() => props.options[0]?.value} />
       </Show>
-      <Combobox.Control aria-label={props.ariaLabel} class={`${CONTROL} ${props.class ?? ''}`}>
+      <Combobox.Control
+        aria-label={props.ariaLabel}
+        class={`${CONTROL} ${props.class ?? ''}`}
+        // While the list is open, Escape closes the list, not an enclosing dialog (Modal's ESC_LOCAL_ATTR).
+        data-esc-local={open() ? '' : undefined}
+      >
         <Combobox.Input
           ref={inputRef}
           aria-label={props.ariaLabel}

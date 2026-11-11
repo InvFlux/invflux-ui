@@ -1,5 +1,9 @@
 import { __, _n, _x, formatDate, parseDateOnly, sprintf } from '@invflux/i18n';
 import {
+  ColumnsSettingsIcon,
+  createColumnModel,
+  DataTable,
+  type DataTableColumn,
   ErrorBanner,
   Button,
   createViewportFill,
@@ -12,13 +16,7 @@ import {
 } from '@invflux/ui';
 import { A, useLocation, useNavigate, useSearchParams } from '@solidjs/router';
 import { createQuery } from '@tanstack/solid-query';
-import {
-  createColumnHelper,
-  createSolidTable,
-  flexRender,
-  getCoreRowModel,
-} from '@tanstack/solid-table';
-import { createMemo, createSignal, For, type JSX, Show } from 'solid-js';
+import { createMemo, createSignal, type JSX, Show } from 'solid-js';
 import { StatusPill } from '../../components/StatusPill';
 import { useProcurement } from '../../context';
 import { createApi } from '../../lib/api';
@@ -26,8 +24,6 @@ import { daysUntilDate } from '../../lib/dates';
 import type { ProductSearchResponse } from '../suppliers/types';
 import { formatPoTotal } from './poTotal';
 import type { PurchaseOrder, PurchaseOrdersResponse } from './types';
-
-const columnHelper = createColumnHelper<PurchaseOrder>();
 
 /**
  * The list's segments.
@@ -116,35 +112,77 @@ function EtaCell(props: { iso: string | null; stage: string }): JSX.Element {
   );
 }
 
-const columns = [
-  columnHelper.accessor('number', {
-    header: () => __('PO #'),
+/**
+ * Lifecycle order of the stages, so sorting the Stage column groups orders by how far along they
+ * are rather than alphabetically by code. A stage not listed sorts after the known ones.
+ */
+const STAGE_ORDER = [
+  'in_prep',
+  'in_review',
+  'approved',
+  'submitted',
+  'acknowledged',
+  'in_transit',
+  'arrived',
+  'in_reception',
+  'partially_received',
+  'received',
+  'canceled',
+];
+
+/**
+ * The list's columns. Built when the list renders, not at module load, so every label is translated
+ * for the request's language; `hrefOf` is the router-aware address of an order (it carries the
+ * list's filter query).
+ */
+const poColumns = (hrefOf: (po: PurchaseOrder) => string): DataTableColumn<PurchaseOrder>[] => [
+  {
+    id: 'number',
+    header: __('PO #'),
+    required: true,
+    sortValue: (po) => po.number,
     // A draft has no document number yet — it gets one just before it goes to the supplier. Fall back
     // to the internal id, marked so it can never be mistaken for the real thing: the `#` sigil and the
     // word "Draft" survive a screenshot or a read-aloud, where muted styling alone would not. It is
     // deliberately unprefixed and unpadded — borrowing the document number's own signature is what
     // would make the two confusable.
-    cell: (info) =>
-      null === info.getValue() ? (
-        <span class="text-text-muted">{sprintf(__('Draft #%d'), info.row.original.id)}</span>
-      ) : (
-        <span class="font-semibold">{info.getValue()}</span>
-      ),
-  }),
-  columnHelper.accessor('supplierDisplay', {
-    header: () => __('Supplier'),
-    cell: (info) => info.getValue() ?? '—',
-  }),
-  columnHelper.accessor('stage', {
-    header: () => __('Stage'),
-    cell: (info) => <StatusPill status={info.getValue()} />,
-  }),
-  columnHelper.accessor('discrepancy', {
-    header: () => __('Discrepancy'),
+    cell: (po) => (
+      // The row's keyboard and assistive-tech entry point. A `<tr>` takes no focus and announces no
+      // destination, so a click handler on it is reachable by pointer only; the PO number is the
+      // cell that names where the row goes, so it carries the link.
+      <A href={hrefOf(po)} class="block">
+        {null === po.number ? (
+          <span class="text-text-muted">{sprintf(__('Draft #%d'), po.id)}</span>
+        ) : (
+          <span class="font-semibold">{po.number}</span>
+        )}
+      </A>
+    ),
+  },
+  {
+    id: 'supplier',
+    header: __('Supplier'),
+    sortValue: (po) => po.supplierDisplay,
+    cell: (po) => po.supplierDisplay ?? '—',
+  },
+  {
+    id: 'stage',
+    header: __('Stage'),
+    sortValue: (po) => {
+      const at = STAGE_ORDER.indexOf(po.stage);
+
+      return -1 === at ? STAGE_ORDER.length : at;
+    },
+    cell: (po) => <StatusPill status={po.stage} />,
+  },
+  {
+    id: 'discrepancy',
+    header: __('Discrepancy'),
+    sortValue: (po) => (po.discrepancy?.over ?? 0) + (po.discrepancy?.short ?? 0),
     // Delivery-discrepancy rollup (over / finalized-short line counts, Ordered lens) — a glanceable
     // "needs a look" flag; the per-line detail lives on the PO. Discrepancy-free POs show a dash.
-    cell: (info) => {
-      const d = info.getValue();
+    cell: (po) => {
+      const d = po.discrepancy;
       if (null === d || (0 === d.over && 0 === d.short))
         return <span class="text-slate-300">—</span>;
       return (
@@ -162,22 +200,27 @@ const columns = [
         </span>
       );
     },
-  }),
-  columnHelper.accessor('expectedAt', {
-    header: () => __('ETA'),
-    cell: (info) => <EtaCell iso={info.getValue()} stage={info.row.original.stage} />,
-  }),
-  columnHelper.accessor('lineCount', {
-    header: () => __('Lines'),
-    cell: (info) => <span class="tabular-nums text-slate-600">{info.getValue()}</span>,
-  }),
-  columnHelper.accessor('total', {
-    header: () => __('Value'),
-    cell: (info) => {
-      const row = info.row.original;
-      return formatPoTotal(info.getValue(), row.currency, row.costDecimals);
-    },
-  }),
+  },
+  {
+    id: 'eta',
+    header: __('ETA'),
+    sortValue: (po) => po.expectedAt,
+    cell: (po) => <EtaCell iso={po.expectedAt} stage={po.stage} />,
+  },
+  {
+    id: 'lines',
+    header: __('Lines'),
+    kind: 'num',
+    sortValue: (po) => po.lineCount,
+    cell: (po) => <span class="text-slate-600">{po.lineCount}</span>,
+  },
+  {
+    id: 'value',
+    header: __('Value'),
+    kind: 'num',
+    sortValue: (po) => (null === po.total ? null : Number(po.total)),
+    cell: (po) => formatPoTotal(po.total, po.currency, po.costDecimals),
+  },
 ];
 
 /**
@@ -327,13 +370,13 @@ export function PoList(props: { supplierId?: number }): JSX.Element {
   };
   const isEmpty = (): boolean => query.isSuccess && 0 === rows().length;
 
-  const table = createSolidTable({
-    get data() {
-      return rows();
-    },
-    columns,
-    getCoreRowModel: getCoreRowModel(),
+  // The operator's column choices, kept per place the list appears: the full list and a supplier's
+  // own tab are different working views, so a column hidden in one says nothing about the other.
+  const model = createColumnModel({
+    scope: undefined === props.supplierId ? 'purchase-orders' : 'supplier-purchase-orders',
   });
+  const hrefOf = (po: PurchaseOrder): string => `/purchase-orders/${po.id}${location.search}`;
+  const columns = createMemo(() => poColumns(hrefOf));
 
   // Fill from where the list starts down to the viewport bottom — on its own page and inside a
   // supplier's Purchase Orders tab alike: a long list scrolls inside its panel, so its header and
@@ -341,6 +384,21 @@ export function PoList(props: { supplierId?: number }): JSX.Element {
   // element's own `pb-4`, inside that height.
   let rootEl: HTMLElement | undefined;
   const listHeight = createViewportFill(() => rootEl);
+
+  const columnsButton = (): JSX.Element => (
+    <Button
+      variant="secondary"
+      size="xs"
+      class="px-1.5!"
+      title={__('Columns')}
+      aria-label={__('Columns')}
+      // Nothing to pick from while the table is not mounted (no rows).
+      disabled={!query.isSuccess || isEmpty()}
+      onClick={model.openPicker}
+    >
+      <ColumnsSettingsIcon class="h-4 w-4" />
+    </Button>
+  );
 
   return (
     <section
@@ -375,7 +433,12 @@ export function PoList(props: { supplierId?: number }): JSX.Element {
           >
             {__('+ New PO')}
           </Button>
+          {columnsButton()}
         </div>
+      </Show>
+      {/* A supplier's tab has no toolbar, so the picker gets a thin row of its own. */}
+      <Show when={undefined !== props.supplierId}>
+        <div class="mb-2 flex justify-end">{columnsButton()}</div>
       </Show>
 
       <Show when={query.isPending}>
@@ -396,70 +459,26 @@ export function PoList(props: { supplierId?: number }): JSX.Element {
           landmark — it mounts only once the query has settled, so it cannot be satisfied by the
           loading placeholder standing in its place.
         */}
-        {/* `min-h-0`: lets the panel shrink below its rows and scroll them, instead of pushing the
-            section past the height it was given. A short list still hugs its rows. */}
-        <div class="min-h-0 overflow-auto rounded border border-border bg-surface">
-          <table class="w-full border-collapse text-sm" data-testid="purchase-order-list">
-            <thead class="sticky top-0 z-10 bg-surface-raised">
-              <For each={table.getHeaderGroups()}>
-                {(hg) => (
-                  <tr>
-                    <For each={hg.headers}>
-                      {(header) => (
-                        <th class="whitespace-nowrap border-b border-slate-200 px-3 py-2 text-left font-semibold text-slate-600">
-                          {flexRender(header.column.columnDef.header, header.getContext())}
-                        </th>
-                      )}
-                    </For>
-                  </tr>
-                )}
-              </For>
-            </thead>
-            <tbody>
-              <For each={table.getRowModel().rows}>
-                {(row) => {
-                  const href = (): string =>
-                    `/purchase-orders/${row.original.id}${location.search}`;
-
-                  return (
-                    <tr
-                      class="cursor-pointer hover:bg-slate-50"
-                      onClick={(event) => {
-                        // The first cell is a real link now, and the row click is only an
-                        // enhancement over it. Without this guard both fire: a plain click
-                        // navigates twice, and a ctrl/middle-click opens the row in a new tab AND
-                        // navigates this one — the row losing its place as the cost of the shortcut.
-                        if ((event.target as HTMLElement).closest('a,button,input,select,label')) {
-                          return;
-                        }
-                        navigate(href());
-                      }}
-                    >
-                      <For each={row.getVisibleCells()}>
-                        {(cell, index) => (
-                          <td class="border-b border-slate-100 px-3 py-2 align-top">
-                            <Show
-                              when={index() === 0}
-                              fallback={flexRender(cell.column.columnDef.cell, cell.getContext())}
-                            >
-                              {/* The row's keyboard and assistive-tech entry point. A `<tr>` takes
-                                no focus and announces no destination, so a click handler on it is
-                                reachable by pointer only; the PO number is the cell that names
-                                where the row goes, so it carries the link. */}
-                              <A href={href()} class="block">
-                                {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                              </A>
-                            </Show>
-                          </td>
-                        )}
-                      </For>
-                    </tr>
-                  );
-                }}
-              </For>
-            </tbody>
-          </table>
-        </div>
+        {/* The table's box is a flex child of this section, whose height is fixed: its own overflow
+            lets it shrink below its rows and scroll them, instead of pushing the section past the
+            height it was given. A short list still hugs its rows. */}
+        <DataTable
+          columns={columns()}
+          rows={rows()}
+          rowKey={(po) => String(po.id)}
+          model={model}
+          rowProps={() => ({ class: 'cursor-pointer' })}
+          onRowClick={(po, event) => {
+            // The first cell is a real link, and the row click is only an enhancement over it.
+            // Without this guard both fire: a plain click navigates twice, and a ctrl/middle-click
+            // opens the row in a new tab AND navigates this one — the row losing its place as the
+            // cost of the shortcut.
+            if ((event.target as HTMLElement).closest('a,button,input,select,label')) return;
+            navigate(hrefOf(po));
+          }}
+          empty={null}
+          testId="purchase-order-list"
+        />
       </Show>
     </section>
   );

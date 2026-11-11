@@ -19,6 +19,8 @@
  * modal previews the computed value instead of promising a restoration.
  */
 
+import { isWholeNumberDataType } from './datatypes/dataTypeNames';
+
 /** What a numeric bulk edit does to each row's current value. */
 export type NumericOp =
   | 'set'
@@ -170,7 +172,8 @@ export function decimalsForValues(isMoney: boolean, values: readonly string[]): 
 
 /**
  * Numeric columns the operators apply to: the whole `decimal` family — bare `decimal` included, which
- * is what the Weight column and any plain decimal a host declares use — and the `number*` family.
+ * is what the Weight column and any plain decimal a host declares use — and the whole numbers,
+ * `integer` and `quantity` with their variants.
  *
  * Bare `decimal` is matched by equality rather than a prefix, so a datatype that merely *starts*
  * "decimal" without being one (`decimalish`) is still text. Getting this wrong is quiet rather than
@@ -178,7 +181,9 @@ export function decimalsForValues(isMoney: boolean, values: readonly string[]): 
  * "increase by %", which reads as a missing feature rather than a bug.
  */
 export function isNumericDataType(dataType: string): boolean {
-  return dataType === 'decimal' || dataType.startsWith('decimal:') || dataType.startsWith('number');
+  return (
+    dataType === 'decimal' || dataType.startsWith('decimal:') || isWholeNumberDataType(dataType)
+  );
 }
 
 /** Money is emitted as a fixed-decimal string; other numerics as numbers (WC stores decimals as strings). */

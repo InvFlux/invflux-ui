@@ -2,8 +2,11 @@ import { __, _n, sprintf } from '@invflux/i18n';
 import { Checkbox, ConfirmModal, ErrorBanner, mintReceiptKey, toast } from '@invflux/ui';
 import { ApiError } from '@invflux/ui/api';
 import {
+  type CountLine,
   PoReceiveForm,
   type ReceiveRow,
+  type StageLineResult,
+  type AddLineResult,
 } from '@invflux/procurement/src/sections/purchase-orders/PoReceiveForm';
 import { ShortfallFields } from '@invflux/procurement/src/sections/purchase-orders/ShortfallFields';
 import {
@@ -15,18 +18,50 @@ import {
   type ShortfallVocabulary,
 } from '@invflux/procurement/src/sections/purchase-orders/shortfall';
 import type { PoLine } from '@invflux/procurement/src/sections/purchase-orders/types';
+import type { LineCodes } from '@invflux/procurement/src/receiveScan';
+import type {
+  ProductCodesResponse,
+  RemovedProductCode,
+} from '@invflux/procurement/src/sections/purchase-orders/PoReceiveGrid';
+import type { RemoveProductCodeRequest } from '@invflux/ui/productCodes';
 import { useNavigate, useSearchParams } from '@solidjs/router';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
-import { createEffect, createSignal, type JSX, onCleanup, Show } from 'solid-js';
+import {
+  createComputed,
+  createEffect,
+  createSignal,
+  type JSX,
+  on,
+  onCleanup,
+  Show,
+} from 'solid-js';
 import { hasCapability } from '../../capabilities';
 import { useApp } from '../../context';
 import { createApi } from '../../lib/api';
 import { surfaceEnabled } from '../../surfaces';
 import { type Crumb, ReceivingCrumbs } from './ReceivingCrumbs';
-import type { PoReceptionResponse, PoReceptionLine } from './types';
+import type {
+  PoCountLine,
+  PoReceptionChanges,
+  PoReceptionResponse,
+  PoReceptionLine,
+} from './types';
 
 /** How often a worker says they are still here. Well inside the server's presence window. */
 const HEARTBEAT_MS = 45_000;
+
+/** How long an idle count waits between refreshes until the server says otherwise (its setting). */
+const DEFAULT_REFRESH_SECONDS = 30;
+
+/** A focus refresh this soon after the last refresh would only repeat it. */
+const FOCUS_REFRESH_GAP_MS = 3_000;
+
+const asCountLine = (l: PoCountLine): CountLine => ({
+  staged: l.staged,
+  version: l.version,
+  countedBy: l.countedBy,
+  countedAt: l.countedAt,
+});
 
 /**
  * The receiving projection of a line, widened into the shape the shared grid reads.
@@ -43,7 +78,9 @@ const asGridLine = (line: PoReceptionLine): PoLine => ({
   sku: line.sku,
   supplierSku: line.supplierSku,
   gtin: line.gtin,
+  codes: line.codes,
   imageUrl: line.imageUrl,
+  imageSrcset: line.imageSrcset,
   exists: line.exists,
   qtyRequested: line.qtyRequested,
   qtyExpected: line.qtyExpected,
@@ -75,9 +112,14 @@ const asGridLine = (line: PoReceptionLine): PoLine => ({
  * access to purchasing at all — and sees none of it: no prices, no totals, no approval state. The
  * order's own page keeps a link in, because a buyer watching a delivery land wants the same screen.
  *
- * **Nothing moves until Confirm.** Quantities are staged client-side and autosaved as work in
- * progress, so a reload, a flat battery or a shift change loses nothing; the session is a draft that
- * is expected to be discarded, and abandoning a count deliberately leaves no trace. Only the confirm
+ * **Nothing moves until Confirm.** Each counted line is saved as work in progress the moment it
+ * changes, so a reload, a flat battery or a shift change loses nothing; the session is a draft that
+ * is expected to be discarded, and abandoning a count deliberately leaves no trace.
+ *
+ * **Several workers, one count.** A delivery split into piles is counted by several people at once,
+ * each on their own products. Every screen keeps the server's view of the count and refreshes it by
+ * asking what changed since it last looked — whenever the grid is filtered to look a product up, and on
+ * the store's timer while idle — so the box a worker fills shows what a coworker already entered. Only the confirm
  * posts a receipt, and it carries an idempotency key so answering a timeout by pressing again replays
  * rather than receiving the delivery twice.
  */
@@ -166,7 +208,41 @@ export function PoReception(props: { poId: number }): JSX.Element {
 
   const po = () => query.data?.purchaseOrder;
   const lines = (): PoLine[] => (query.data?.lines ?? []).map(asGridLine);
-  const participants = () => query.data?.participants ?? [];
+
+  // The server's view of the count, by product: seeded by every load of the order, then moved on by
+  // each write's answer and each refresh.
+  const [counts, setCounts] = createSignal<Record<number, CountLine>>({});
+  const [liveParticipants, setLiveParticipants] = createSignal<
+    PoReceptionResponse['participants'] | null
+  >(null);
+  const [serverNote, setServerNote] = createSignal<string | null>(null);
+  const [refreshSeconds, setRefreshSeconds] = createSignal(DEFAULT_REFRESH_SECONDS);
+  let cursor = '';
+  // A computed, not an effect: it runs as this component renders, before the form mounts, so the
+  // form's first render already holds the loaded count.
+  createComputed(
+    on(
+      () => query.data,
+      (data) => {
+        if (!data) return;
+        const next: Record<number, CountLine> = {};
+        for (const l of data.lines) next[l.subjectId] = asCountLine(l);
+        setCounts(next);
+        setLiveParticipants(null);
+        setServerNote(data.note);
+        cursor = data.cursor;
+      },
+    ),
+  );
+  const mergeCounts = (changed: (PoCountLine & { subjectId: number })[]): void => {
+    if (0 === changed.length) return;
+    setCounts((m) => {
+      const next = { ...m };
+      for (const l of changed) next[l.subjectId] = asCountLine(l);
+      return next;
+    });
+  };
+  const participants = () => liveParticipants() ?? query.data?.participants ?? [];
   const orderLabel = (): string =>
     po()?.number ??
     sprintf(
@@ -182,6 +258,38 @@ export function PoReception(props: { poId: number }): JSX.Element {
    */
   const procurementReachable = (): boolean =>
     hasCapability('managePurchaseOrders') && surfaceEnabled('procurement');
+
+  /** A product in the Workbench, where this user can open it: a refused code capture links the
+   *  product that already has the code. */
+  const productLink = (subjectId: number): string | undefined =>
+    hasCapability('viewStock') && surfaceEnabled('workbench')
+      ? `/workbench?subject_ids=${subjectId}`
+      : undefined;
+
+  /** The order's codes as the server holds them now: a scan naming no line may carry a code added
+   *  since this screen loaded, by a coworker's capture or in the catalog. Read beside the cached order,
+   *  not into it, since a reload of the order would also reset the count. */
+  const lookupCodes = async (): Promise<LineCodes[]> =>
+    (await api.get<PoReceptionResponse>(`/receiving/purchase-orders/${props.poId}`)).lines.map(
+      (l) => ({
+        subjectId: l.subjectId,
+        codes: l.codes,
+        gtin: l.gtin,
+      }),
+    );
+
+  /** A product's barcodes, for the GTIN cell's drill-down, and taking one off. */
+  const fetchCodes = (subjectId: number): Promise<ProductCodesResponse> =>
+    api.get<ProductCodesResponse>(`/products/${subjectId}/codes`);
+  const removeCode = (
+    subjectId: number,
+    request: RemoveProductCodeRequest,
+  ): Promise<RemovedProductCode> =>
+    api.post<RemovedProductCode>(`/products/${subjectId}/codes/remove`, {
+      type: request.type,
+      value: request.value,
+      supplierId: request.supplierId,
+    });
 
   const trail = (order: PoReceptionResponse['purchaseOrder']): Crumb[] => {
     const crumbs: Crumb[] = [
@@ -201,17 +309,134 @@ export function PoReception(props: { poId: number }): JSX.Element {
     return crumbs;
   };
 
-  // Autosave the running count. Fire-and-forget: a transient failure just means the next keystroke
-  // tries again, and the figures on screen are the ones being counted either way.
-  const persist = createMutation(() => ({
-    mutationFn: (p: { rows: ReceiveRow[]; note: string }) =>
-      api.put(`/receiving/purchase-orders/${props.poId}/session`, { lines: p.rows, note: p.note }),
-    // The first counted line is what opens the reception, so until the order reads as receiving
-    // each save may be the one that opened it — re-read, and presence starts once it has.
-    onSuccess: () => {
-      if (!po()?.receiving) invalidate();
-    },
-  }));
+  // Write one line. The answer moves the server's view on; a refusal because someone changed the line
+  // since this screen showed it hands back their figure, for the form to show. Any other failure leaves
+  // the line as counted here, to go with its next change.
+  const stageLine = async (
+    subjectId: number,
+    received: number | null,
+    damaged: number,
+    version: number | null,
+  ): Promise<StageLineResult> => {
+    const wasReceiving = true === po()?.receiving;
+    try {
+      const answer = await api.put<{ line: PoCountLine | null }>(
+        `/receiving/purchase-orders/${props.poId}/session/lines/${subjectId}`,
+        { received, damaged, version },
+      );
+      if (null !== answer.line) {
+        mergeCounts([{ ...answer.line, subjectId }]);
+        // The first counted line is what opens the reception: re-read, and presence starts.
+        if (!wasReceiving) invalidate();
+      }
+      return { outcome: 'saved', line: null === answer.line ? null : asCountLine(answer.line) };
+    } catch (e: unknown) {
+      if (e instanceof ApiError && 409 === e.status && 'invflux_stale_receiving_line' === e.code) {
+        const line = (e.body as { line: PoCountLine }).line;
+        mergeCounts([{ ...line, subjectId }]);
+        coworkerSeen = true;
+        return { outcome: 'stale', line: asCountLine(line) };
+      }
+      return { outcome: 'failed' };
+    }
+  };
+
+  // Add scanned units to a line — one request per batch of scans, never retried: whether a failed one
+  // landed is unknown, and a retry of one that did would count the units twice.
+  const addLine = async (subjectId: number, units: number): Promise<AddLineResult> => {
+    const wasReceiving = true === po()?.receiving;
+    try {
+      const answer = await api.post<{ line: PoCountLine }>(
+        `/receiving/purchase-orders/${props.poId}/session/lines/${subjectId}/add`,
+        { add: units },
+      );
+      mergeCounts([{ ...answer.line, subjectId }]);
+      // The first unit opens the reception, as the first counted line does.
+      if (!wasReceiving) invalidate();
+      return { outcome: 'saved', line: asCountLine(answer.line) };
+    } catch {
+      return { outcome: 'failed' };
+    }
+  };
+
+  const saveNote = (note: string): void => {
+    void api
+      .put(`/receiving/purchase-orders/${props.poId}/session/note`, { note })
+      .catch(() => toast.error(__('Could not save the note. It is still on this screen.')));
+  };
+
+  // Ask what changed since the last look. One refresh at a time: a lookup arriving while one is out
+  // asks for exactly one more when it lands, so typing a filter costs two requests, not one a key.
+  let refreshing = false;
+  let refreshAgain = false;
+  let lastRefreshAt = 0;
+  // Whether anyone else has been seen on this count — a refused write is proof enough.
+  let coworkerSeen = false;
+  // Moving onto another line's editable cell refreshes, so its box shows what a coworker entered —
+  // but only while someone else is counting, and not again within a few seconds: a worker counting
+  // alone, or walking down a column, sends nothing extra.
+  const refreshOnFocus = (): void => {
+    if (participants().length < 2 && !coworkerSeen) return;
+    if (Date.now() - lastRefreshAt < FOCUS_REFRESH_GAP_MS) return;
+    void refresh();
+  };
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  const armIdleRefresh = (): void => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      // A hidden tab asks nothing; it catches up when it is looked at again.
+      if (document.hidden) armIdleRefresh();
+      else void refresh();
+    }, refreshSeconds() * 1000);
+  };
+  onCleanup(() => {
+    if (idleTimer) clearTimeout(idleTimer);
+  });
+  const refresh = async (): Promise<void> => {
+    // Before the first counted line there is no count to refresh.
+    if (!po()?.receiving) return;
+    if (refreshing) {
+      refreshAgain = true;
+      return;
+    }
+    refreshing = true;
+    try {
+      const changes = await api.get<PoReceptionChanges>(
+        `/receiving/purchase-orders/${props.poId}/session/changes`,
+        { since: cursor },
+      );
+      if (!changes.sessionOpen) {
+        // Posted, closed short or discarded — perhaps by a coworker. Load the order again.
+        invalidate();
+        return;
+      }
+      lastRefreshAt = Date.now();
+      mergeCounts(changes.lines);
+      setLiveParticipants(changes.participants);
+      setServerNote(changes.note);
+      if (undefined !== changes.refreshSeconds) setRefreshSeconds(changes.refreshSeconds);
+      cursor = changes.cursor;
+    } catch {
+      // A missed refresh is not worth telling anyone about; the next one catches up.
+    } finally {
+      refreshing = false;
+      if (refreshAgain) {
+        refreshAgain = false;
+        void refresh();
+      } else {
+        armIdleRefresh();
+      }
+    }
+  };
+  createEffect(
+    on(
+      () => true === query.isSuccess && true === po()?.receiving,
+      (live) => {
+        if (live) armIdleRefresh();
+        else if (idleTimer) clearTimeout(idleTimer);
+      },
+    ),
+  );
 
   const receive = createMutation(() => ({
     mutationFn: (p: {
@@ -394,6 +619,10 @@ export function PoReception(props: { poId: number }): JSX.Element {
               <PoReceiveForm
                 poId={props.poId}
                 lines={lines()}
+                productLink={productLink}
+                lookupCodes={lookupCodes}
+                fetchCodes={fetchCodes}
+                removeCode={removeCode}
                 // An order in another currency is received at an exchange rate, which this count
                 // asks for, offering the last one recorded for that currency. A rate is not a
                 // price: what the goods cost stays off this surface. Without it the delivery would
@@ -402,17 +631,17 @@ export function PoReception(props: { poId: number }): JSX.Element {
                 baseCurrency={query.data?.purchaseOrder.baseCurrency ?? ''}
                 initialFxRate={query.data?.purchaseOrder.suggestedFxRate ?? null}
                 pending={receive.isPending || abandon.isPending || closeShortOnly.isPending}
-                initial={(query.data?.lines ?? [])
-                  .filter((l) => null !== l.staged)
-                  .map((l) => ({
-                    subjectId: l.subjectId,
-                    received: l.staged?.received ?? 0,
-                    damaged: l.staged?.damaged ?? 0,
-                  }))}
+                counts={counts()}
+                receiving={true === order().receiving}
                 initialNote={query.data?.note ?? ''}
+                serverNote={serverNote()}
                 canLax={hasCapability('grCloseShortLax')}
                 canCloseShort={hasCapability('grCloseShort')}
-                onPersist={(rows, note) => persist.mutate({ rows, note })}
+                onStageLine={stageLine}
+                onAddLine={addLine}
+                onLineFocus={refreshOnFocus}
+                onSaveNote={saveNote}
+                onLookup={() => void refresh()}
                 // Both settle: the resulting status is *derived* from what is still open, never
                 // dictated from here. A count that believed it was complete and a database that
                 // disagrees cannot produce an order marked received with stock still owed.

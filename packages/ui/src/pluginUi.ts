@@ -6,6 +6,7 @@ import { Input } from './Input';
 import { Modal, ModalFooter, ModalHeader, ModalPanel } from './Modal';
 import { Pill } from './Pill';
 import { Select } from './Select';
+import { SettingsSection } from './SettingsSection';
 import { Spinner } from './Spinner';
 import { Textarea } from './Textarea';
 
@@ -16,7 +17,9 @@ import { Textarea } from './Textarea';
  * whatever it draws with comes through the surface it registers on. These are the SPA-wide ones:
  * form controls, and the dialog — the {@link Modal} backdrop plus the frame every host dialog is
  * built from ({@link ModalPanel}, {@link ModalHeader}, {@link ModalFooter}), so an add-on's dialog
- * has the same panel, bars and theme as the host's own. Each surface spreads this set into its
+ * has the same panel, bars and theme as the host's own — and the gear's foldable
+ * {@link SettingsSection}, the frame of a panel registered with `registerSurfaceSettings`, which
+ * every surface accepts. Each surface spreads this set into its
  * bridge and adds only what belongs to it (a status pill, a router link); a component every surface
  * should offer is added here, once.
  *
@@ -36,6 +39,7 @@ export const sharedPluginUi = {
   ModalPanel,
   ModalHeader,
   ModalFooter,
+  SettingsSection,
 };
 
 /** The shape of {@link sharedPluginUi}, for a surface's bridge type. */

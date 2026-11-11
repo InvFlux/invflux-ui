@@ -60,6 +60,11 @@ export interface ComboboxProps {
 
   /** Portal target for the listbox; defaults to the shared PortalCtx (shadow-DOM escape). */
   mount?: HTMLElement;
+
+  /** Multi-select only: offer to create what was typed when no option has that label. See {@link SearchMultiSelect}. */
+  onCreate?: (text: string) => void;
+  /** The offer's label for what was typed; default "Create “XL”". */
+  createLabel?: (text: string) => string;
 }
 
 /**
@@ -104,6 +109,8 @@ export function Combobox(props: ComboboxProps): JSX.Element {
         emptyMessage={emptyMessage()}
         selectedOptions={props.selectedOptions}
         mount={props.mount}
+        onCreate={props.onCreate}
+        createLabel={props.createLabel}
       />
     </Show>
   );

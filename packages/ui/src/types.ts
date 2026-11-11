@@ -34,7 +34,7 @@ export interface DispatchUser {
  * `WorkbenchColumnMeta`) is structurally assignable.
  */
 export interface FieldMeta {
-  /** Open-vocabulary datatype slug (`number`, `decimal:money`, `term-picker:taxonomy`, …). */
+  /** Open-vocabulary datatype slug (`integer`, `quantity`, `decimal:money`, `term-picker:taxonomy`, …). */
   dataType: string;
   /** Per-field config consumed by the component/codec (e.g. `{ taxonomy }`, `{ min, max }`). */
   editorConfig: Record<string, unknown>;
@@ -137,6 +137,13 @@ export interface GridColumnMeta extends FieldMeta {
    * enables that taxonomy. Look it up before offering the menu item.
    */
   filterId?: string | null;
+  /**
+   * The codes a staged value competes with when it is a product code no two products may share
+   * (`sku`, `gtin`, `scannable`): the grid checks it against the other staged values at once and
+   * against the store shortly after, and shows a duplicate as a field error. Absent or null for a
+   * column whose values may repeat.
+   */
+  codeSpace?: string | null;
 }
 
 /** One value within a taxonomy (term), as exposed to datatype components. */

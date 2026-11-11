@@ -11,6 +11,8 @@ export interface PickableColumn<Id extends string = string> {
   label: () => string;
   /** Cannot be hidden. Rendered checked-and-disabled rather than omitted. */
   required?: boolean;
+  /** A short remark shown after the name while it applies — a ticked column the screen has no room for. */
+  note?: () => string | undefined;
 }
 
 /**
@@ -147,6 +149,9 @@ export function ColumnPicker<Id extends string = string>(props: {
                         }}
                       />
                       <span class="truncate">{labelOf(col)}</span>
+                      <Show when={col.note?.()}>
+                        {(note) => <span class="shrink-0 text-2xs text-text-muted">{note()}</span>}
+                      </Show>
                     </label>
                   </li>
                 </>

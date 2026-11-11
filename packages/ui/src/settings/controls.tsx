@@ -1,6 +1,6 @@
 import { createSignal, For, Show } from 'solid-js';
 import type { JSX } from 'solid-js';
-import { __ } from '@invflux/i18n';
+import { __, _x } from '@invflux/i18n';
 import { Button } from '../Button';
 import { Checkbox } from '../Checkbox';
 import { Input } from '../Input';
@@ -9,6 +9,7 @@ import { Textarea } from '../Textarea';
 import type { SettingControlProps } from './registry';
 import { registerSettingSummary, settingControlRegistry } from './registry';
 import { ErrorBanner } from '../ErrorBanner';
+import { canonicalDataType } from '../datatypes/dataTypeNames';
 
 /**
  * Built-in settings controls, keyed by datatype slug, registered into
@@ -221,7 +222,7 @@ interface MetaColumnRow {
 /** Kept in lock-step with the server's validator (WorkbenchMetaColumnSettings::TYPES). */
 const META_COLUMN_TYPES = (): Array<{ value: string; label: string }> => [
   { value: 'text', label: __('Text') },
-  { value: 'number', label: __('Whole number') },
+  { value: 'integer', label: _x('Integer', 'a kind of value: a whole number') },
   { value: 'decimal', label: __('Decimal') },
   { value: 'decimal:money', label: __('Money') },
   { value: 'bool', label: __('Yes / No') },
@@ -234,12 +235,15 @@ function MetaColumnsControl(props: SettingControlProps): JSX.Element {
     Array.isArray(props.definition.config.options)
       ? (props.definition.config.options as Array<{ value: string; label: string }>)
       : [];
+  // A row saved under an earlier type name (`number`) shows, and saves, under today's.
   const rows = (): MetaColumnRow[] =>
     Array.isArray(props.value)
-      ? (props.value as unknown[]).filter(
-          (r): r is MetaColumnRow =>
-            typeof r === 'object' && r !== null && typeof (r as MetaColumnRow).key === 'string',
-        )
+      ? (props.value as unknown[])
+          .filter(
+            (r): r is MetaColumnRow =>
+              typeof r === 'object' && r !== null && typeof (r as MetaColumnRow).key === 'string',
+          )
+          .map((r) => (typeof r.type === 'string' ? { ...r, type: canonicalDataType(r.type) } : r))
       : [];
 
   const usedKeys = (): Set<string> => new Set(rows().map((r) => r.key));

@@ -1,4 +1,4 @@
-import { createMemo, type JSX, Show } from 'solid-js';
+import { createMemo, createSignal, type JSX, Show } from 'solid-js';
 import * as Combobox from '@kobalte/core/combobox';
 import { bestMatch, DEFAULT_MATCH_THRESHOLD, scoreColor } from './fuzzy-match';
 import { usePortalRootOptional } from './portal';
@@ -103,8 +103,11 @@ export function MatchSelect(props: MatchSelectProps): JSX.Element {
     return null === s ? undefined : { 'background-color': scoreColor(s._score) };
   };
 
+  const [open, setOpen] = createSignal(false);
+
   return (
     <Combobox.Root<ScoredOption, OptionGroup>
+      onOpenChange={setOpen}
       options={model().groups}
       optionGroupChildren="options"
       value={selected()}
@@ -154,6 +157,8 @@ export function MatchSelect(props: MatchSelectProps): JSX.Element {
       )}
     >
       <Combobox.Control
+        // While the list is open, Escape closes the list, not an enclosing dialog (Modal's ESC_LOCAL_ATTR).
+        data-esc-local={open() ? '' : undefined}
         aria-label={props.ariaLabel}
         class={`${CONTROL} ${props.class ?? ''}`}
         style={controlStyle()}

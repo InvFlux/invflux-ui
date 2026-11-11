@@ -130,7 +130,7 @@ export function onHandCorrectionMeta(overrides?: Partial<GridColumnMeta>): GridC
   return {
     id: 'total',
     label: __('On-hand Total'),
-    dataType: 'number',
+    dataType: 'quantity',
     editorConfig: {},
     kind: 'editable',
     editable: true,
@@ -186,9 +186,14 @@ function formatCellValue(
   space: TaxonomySpace | undefined,
 ): string {
   const codec = meta ? codecRegistry.resolve(meta.dataType) : null;
-  if (codec && meta)
-    return codec.format(value, { config: meta.editorConfig, taxonomySpace: space });
-  return value === null || value === undefined ? '' : String(value);
+  const text =
+    codec && meta
+      ? codec.format(value, { config: meta.editorConfig, taxonomySpace: space })
+      : value === null || value === undefined
+        ? ''
+        : String(value);
+  // A cleared value reads as a dash, as the grid shows it, not as nothing after the arrow.
+  return text === '' ? '—' : text;
 }
 
 export function CorrectionReviewModal(props: CorrectionReviewModalProps): JSX.Element {

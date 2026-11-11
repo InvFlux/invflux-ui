@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { addRange, extendTo, selectCell, EMPTY_SELECTION } from './cellSelection';
 import { buildClipboard, cellCopyValue, selectionBounds } from './clipboard';
+import { parseSpreadsheetTsv } from '../excel-tsv-parser';
 
 const fmt = (r: number, c: number) => `r${r}c${c}`;
 
@@ -58,5 +59,51 @@ describe('clipboard', () => {
       ['', '', ''],
       ['', '', 'r2c2'],
     ]);
+  });
+
+  /**
+   * A copy must paste back as the same cells. The paste parser drops one trailing empty line, since
+   * spreadsheets end their last row with a newline, so a single-column copy whose last cell is empty
+   * has to end with a newline of its own or that cell is lost.
+   */
+  describe('pastes back as the same cells', () => {
+    const column = (values: string[]) =>
+      buildClipboard(
+        extendTo(selectCell({ row: 0, col: 0 }), { row: values.length - 1, col: 0 }),
+        (r) => values[r],
+      );
+    const roundTrip = (tsv: string) => parseSpreadsheetTsv(tsv).rows;
+
+    it.each([
+      ['an all-empty column', ['', '', '']],
+      ['a column whose last cell is empty', ['5', '7', '']],
+      ['a column with empty first and middle cells', ['', '5', '', '7']],
+      ['two empty cells', ['', '']],
+      ['a column with no empty cell', ['5', '7']],
+    ])('%s', (_label, values) => {
+      const { tsv, grid } = column(values);
+      expect(roundTrip(tsv)).toEqual(grid);
+      expect(grid).toEqual(values.map((v) => [v]));
+    });
+
+    it('an empty 2×3 block', () => {
+      const { tsv, grid } = buildClipboard(
+        extendTo(selectCell({ row: 0, col: 0 }), { row: 2, col: 1 }),
+        () => '',
+      );
+      expect(roundTrip(tsv)).toEqual(grid);
+    });
+
+    it('leaves every other copy byte-identical', () => {
+      expect(column(['5', '7']).tsv).toBe('5\n7');
+      expect(column(['', '7']).tsv).toBe('\n7');
+      expect(
+        buildClipboard(extendTo(selectCell({ row: 0, col: 0 }), { row: 1, col: 1 }), () => '').tsv,
+      ).toBe('\t\n\t');
+    });
+
+    it('still copies one empty cell as nothing, so the paste says there is nothing to paste', () => {
+      expect(column(['']).tsv).toBe('');
+    });
   });
 });

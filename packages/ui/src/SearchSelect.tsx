@@ -127,8 +127,11 @@ export function SearchSelect(props: SearchSelectProps): JSX.Element {
     }
   });
 
+  const [open, setOpen] = createSignal(false);
+
   return (
     <Combobox.Root
+      onOpenChange={setOpen}
       options={displayedOptions()}
       value={selected()}
       onChange={(opt: SearchSelectOption | null) => props.onChange(opt ? opt.value : null)}
@@ -162,6 +165,8 @@ export function SearchSelect(props: SearchSelectProps): JSX.Element {
         <KobalteComboboxFirstFocus firstKey={props.fuzzy ? firstKey : undefined} />
       </Show>
       <Combobox.Control
+        // While the list is open, Escape closes the list, not an enclosing dialog (Modal's ESC_LOCAL_ATTR).
+        data-esc-local={open() ? '' : undefined}
         aria-label={props.ariaLabel}
         class={`${props.controlClass ?? (props.invalid ? CONTROL_INVALID : CONTROL)} ${props.class ?? ''}`}
       >

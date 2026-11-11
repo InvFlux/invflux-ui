@@ -64,5 +64,11 @@ export function buildClipboard(
     grid.push(line);
   }
 
-  return { tsv: grid.map((line) => line.join('\t')).join('\n'), grid };
+  const lines = grid.map((line) => line.join('\t'));
+  // A paste drops one trailing empty line, taking it for the newline spreadsheets end their last row
+  // with. A copy whose last line is empty (a single column ending on an empty cell) therefore ends
+  // with that newline itself, so the empty cell pastes back. Every other copy is left as it is.
+  const terminator = lines.length > 1 && lines[lines.length - 1] === '' ? '\n' : '';
+
+  return { tsv: lines.join('\n') + terminator, grid };
 }

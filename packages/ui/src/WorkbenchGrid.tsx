@@ -37,12 +37,21 @@ import {
   createEffect,
   createMemo,
   createSignal,
+  on,
   onCleanup,
   Show,
   untrack,
   type JSX,
 } from 'solid-js';
 import { Button } from './Button';
+import {
+  cellKey,
+  heldCodeMessage,
+  stagedDuplicateMessage,
+  stagedDuplicates,
+  type CodeCollision,
+  type StagedCode,
+} from './grid/codeCollisions';
 import { TableViewIcon, RecordViewIcon, ColumnsSettingsIcon, GearIcon } from './icons';
 import { useSurface } from './surfaceCtx';
 import {
@@ -77,9 +86,16 @@ import { buildWorkbenchColumns, buildStockColumns } from './grid/workbenchColumn
 import { useHostNav } from './hostNav';
 import { applyColumnOverrides, columnOverridesForSave } from './columnLabels';
 import { describeConflicts as describeConflictsFor } from './workbenchConflicts';
+import { failureMessage } from './api/errors';
 import { qk } from './api/queryKeys';
 import { pollingTransport, type LiveUpdatesTransport } from './liveUpdates';
-import { pendingCellKey, useDirtyCells } from './grid/useDirtyCells';
+import { pendingCellKey, useDirtyCells, type CellPatch } from './grid/useDirtyCells';
+import {
+  pricePairFollowUps,
+  REGULAR_PRICE_COLUMN,
+  SALE_PRICE_COLUMN,
+  salePriceError,
+} from './grid/pricePair';
 import { mergeRefreshedRows, rowsToRefresh } from './grid/rowRefresh';
 import { cascadeAllocate, type SlotDeltas } from './onHandCascade';
 import { CorrectionReviewModal, type ReceiptOffer } from './CorrectionReviewModal';
@@ -112,7 +128,9 @@ import type {
   RowPatch,
   DirtyRow,
 } from './workbenchGridTypes';
-import type { GridColumnMeta, TaxonomySpace } from './types';
+import type { GridColumnMeta, TaxonomySpace, TaxonomySpaceValue } from './types';
+import { enumMultiValues, enumOptions } from './datatypes/enumMulti';
+import { isWholeNumberDataType } from './datatypes/dataTypeNames';
 import type { GridFilterMeta } from './filterBridge';
 
 // ---------------------------------------------------------------------------
@@ -140,6 +158,11 @@ export interface WorkbenchGridCapabilities {
    * Optional, absent meaning "no": without it the review modal never offers the receipt hand-off.
    */
   receiveStock?: boolean;
+  /**
+   * May create a product term where one is picked (WordPress's `manage_product_terms`, which the term
+   * route checks again). Optional, absent meaning "no": the pickers then never offer "Create".
+   */
+  manageProductTerms?: boolean;
 }
 
 /** The WordPress bootstrap context every surface hands the grid: REST root + nonce + capabilities. */
@@ -432,7 +455,7 @@ function buildProductsUrl(
   return url;
 }
 
-/** POST JSON to `{apiRoot}/invflux/v1{path}`, surfacing the server's `error`/`message` on failure. */
+/** POST JSON to `{apiRoot}/invflux/v1{path}`; on failure, the server's `error` / `message` as text. */
 async function postJson<T>(ctx: WorkbenchGridContext, path: string, body: unknown): Promise<T> {
   const res = await fetch(`${ctx.apiRoot.replace(/\/$/, '')}/invflux/v1${path}`, {
     method: 'POST',
@@ -445,14 +468,15 @@ async function postJson<T>(ctx: WorkbenchGridContext, path: string, body: unknow
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    let message = `Request failed (${res.status})`;
-    try {
-      const error = (await res.json()) as { error?: string; message?: string };
-      message = error.error ?? error.message ?? message;
-    } catch {
-      /* keep status message */
-    }
-    throw new Error(message);
+    const body: unknown = await res.json().catch(() => null);
+    // The Workbench routes put their human message under `error`; WordPress's own under `message`.
+    const own =
+      typeof body === 'object' &&
+      body !== null &&
+      typeof (body as { error?: unknown }).error === 'string'
+        ? (body as { error: string }).error
+        : undefined;
+    throw new Error(failureMessage(res.status, body, own) ?? `Request failed (${res.status})`);
   }
   return (await res.json()) as T;
 }
@@ -886,6 +910,51 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   // background refetch never blanks the columns mid-render (matches the workbench's stable* signals).
   const [stableColumns, setStableColumns] = createSignal<GridColumnMeta[]>([]);
   const [stableTaxonomySpace, setStableTaxonomySpace] = createSignal<TaxonomySpace | undefined>();
+  // Terms created from a picker in this grid. The server lists a Workbench taxonomy's terms only once
+  // a product uses them, so until the staged edit that picks one is saved, a refetch would lose its
+  // name and the cell would show its id: they are laid over every refetched space.
+  let createdTerms: Array<{ taxonomy: string; value: TaxonomySpaceValue }> = [];
+  const withCreatedTerms = (space: TaxonomySpace): TaxonomySpace => {
+    if (createdTerms.length === 0) return space;
+    const out: TaxonomySpace = { ...space };
+    for (const { taxonomy, value } of createdTerms) {
+      const tax = out[taxonomy];
+      if (tax === undefined || tax.values[String(value.id)] !== undefined) continue;
+      out[taxonomy] = { ...tax, values: { ...tax.values, [String(value.id)]: value } };
+    }
+    return out;
+  };
+  /** The host's page that edits a taxonomy's terms, for the edit-selection modal's link. */
+  const termsLink = (taxonomy: string): { href: string; label: string } | undefined => {
+    const href = hostNav.termsHref?.(taxonomy) ?? null;
+    if (href === null) return undefined;
+    // A global attribute's taxonomy is `pa_*` (WooCommerce): its terms are the attribute's values.
+    return {
+      href,
+      label: taxonomy.startsWith('pa_')
+        ? _x('Edit attribute', 'link: open the WooCommerce page that edits this attribute’s values')
+        : _x('Edit terms', 'link: open the page that edits this taxonomy’s terms (categories, tags…)'),
+    };
+  };
+
+  /** Create a term where a picker offers it, and name it wherever the grid shows terms. */
+  async function createTerm(taxonomy: string, name: string): Promise<{ id: number; name: string }> {
+    const term = await postJson<{ id: number; name: string; slug: string; parentId: number }>(
+      props.ctx,
+      '/workbench/terms',
+      { taxonomy, name },
+    );
+    createdTerms = [
+      ...createdTerms,
+      {
+        taxonomy,
+        value: { id: term.id, code: term.slug, name: term.name, parentId: null, depth: 0 },
+      },
+    ];
+    const space = stableTaxonomySpace();
+    if (space !== undefined) setStableTaxonomySpace(withCreatedTerms(space));
+    return term;
+  }
   const [stableFilters, setStableFilters] = createSignal<GridFilterMeta[]>([]);
   // Column-manager section titles, keyed by group — server-provided vocabulary (see WorkbenchPage).
   const [stableGroupLabels, setStableGroupLabels] = createSignal<Record<string, string>>({});
@@ -893,7 +962,7 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
     const data = query.data as InfiniteData<WorkbenchPage> | undefined;
     const first = data?.pages[0];
     if (first?.columns && first.columns.length > 0) setStableColumns(first.columns);
-    if (first?.taxonomySpace) setStableTaxonomySpace(first.taxonomySpace);
+    if (first?.taxonomySpace) setStableTaxonomySpace(withCreatedTerms(first.taxonomySpace));
     if (first?.filters) setStableFilters(first.filters);
     if (first?.columnGroups && first.columnGroups.length > 0) {
       setStableGroupLabels(Object.fromEntries(first.columnGroups.map((g) => [g.key, g.label])));
@@ -1179,8 +1248,12 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   const isInherited = (row: WorkbenchRow, columnId: string): boolean =>
     row.inherited?.includes(columnId) ?? false;
 
+  // A product's terms live on the parent, so a variation shows its parent's. Only the taxonomy
+  // columns read them from the product: a worksheet column holding terms holds the line's own.
   const isGenericColumnInherited = (row: WorkbenchRow, meta: GridColumnMeta): boolean =>
-    meta.dataType === 'term-picker:wc-taxonomy' && row.wcVariationId !== null;
+    meta.dataType === 'term-picker:wc-taxonomy' &&
+    meta.id.startsWith('taxonomy.') &&
+    row.wcVariationId !== null;
 
   /** The value a "clear" (Del / Cut / paste-empty) stages, by datatype. `ok:false` = not clearable.
    *  Reason-gated columns (the on-hand `total`) are never cleared this way. */
@@ -1190,10 +1263,10 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
       return { ok: true, value: meta.editorConfig.clearValue };
     const dt = meta.dataType;
     if (dt === 'bool') return { ok: true, value: false };
-    if (dt.startsWith('number')) return { ok: true, value: null };
+    if (isWholeNumberDataType(dt)) return { ok: true, value: null };
     if (dt.startsWith('decimal')) return { ok: true, value: '' };
     if (dt === 'text') return { ok: true, value: '' };
-    if (dt === 'term-picker:wc-taxonomy') return { ok: true, value: [] };
+    if (dt === 'term-picker:wc-taxonomy' || dt === 'enum-multi') return { ok: true, value: [] };
     if (dt === 'enum') {
       // Clearable only when "" is a real option (tax_class "Standard"); tax_status has no empty.
       const options = Array.isArray(meta.editorConfig.options) ? meta.editorConfig.options : [];
@@ -1260,7 +1333,154 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
     const current = staged ? staged.new : persisted;
     if (clearEquivalent(current, cleared)) return;
     const newVal = clearEquivalent(persisted, cleared) ? persisted : cleared;
-    dirty.patch(row.subjectId, columnId, persisted, newVal, row.name, row.sku);
+    stageCells([
+      {
+        subjectId: row.subjectId,
+        columnId,
+        original: persisted,
+        next: newVal,
+        name: row.name,
+        sku: row.sku,
+      },
+    ]);
+  }
+
+  /** The grid's rows by subject id, for staging rules that read a row's saved values. */
+  const rowBySubject = createMemo(() => new Map(rows().map((r) => [r.subjectId, r])));
+
+  /**
+   * Stage the merchant's edits, with whatever they bring along, in one write. Every staging path goes
+   * through here (typing, clearing, paste, bulk edit), so a rule over a row's columns holds whichever
+   * way a value arrives: today the price pair, where a regular price lowered under the sale price
+   * stages the sale price cleared and linked to it. {@link pricePairFollowUps}
+   */
+  function stageCells(patches: CellPatch[]): void {
+    dirty.patchMany([
+      ...patches,
+      ...pricePairFollowUps(patches, (id) => rowBySubject().get(id), dirty.edit),
+    ]);
+  }
+
+  // A staged product code (SKU, GTIN, a barcode kind) is checked for a duplicate as soon as it is
+  // staged: against the other staged codes here, and against the store on the server a moment
+  // later. WooCommerce's own refusal at save stays the final word. (arch §11.10.6)
+
+  /** Every staged value of a column whose codes may not repeat, empty ones left out. */
+  const stagedCodes = createMemo((): StagedCode[] => {
+    const out: StagedCode[] = [];
+    for (const [subjectId, row] of dirty.dirtyCells()) {
+      for (const [columnId, edit] of row.cells) {
+        const space = columnMetaById().get(columnId)?.codeSpace;
+        if (space == null) continue;
+        const value = edit.new == null ? '' : String(edit.new);
+        if (value.trim() !== '') out.push({ subjectId, columnId, space, value });
+      }
+    }
+    return out;
+  });
+  const stagedCodeDuplicates = createMemo(() => stagedDuplicates(stagedCodes()));
+  const codesSignature = (codes: StagedCode[]): string =>
+    JSON.stringify(codes.map((c) => [c.subjectId, c.columnId, c.value]));
+  /** The store's answer for the staged codes, by cell, each for the value it was asked about. */
+  const [heldCodes, setHeldCodes] = createSignal(new Map<string, CodeCollision>());
+  /** The staged codes the last answer was for, so the review knows whether it is current. */
+  let checkedCodes = codesSignature([]);
+  let codeCheckSeq = 0;
+  let codeCheckTimer: ReturnType<typeof setTimeout> | undefined;
+
+  async function checkStagedCodes(): Promise<void> {
+    const codes = stagedCodes();
+    const signature = codesSignature(codes);
+    const seq = ++codeCheckSeq;
+    if (codes.length === 0) {
+      setHeldCodes(new Map());
+      checkedCodes = signature;
+      return;
+    }
+    try {
+      const res = await postJson<{ collisions: CodeCollision[] }>(
+        props.ctx,
+        '/workbench/code-collisions',
+        { cells: codes.map(({ subjectId, columnId, value }) => ({ subjectId, columnId, value })) },
+      );
+      // An answer overtaken by a newer staging is dropped; the newer one is on its way.
+      if (seq !== codeCheckSeq) return;
+      setHeldCodes(new Map(res.collisions.map((c) => [cellKey(c.subjectId, c.columnId), c])));
+    } catch {
+      // Advisory only: a failed check leaves the duplicate to WooCommerce's refusal at save.
+    }
+    if (seq === codeCheckSeq) checkedCodes = signature;
+  }
+
+  createEffect(
+    on(
+      () => codesSignature(stagedCodes()),
+      (signature) => {
+        clearTimeout(codeCheckTimer);
+        if (signature !== checkedCodes) {
+          codeCheckTimer = setTimeout(() => void checkStagedCodes(), 300);
+        }
+      },
+    ),
+  );
+  onCleanup(() => clearTimeout(codeCheckTimer));
+
+  /** Check the staged codes now unless the last answer already covers them (before the review opens). */
+  async function stagedCodesChecked(): Promise<void> {
+    if (codesSignature(stagedCodes()) === checkedCodes) return;
+    clearTimeout(codeCheckTimer);
+    await checkStagedCodes();
+  }
+
+  /** The duplicate-code error on a staged cell, or undefined. */
+  function codeFieldError(row: WorkbenchRow, columnId: string): string | undefined {
+    if (columnMetaById().get(columnId)?.codeSpace == null) return undefined;
+    const edit = dirty.edit(row.subjectId, columnId);
+    if (edit === undefined) return undefined;
+    const value = edit.new == null ? '' : String(edit.new);
+    const key = cellKey(row.subjectId, columnId);
+    const other = stagedCodeDuplicates().get(key);
+    if (other !== undefined) {
+      return stagedDuplicateMessage(
+        value,
+        rowBySubject().get(other)?.name ?? dirty.dirtyCells().get(other)?.name ?? '',
+      );
+    }
+    const held = heldCodes().get(key);
+    // An answer for another value says nothing about this one: the cell was edited since.
+    if (held === undefined || held.value !== value) return undefined;
+    const holderStaged =
+      held.holder.subjectId > 0 && dirty.edit(held.holder.subjectId, columnId) !== undefined;
+    return heldCodeMessage(value, held.holder.name, holderStaged);
+  }
+
+  /** The field error on a cell of the row, from its staged-or-saved values, or undefined. */
+  function cellFieldError(row: WorkbenchRow, columnId: string): string | undefined {
+    if (columnId !== SALE_PRICE_COLUMN) return codeFieldError(row, columnId);
+    const staged = (id: string): unknown =>
+      dirty.stagedValue(row.subjectId, id, workbenchValueFor(row, id));
+
+    return salePriceError(row, staged(REGULAR_PRICE_COLUMN), staged(SALE_PRICE_COLUMN));
+  }
+
+  /** The staged rows holding a field error, as the cells to point at, in grid order. */
+  function fieldErrorCells(): Array<{ subjectId: number; columnId: string }> {
+    const out: Array<{ subjectId: number; columnId: string }> = [];
+    for (const row of rows()) {
+      const staged = dirty.dirtyCells().get(row.subjectId);
+      if (staged === undefined) continue;
+      if (
+        (staged.cells.has(REGULAR_PRICE_COLUMN) || staged.cells.has(SALE_PRICE_COLUMN)) &&
+        cellFieldError(row, SALE_PRICE_COLUMN) !== undefined
+      )
+        out.push({ subjectId: row.subjectId, columnId: SALE_PRICE_COLUMN });
+      for (const columnId of staged.cells.keys()) {
+        if (codeFieldError(row, columnId) !== undefined)
+          out.push({ subjectId: row.subjectId, columnId });
+      }
+    }
+
+    return out;
   }
 
   function onClearCells(cells: Array<{ row: WorkbenchRow; columnId: string }>): void {
@@ -1336,9 +1556,11 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
             // A cost seeded in THIS SAME save (a staged `wac` edit) counts too: the server applies
             // the seed before the stock movement, so the added units WILL be valued — don't nudge to
             // "seed the cost first" when the operator is already doing exactly that in one operation.
-            hasCostBasis: live
-              ? live.wac != null || stagesValidCost(row.cells.get('wac')?.new)
-              : undefined,
+            // A row with no `wac` key comes from a user who may not see costs: unknown, so no nudge.
+            hasCostBasis:
+              live && 'wac' in live
+                ? live.wac != null || stagesValidCost(row.cells.get('wac')?.new)
+                : undefined,
           });
         } else {
           list.push({
@@ -1367,12 +1589,37 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   // shown always (below the tabs), independent of the Per-SKU / Per-field view.
   const governanceNotes = createMemo<ReviewNote[]>(() => {
     const group = reviewGroups().find((g) => g.columnId === STOCK_MANAGEMENT_COLUMN_ID);
-    return group ? governanceReviewNotes(group.rows) : [];
+    const notes = group ? governanceReviewNotes(group.rows) : [];
+    // The sale prices this save clears only because a regular price went under them: the merchant
+    // typed the regular price, and the review is where they see what it takes with it.
+    let linkedClears = 0;
+    for (const [subjectId, row] of dirty.dirtyCells()) {
+      const sale = row.cells.get(SALE_PRICE_COLUMN);
+      if (sale?.linkedTo !== undefined && !dirty.isPending(subjectId, SALE_PRICE_COLUMN))
+        linkedClears += 1;
+    }
+    if (linkedClears > 0) {
+      notes.push({
+        tone: 'warn',
+        text: withCount(
+          _n(
+            '%d sale price will be cleared because the regular price is now at or below it.',
+            '%d sale prices will be cleared because the regular price is now at or below them.',
+            linkedClears,
+          ),
+          linkedClears,
+        ),
+      });
+    }
+
+    return notes;
   });
 
-  function openSaveReview(): void {
+  async function openSaveReview(): Promise<void> {
     setSaveError(null);
     if (!dirty.isDirty()) return;
+    // The duplicate-code check is made current first: its last answer may predate the latest staging.
+    await stagedCodesChecked();
     // Everything staged is already in flight — there is nothing new to confirm, so opening an empty
     // review would be the dialog asking about work the operator has already sent.
     const reviewable = reviewableSubjectIds();
@@ -1386,6 +1633,36 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
     // whose previous save has not been confirmed stages new intent over a baseline the server has
     // not agreed to. The copy names the situation and the remedy; "the review is unavailable" would
     // say the dialog is broken, when what is blocked is the save.
+    // A field error stops the review before it opens, and the grid moves to the first one: the cell
+    // says what is wrong, and a review listing a change that cannot be saved would ask the operator
+    // to confirm it anyway.
+    const invalid = fieldErrorCells();
+    if (invalid.length > 0) {
+      handles.selectCells([invalid[0]!], invalid[0]);
+      const salePrices = invalid.filter((c) => c.columnId === SALE_PRICE_COLUMN).length;
+      toast.error(
+        salePrices === invalid.length
+          ? sprintf(
+              /* translators: %d: number of products whose staged sale price is not below the regular price */
+              _n(
+                '%d sale price is not below its regular price. Correct it, then review your changes.',
+                '%d sale prices are not below their regular price. Correct them, then review your changes.',
+                invalid.length,
+              ),
+              invalid.length,
+            )
+          : sprintf(
+              /* translators: %d: number of staged cells marked with an error (a duplicate SKU, a sale price not below the regular price…); each cell's tooltip says what is wrong. */
+              _n(
+                '%d change cannot be saved as it is. Correct it, then review your changes.',
+                '%d changes cannot be saved as they are. Correct them, then review your changes.',
+                invalid.length,
+              ),
+              invalid.length,
+            ),
+      );
+      return;
+    }
     const { held } = splitSubmittableRows(reviewable, dirty.isRowPending);
     if (held.length > 0) {
       toast.error(
@@ -1868,7 +2145,9 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   /** Stage one cell edit into the dirty model + clear any stale conflict ring on that subject. Shared
    *  by the DataGrid and the RecordView so editing behaves identically in either layout. */
   function stageEdit(row: WorkbenchRow, columnId: string, original: unknown, next: unknown): void {
-    dirty.patch(row.subjectId, columnId, original, next, row.name, row.sku);
+    stageCells([
+      { subjectId: row.subjectId, columnId, original, next, name: row.name, sku: row.sku },
+    ]);
     if (conflicts().has(row.subjectId)) {
       setConflicts((prev) => {
         const nextMap = new Map(prev);
@@ -2026,6 +2305,32 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
   // Bulk-edit from a multi-cell selection (F2 / right-click "Edit selection…").
   const [bulkEditColumns, setBulkEditColumns] = createSignal<BulkEditColumn[] | null>(null);
 
+  /**
+   * A list that takes values of its own (`enum-multi` with `allowNew`: a custom attribute's column on
+   * a worksheet) also offers the values its loaded rows hold, staged or saved, so a value used on one
+   * line is there to pick on the next.
+   */
+  function withValuesInUse(meta: GridColumnMeta): GridColumnMeta {
+    if (meta.dataType !== 'enum-multi' || meta.editorConfig.allowNew !== true) return meta;
+    const options = enumOptions(meta.editorConfig);
+    const known = new Set(options.map((o) => o.value));
+    const inUse = new Set<string>();
+    for (const row of rows()) {
+      const staged = dirty.edit(row.subjectId, meta.id);
+      for (const value of enumMultiValues(staged ? staged.new : workbenchValueFor(row, meta.id))) {
+        if (!known.has(value)) inUse.add(value);
+      }
+    }
+    if (inUse.size === 0) return meta;
+    return {
+      ...meta,
+      editorConfig: {
+        ...meta.editorConfig,
+        options: [...options, ...[...inUse].sort().map((value) => ({ value, label: value }))],
+      },
+    };
+  }
+
   /** Map the grid-supplied per-column selection groups to bulk-edit columns: keep only editable,
    *  non-reason-gated columns (the on-hand `total` keeps its per-cell flow) and snapshot each target's
    *  current (staged-or-persisted) value. Returns true when a modal opened. */
@@ -2037,7 +2342,7 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
       const meta = group.meta;
       if (!meta.editable || meta.bulkSaveReason !== null) continue;
       out.push({
-        meta,
+        meta: withValuesInUse(meta),
         targets: group.rows.map((row) => {
           const staged = dirty.edit(row.subjectId, group.columnId);
           return {
@@ -2070,7 +2375,7 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
     // what is saved. Passing the staged value leaves an edit that stages the saved value back over
     // itself: visibly dirty, and a pointless write on save. A bulk edit that returns a column to
     // where it started (raise 10%, then undo it) is exactly that case.
-    dirty.patchMany(
+    stageCells(
       edits.map((e) => ({
         // `subjectId` is the dirty store's own field and stays; only the read moves to the modal's
         // generic `key`, which on this surface is the subject id.
@@ -2085,11 +2390,18 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
     closeBulkEdit();
   }
 
-  /** Right-click extras: Revert (when the selection carries staged edits) + Save (when dirty). */
+  /** Right-click extras: Unstage (when the selection carries staged edits) + Save (when dirty). */
   function ownContextMenuExtras(): DataGridMenuItem[] {
     const extras: DataGridMenuItem[] = [];
     if (selectionHasDirty())
-      extras.push({ id: 'revert', label: __('Revert'), run: revertSelection });
+      extras.push({
+        id: 'revert',
+        // Drops the selected cells' staged edits, leaving their saved values; Backspace does the same.
+        label: _x('Unstage', 'drop the staged edits of the selected cells'),
+        shortcut: 'Backspace',
+        placement: 'editing',
+        run: revertSelection,
+      });
     if (dirty.isDirty()) extras.push({ id: 'save', label: __('Save'), run: openSaveReview });
     return extras;
   }
@@ -2153,6 +2465,11 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
     getSelectedCells: () => apiGetSelectedCells(),
     getVisibleColumnIds: () => apiSelectableColumnIds(),
     isDirty: () => dirty.isDirty(),
+    stagedEditCount: (columnId) => {
+      let count = 0;
+      for (const row of dirty.dirtyCells().values()) if (row.cells.has(columnId)) count++;
+      return count;
+    },
     loadAllPages: async () => {
       while (!query.isPlaceholderData && query.hasNextPage && !query.isFetchingNextPage) {
         await query.fetchNextPage();
@@ -2219,6 +2536,7 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
     hostNav,
     stagedValue: dirty.stagedValue,
     isCellDirty: dirty.isCellDirty,
+    fieldError: cellFieldError,
     displayName,
     isInFamily: (row: WorkbenchRow) => parentNameInFamilyRun().has(row.subjectId),
     // The ▸/▾ caret is a transient affordance, not a destination. Its click stops propagation so
@@ -2367,6 +2685,7 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
           resolveEditorMeta={(meta, row) => editorMetaForRow(meta, row)}
           isInherited={isInherited}
           isGenericColumnInherited={isGenericColumnInherited}
+          cellFieldError={cellFieldError}
           onStageEdit={stageEdit}
           onClearCells={onClearCells}
           onEditMulti={(groups) => openBulkEditFromGroups(groups)}
@@ -2407,6 +2726,20 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
             if (message !== '') toast.error(message);
           }}
           onClipboardSuccess={(message) => toast.success(message)}
+          selectionExtensions={() => [
+            {
+              id: 'changed',
+              label: (count) =>
+                sprintf(
+                  /* translators: %d = how many cells hold a staged edit not yet saved. */
+                  _n('%d changed cell', '%d changed cells', count),
+                  count,
+                ),
+              cells: [...dirty.dirtyCells()].flatMap(([subjectId, row]) =>
+                [...row.cells.keys()].map((columnId) => ({ rowId: String(subjectId), columnId })),
+              ),
+            },
+          ]}
           contextMenuExtras={(args) => [
             ...(props.contextMenuExtras?.(args) ?? []),
             ...ownContextMenuExtras(),
@@ -2572,6 +2905,8 @@ export function WorkbenchGrid(props: WorkbenchGridProps): JSX.Element {
             columns={columns()}
             taxonomySpace={stableTaxonomySpace()}
             mount={portalRoot}
+            onCreateTerm={props.ctx.capabilities.manageProductTerms ? createTerm : undefined}
+            termsLink={props.ctx.capabilities.manageProductTerms ? termsLink : undefined}
             onApply={applyBulkEdits}
             onClose={closeBulkEdit}
           />

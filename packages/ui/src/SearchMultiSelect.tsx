@@ -74,6 +74,14 @@ export interface SearchMultiSelectProps {
 
   /** Input text changed — host debounces + fetches and updates `options`. Enables async mode. */
   onSearch?: (text: string) => void;
+  /**
+   * Offer to create what was typed when it matches no option's label (blind to case): a last option,
+   * "Create “XL”", which calls this with the typed text instead of selecting anything. The host
+   * creates the option and adds its value. Opt-in: absent, nothing is ever offered (never on a filter).
+   */
+  onCreate?: (text: string) => void;
+  /** The offer's label for what was typed; default "Create “XL”". */
+  createLabel?: (text: string) => string;
   /** Show a "Searching…" row while the host fetch is in flight. */
   loading?: boolean;
   /** Empty-state text (e.g. "Type 3 characters to search" vs "No matches"). */
@@ -84,6 +92,9 @@ export interface SearchMultiSelectProps {
    */
   selectedOptions?: SearchMultiSelectOption[];
 }
+
+/** The value of the offer to create what was typed; no real option can have it. */
+const CREATE_VALUE = '\u0000create';
 
 const CONTROL =
   'flex min-h-9 w-full flex-wrap items-center gap-1 rounded border border-border bg-surface px-2 py-1 text-sm shadow-sm ' +
@@ -187,10 +198,41 @@ export function SearchMultiSelect(props: SearchMultiSelectProps): JSX.Element {
   // Selected options in the host's order (stable tag order).
   const selectedOptions = (): SearchMultiSelectOption[] => props.value.map(resolve);
 
+  // What is typed, for the offer to create it.
+  const [inputText, setInputText] = createSignal('');
+  const createOption = (): SearchMultiSelectOption | null => {
+    const text = inputText().trim();
+    if (props.onCreate === undefined || text === '') return null;
+    const lower = text.toLowerCase();
+    if (props.options.some((o) => o.label.toLowerCase() === lower)) return null;
+    return {
+      value: CREATE_VALUE,
+      label:
+        props.createLabel?.(text) ??
+        sprintf(
+          /* translators: %s: what the operator typed in a picker, offered as a new term to create. */
+          _x('Create “%s”', 'picker option: create a new term with the typed name'),
+          text,
+        ),
+    };
+  };
+  // Whether the typed text leaves nothing to show: no option's label contains it (the list's own
+  // filter) and nothing is offered to create. The list then says so instead of opening empty.
+  const nothingMatches = (): boolean => {
+    const text = inputText().trim().toLowerCase();
+    return (
+      !isAsync() &&
+      text !== '' &&
+      createOption() === null &&
+      !props.options.some((o) => o.label.toLowerCase().includes(text))
+    );
+  };
+
   // The option set Kobalte renders. In async mode, pin selected options in front of the results
   // (deduped) so they stay visible/removable even when the current query doesn't return them.
   const renderOptions = (): SearchMultiSelectOption[] => {
-    if (!isAsync()) return props.options;
+    const create = createOption();
+    if (!isAsync()) return create === null ? props.options : [...props.options, create];
     const seen = new Set<string>();
     const merged: SearchMultiSelectOption[] = [];
     for (const o of [...selectedOptions(), ...props.options]) {
@@ -210,6 +252,11 @@ export function SearchMultiSelect(props: SearchMultiSelectProps): JSX.Element {
       options={renderOptions()}
       value={selectedOptions()}
       onChange={(opts) => {
+        // The offer to create is not an option to select: it hands the typed text to the host.
+        if (opts.some((o) => o.value === CREATE_VALUE)) {
+          props.onCreate?.(inputText().trim());
+          return;
+        }
         const keeping = additive();
         props.onChange(
           opts.map((o) => o.value),
@@ -223,7 +270,10 @@ export function SearchMultiSelect(props: SearchMultiSelectProps): JSX.Element {
         setOpen(isOpen);
         if (!isOpen) setKeepDefaults(false);
       }}
-      onInputChange={isAsync() ? (text: string) => props.onSearch?.(text) : undefined}
+      onInputChange={(text: string) => {
+        setInputText(text);
+        if (isAsync()) props.onSearch?.(text);
+      }}
       defaultFilter={isAsync() ? () => true : undefined}
       // Open even with no options so the empty-state message shows (async "Searching…"/"No matches"
       // and the sync "Nothing to remove" case used by the bulk-edit term picker).
@@ -286,6 +336,8 @@ export function SearchMultiSelect(props: SearchMultiSelectProps): JSX.Element {
       )}
     >
       <Combobox.Control<SearchMultiSelectOption>
+        // While the list is open, Escape closes the list, not an enclosing dialog (Modal's ESC_LOCAL_ATTR).
+        data-esc-local={open() ? '' : undefined}
         aria-label={props.ariaLabel}
         class={`${CONTROL} ${props.class ?? ''}`}
       >
@@ -325,14 +377,14 @@ export function SearchMultiSelect(props: SearchMultiSelectProps): JSX.Element {
           <Show when={props.loading}>
             <div class="flex items-center gap-2 px-3 py-2 text-text-muted">
               <span class="inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
-              <span>Searching…</span>
+              <span>{__('Searching…')}</span>
             </div>
           </Show>
           {/* max-height + scroll live on the Listbox (not Content) so Kobalte's scroll-the-active-
               option-into-view on ArrowUp/Down works — it adjusts the listbox element's scrollTop. */}
           <Combobox.Listbox class="max-h-[210px] overflow-y-auto focus:outline-none" />
-          <Show when={!props.loading && 0 === renderOptions().length}>
-            <div class="px-3 py-2 text-text-muted">{props.emptyMessage ?? 'No matches'}</div>
+          <Show when={!props.loading && (0 === renderOptions().length || nothingMatches())}>
+            <div class="px-3 py-2 text-text-muted">{props.emptyMessage ?? __('No matches')}</div>
           </Show>
           {/* Only while the selection is still a default that marks something: that is the one state
               with anything to keep. The switch shows the *effective* state — it reads on while the

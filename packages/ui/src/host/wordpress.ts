@@ -45,4 +45,9 @@ export const wordpressHostNav: HostNav = {
 
   // Each surface is its own admin page, so cross-surface links leave the current document.
   opensNewTab: true,
+
+  // WordPress's term screen, scoped to products as WooCommerce's own menus open it.
+  termsHref(taxonomy) {
+    return `${adminBase()}/edit-tags.php?taxonomy=${encodeURIComponent(taxonomy)}&post_type=product`;
+  },
 };

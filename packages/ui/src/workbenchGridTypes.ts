@@ -165,6 +165,10 @@ export interface RowPatch {
 export interface DirtyEdit {
   original: unknown;
   new: unknown;
+  /** The column of the same row whose edit staged this one as its consequence (a sale price cleared
+   *  because the regular price went below it). Un-staging either end un-stages both. Absent on an
+   *  edit the merchant made themselves. */
+  linkedTo?: string;
 }
 
 /** All staged edits for one subject (row), keyed by column id. `name`/`sku` are snapshotted for the
@@ -252,6 +256,8 @@ export interface WorkbenchHandles {
   getSelectedCells: () => Array<{ row: WorkbenchRow; columnId: string }>;
   /** Whether the grid has unsaved staged edits — drives host Save-button state / unload prompts. */
   isDirty: () => boolean;
+  /** How many unsaved staged edits one column holds — for a host about to remove that column. */
+  stagedEditCount: (columnId: string) => number;
   /** Fetch every remaining page (for a host "Load all" affordance before an all-rows export/sweep). */
   loadAllPages: () => Promise<void>;
   /** The active (focused) cell as stable identities, or null. Pair with {@link selectCells} to carry

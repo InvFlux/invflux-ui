@@ -23,8 +23,8 @@ export function registerReceivingSources(): void {
     // Offered whenever this install has purchase orders at all — deliberately *not* gated on being
     // allowed to manage them. The whole point of receiving being its own surface is that the person
     // counting the pallet need not be the person who ordered it, and everything below this point is
-    // served by receiving's own routes under the inventory capability.
-    enabled: () => hasCapability('manageInventory'),
+    // served by receiving's own routes under the receiving capability.
+    enabled: () => hasCapability('receiveGoods'),
     // `rest` is the order id once one is chosen, so the source owns both steps: picking the document,
     // then counting it. No separate top-level route, and the back-link works from either.
     component: (props): JSX.Element => (

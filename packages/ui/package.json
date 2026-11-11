@@ -14,13 +14,16 @@
     "./src/datatypes/views.tsx",
     "./src/datatypes/codecs.ts",
     "./src/datatypes/editors.tsx",
-    "./src/datatypes/drilldowns.tsx"
+    "./src/datatypes/drilldowns.tsx",
+    "./src/scanBus/kinds.ts"
   ],
   "exports": {
     ".": "./src/index.ts",
     "./nav": "./src/NavTab.tsx",
     "./api": "./src/api/index.ts",
     "./toast": "./src/toast.ts",
+    "./scanBus": "./src/scanBus/index.ts",
+    "./productCodes": "./src/datatypes/productCodesDrilldown.tsx",
     "./fuzzy": "./src/fuzzy.tsx",
     "./pane": "./src/paneActive.ts",
     "./parseDecimal": "./src/parseDecimal.ts",

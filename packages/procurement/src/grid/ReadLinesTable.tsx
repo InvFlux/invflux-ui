@@ -1,37 +1,13 @@
-import { createViewportFill } from '@invflux/ui';
-import { For, type JSX, Show } from 'solid-js';
+import { type ColumnModel, DataTable, type DataTableColumn } from '@invflux/ui';
+import type { JSX } from 'solid-js';
 
-/** One column of a {@link ReadLinesTable}. */
-export interface ReadColumn<Row> {
-  id: string;
-  /** Header text, or nothing for a column that needs no heading (a thumbnail). */
-  header?: JSX.Element;
-  /** Tooltip on the header: what the column means, when its name alone could be over-read. */
-  title?: string;
-  /**
-   * How the cell reads. `text` (left) for names, `code` (left, monospaced) for machine-readable
-   * identifiers so their digits align, `num` (right, tabular) for quantities and money, `center`
-   * for a badge.
-   */
-  kind?: 'text' | 'code' | 'num' | 'center';
+/**
+ * One column of a {@link ReadLinesTable}: a {@link DataTableColumn}, with the width written as the
+ * class (`w-28`) this table has always taken.
+ */
+export type ReadColumn<Row> = Omit<DataTableColumn<Row>, 'widthClass'> & {
   /** Width class (`w-28`); omitted, the column takes what is left. */
   width?: string;
-  cell: (row: Row) => JSX.Element;
-  /** The column's cell in the total row, if the table has one. */
-  total?: () => JSX.Element;
-}
-
-const TH: Record<NonNullable<ReadColumn<unknown>['kind']>, string> = {
-  text: 'text-left',
-  code: 'text-left',
-  num: 'text-right',
-  center: 'text-center',
-};
-const TD: Record<NonNullable<ReadColumn<unknown>['kind']>, string> = {
-  text: '',
-  code: 'font-mono text-xs text-slate-500',
-  num: 'text-right tabular-nums',
-  center: 'text-center',
 };
 
 /**
@@ -40,8 +16,9 @@ const TD: Record<NonNullable<ReadColumn<unknown>['kind']>, string> = {
  * hoverable rows, scrolling inside itself rather than pushing the page sideways.
  *
  * Declarative on purpose: a caller hands over the columns it shows (already filtered by whatever
- * visibility it keeps) and the rows, and gets the same table every other document shows. It is the
- * one place to swap for a shared read-only grid with sortable, resizable columns.
+ * visibility it keeps) and the rows, and gets the same table every other document shows. The
+ * table itself is the shared {@link DataTable}, so a column that declares a `sortValue` sorts from
+ * its header, and the operator can resize any column.
  */
 export function ReadLinesTable<Row>(props: {
   columns: ReadColumn<Row>[];
@@ -56,75 +33,21 @@ export function ReadLinesTable<Row>(props: {
    */
   fillGutter?: string;
   testId?: string;
+  /** Where the table keeps its display settings (row height, wrapping, text size). Omitted, they last for the session. */
+  scope?: string;
+  /** The operator's column choices, where the caller keeps them in the shared model. */
+  model?: ColumnModel;
 }): JSX.Element {
-  let box: HTMLDivElement | undefined;
-  const height = createViewportFill(() => box);
-  const hasTotal = (): boolean => props.columns.some((c) => undefined !== c.total);
-  const kind = (c: ReadColumn<Row>): NonNullable<ReadColumn<Row>['kind']> => c.kind ?? 'text';
-
   return (
-    <div
-      ref={(el) => (box = el)}
-      class="box-border overflow-auto rounded border border-border bg-surface"
-      style={
-        undefined === props.fillGutter
-          ? undefined
-          : { height: `calc(${height()} - ${props.fillGutter})` }
-      }
-    >
-      {/* `min-w-full`, not `w-full`: the latter pins the table to the box and makes the columns
-          compress instead, so the scroll container it sits in would never have anything to scroll. */}
-      <table class="min-w-full border-collapse text-sm" data-testid={props.testId}>
-        <thead class="bg-surface-raised">
-          <tr>
-            <For each={props.columns}>
-              {(c) => (
-                <th
-                  class={`border-b border-slate-200 px-3 py-2 font-semibold text-slate-600 ${TH[kind(c)]} ${c.width ?? ''}`}
-                  title={c.title}
-                >
-                  {c.header}
-                </th>
-              )}
-            </For>
-          </tr>
-        </thead>
-        <tbody>
-          <For each={props.rows}>
-            {(row) => (
-              <tr class="hover:bg-slate-50">
-                <For each={props.columns}>
-                  {(c) => (
-                    <td class={`border-b border-slate-100 px-3 py-1.5 ${TD[kind(c)]}`}>
-                      {c.cell(row)}
-                    </td>
-                  )}
-                </For>
-              </tr>
-            )}
-          </For>
-          <Show when={0 === props.rows.length}>
-            <tr>
-              <td colspan={props.columns.length} class="px-3 py-3 text-slate-500">
-                {props.empty}
-              </td>
-            </tr>
-          </Show>
-        </tbody>
-        <Show when={hasTotal() && props.rows.length > 0}>
-          <tfoot>
-            <tr class="bg-surface-raised font-semibold">
-              <For each={props.columns}>
-                {(c, i) => (
-                  <td class={`px-3 py-2 ${TD[kind(c)]}`}>
-                    {undefined !== c.total ? c.total() : 0 === i() ? props.totalLabel : null}
-                  </td>
-                )}
-              </For>
-            </tr>
-          </tfoot>
-        </Show>
-      </table>
-    </div>
+    <DataTable
+      columns={props.columns.map(({ width, ...column }) => ({ ...column, widthClass: width }))}
+      rows={props.rows}
+      empty={props.empty}
+      totalLabel={props.totalLabel}
+      fillGutter={props.fillGutter}
+      testId={props.testId}
+      model={props.model}
+      scope={props.scope}
+    />
   );
 }

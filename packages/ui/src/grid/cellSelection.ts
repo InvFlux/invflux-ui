@@ -305,3 +305,70 @@ export function selectionRectsFromCells(cells: Iterable<CellCoord>): SelectionRe
 
   return out;
 }
+
+/** The distinct row indices the selection covers, ascending. */
+export function coveredRows(state: SelectionState): number[] {
+  return covered(state, (r) => [r.r1, r.r2]);
+}
+
+/** The distinct column indices the selection covers, ascending. */
+export function coveredColumns(state: SelectionState): number[] {
+  return covered(state, (r) => [r.c1, r.c2]);
+}
+
+function covered(state: SelectionState, span: (rect: SelectionRect) => [number, number]): number[] {
+  const set = new Set<number>();
+  for (const rect of state.ranges) {
+    const [a, b] = span(rect);
+    for (let i = Math.min(a, b); i <= Math.max(a, b); i++) set.add(i);
+  }
+  return [...set].sort((x, y) => x - y);
+}
+
+/** Consecutive runs of ascending indices, as [first, last] pairs. */
+function runsOf(indices: number[]): Array<[number, number]> {
+  const runs: Array<[number, number]> = [];
+  for (const i of indices) {
+    const last = runs[runs.length - 1];
+    if (last !== undefined && i === last[1] + 1) last[1] = i;
+    else runs.push([i, i]);
+  }
+  return runs;
+}
+
+/**
+ * Every row the selection covers, across all `cols` columns. Rows the selection skips stay
+ * unselected, unlike Shift+Space, which takes the span from the first selected row to the last.
+ * The active cell stays where it is.
+ */
+export function fullRowsOf(state: SelectionState, cols: number): SelectionState {
+  if (cols <= 0 || state.ranges.length === 0) return state;
+  return {
+    ...state,
+    ranges: runsOf(coveredRows(state)).map(([r1, r2]) => ({ r1, c1: 0, r2, c2: cols - 1 })),
+  };
+}
+
+/** Every column the selection covers, down all `rows` rows; as {@link fullRowsOf}, across. */
+export function fullColumnsOf(state: SelectionState, rows: number): SelectionState {
+  if (rows <= 0 || state.ranges.length === 0) return state;
+  return {
+    ...state,
+    ranges: runsOf(coveredColumns(state)).map(([c1, c2]) => ({ r1: 0, c1, r2: rows - 1, c2 })),
+  };
+}
+
+/**
+ * The selection with `cells` added; cells already selected are skipped. An empty selection takes
+ * its active cell from the first cell added.
+ */
+export function withCells(state: SelectionState, cells: Iterable<CellCoord>): SelectionState {
+  const added = [...cells].filter((c) => !isSelected(state, c.row, c.col));
+  if (added.length === 0) return state;
+  const first = added[0] as CellCoord;
+  return {
+    active: state.active ?? first,
+    anchor: state.anchor ?? first,
+    ranges: [...state.ranges, ...selectionRectsFromCells(added)],
+  };
+}

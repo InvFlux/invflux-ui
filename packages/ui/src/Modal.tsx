@@ -185,6 +185,8 @@ function makeBackgroundInert(
  */
 export function Modal(props: ModalProps): JSX.Element {
   let containerRef: HTMLDivElement | undefined;
+  // Whether the press that led to the next click began inside the panel (see the backdrop handler).
+  let pressStartedInside = false;
   const contextPortalRoot = usePortalRootOptional();
 
   /**
@@ -269,6 +271,17 @@ export function Modal(props: ModalProps): JSX.Element {
       watchVisibility.observe(containerRef);
     }
 
+    // Where a press began. A drag that starts in the panel (selecting text in a field) and ends on
+    // the scrim fires its `click` on the backdrop, their common ancestor; it must not read as a click
+    // on the scrim. Capture phase, because panels stop propagation of their own events.
+    containerRef?.addEventListener(
+      'pointerdown',
+      (event) => {
+        pressStartedInside = event.target !== containerRef;
+      },
+      true,
+    );
+
     // Fade in rather than appear — scrim and panel together, since both live on the backdrop.
     // `backwards` holds the transparent start until the animation begins and lets it go once done,
     // so nothing lingers on the element. Guarded for environments without Web Animations (jsdom).
@@ -311,7 +324,13 @@ export function Modal(props: ModalProps): JSX.Element {
         // from a descendant or, crucially, from a Kobalte listbox portaled OUT of the panel (its
         // option clicks would otherwise dismiss the modal instead of selecting). The panel still
         // stopPropagation()s as a second guard.
-        if ((props.closeOnBackdrop ?? true) && event.target === event.currentTarget)
+        //
+        // Nor one whose press began inside the panel and was released outside it: only a press
+        // that starts on the backdrop dismisses. A click with no press seen (assistive technology,
+        // a scripted click) still counts as a click on the backdrop.
+        const startedInside = pressStartedInside;
+        pressStartedInside = false;
+        if ((props.closeOnBackdrop ?? true) && event.target === event.currentTarget && !startedInside)
           props.onClose();
       }}
     >

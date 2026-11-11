@@ -351,3 +351,43 @@ describe('useDirtyCells', () => {
     });
   });
 });
+
+describe('useDirtyCells — linked edits', () => {
+  const patch = (columnId: string, original: unknown, next: unknown, linkedTo?: string) => ({
+    subjectId: 1,
+    columnId,
+    original,
+    next,
+    name: 'Tent',
+    sku: 'T-1',
+    ...(linkedTo === undefined ? {} : { linkedTo }),
+  });
+
+  it('keeps the link on the staged edit, and a later own edit of the cell ends it', () => {
+    withStore((s) => {
+      s.patchMany([patch('price', '20', '12'), patch('sale_price', '15', '', 'price')]);
+      expect(s.edit(1, 'sale_price')).toEqual({ original: '15', new: '', linkedTo: 'price' });
+
+      s.patch(1, 'sale_price', '15', '', 'Tent', 'T-1');
+      expect(s.edit(1, 'sale_price')).toEqual({ original: '15', new: '' });
+    });
+  });
+
+  it('reverting either end of a link reverts both, and leaves unlinked cells alone', () => {
+    for (const reverted of ['price', 'sale_price']) {
+      withStore((s) => {
+        s.patchMany([
+          patch('price', '20', '12'),
+          patch('sale_price', '15', '', 'price'),
+          patch('weight', '1', '2'),
+        ]);
+
+        s.revert([{ subjectId: 1, columnId: reverted }]);
+
+        expect(s.edit(1, 'price')).toBeUndefined();
+        expect(s.edit(1, 'sale_price')).toBeUndefined();
+        expect(s.edit(1, 'weight')).toEqual({ original: '1', new: '2' });
+      });
+    }
+  });
+});

@@ -1,58 +1,73 @@
 import { __ } from '@invflux/i18n';
-import { Button, createViewportFill, ErrorBanner } from '@invflux/ui';
+import {
+  Button,
+  ColumnsSettingsIcon,
+  createColumnModel,
+  createViewportFill,
+  DataTable,
+  type DataTableColumn,
+  ErrorBanner,
+} from '@invflux/ui';
 import { A, useNavigate } from '@solidjs/router';
 import { createQuery } from '@tanstack/solid-query';
-import {
-  createColumnHelper,
-  createSolidTable,
-  flexRender,
-  getCoreRowModel,
-} from '@tanstack/solid-table';
-import { createSignal, For, type JSX, Show } from 'solid-js';
+import { createSignal, type JSX, Show } from 'solid-js';
 import { StatusPill } from '../../components/StatusPill';
 import { useProcurement } from '../../context';
 import { createApi } from '../../lib/api';
 import { AddSupplierModal } from './AddSupplierModal';
 import type { Supplier, SuppliersResponse } from './types';
 
-const columnHelper = createColumnHelper<Supplier>();
-
-const columns = [
-  columnHelper.accessor('displayName', {
-    header: () => __('Supplier'),
-    cell: (info) => {
-      const row = info.row.original;
-      return (
+/**
+ * The list's columns, built when the list renders so every label is translated for the request's
+ * language.
+ */
+const supplierColumns = (): DataTableColumn<Supplier>[] => [
+  {
+    id: 'supplier',
+    header: __('Supplier'),
+    required: true,
+    sortValue: (row) => row.displayName,
+    cell: (row) => (
+      // The row's keyboard and assistive-tech entry point. A `<tr>` takes no focus and announces no
+      // destination, so a click handler on it is reachable by pointer only; the supplier name is the
+      // cell that names where the row goes, so it carries the link.
+      <A href={`/suppliers/${row.id}`} class="block">
         <span class="flex flex-col">
-          <span class="font-semibold">{info.getValue()}</span>
+          <span class="font-semibold">{row.displayName}</span>
           {/* When a nickname stands in for a long legal name, show the legal name as a hint. */}
           <Show when={row.nickname && row.nickname !== row.name}>
             <span class="text-xs text-text-muted">{row.name}</span>
           </Show>
         </span>
-      );
-    },
-  }),
-  columnHelper.accessor('currency', {
-    header: () => __('Currency'),
-    cell: (info) => info.getValue() ?? '—',
-  }),
-  columnHelper.accessor('paymentTerms', {
-    header: () => __('Payment terms'),
-    cell: (info) => info.getValue() ?? '—',
-  }),
-  columnHelper.accessor('leadTimeDays', {
-    header: () => __('Lead time'),
-    cell: (info) => {
-      const days = info.getValue();
-      return null === days ? '—' : `${days} d`;
-    },
-  }),
-  columnHelper.accessor('openPoCount', {
-    header: () => __('Open POs'),
-    cell: (info) => {
-      const row = info.row.original;
-      const open = info.getValue();
+      </A>
+    ),
+  },
+  {
+    id: 'currency',
+    header: __('Currency'),
+    sortValue: (row) => row.currency,
+    cell: (row) => row.currency ?? '—',
+  },
+  {
+    id: 'payment_terms',
+    header: __('Payment terms'),
+    sortValue: (row) => row.paymentTerms,
+    cell: (row) => row.paymentTerms ?? '—',
+  },
+  {
+    id: 'lead_time',
+    header: __('Lead time'),
+    kind: 'num',
+    sortValue: (row) => row.leadTimeDays,
+    cell: (row) => (null === row.leadTimeDays ? '—' : `${row.leadTimeDays} d`),
+  },
+  {
+    id: 'open_pos',
+    header: __('Open POs'),
+    kind: 'num',
+    sortValue: (row) => row.openPoCount,
+    cell: (row) => {
+      const open = row.openPoCount;
       const draft = row.draftPoCount;
       if (0 === open && 0 === draft) return <span class="text-slate-300">—</span>;
       // Deep-link the count to the supplier's POs tab; stop the row's detail navigation.
@@ -71,11 +86,13 @@ const columns = [
         </A>
       );
     },
-  }),
-  columnHelper.accessor('status', {
-    header: () => __('Status'),
-    cell: (info) => <StatusPill status={info.getValue()} />,
-  }),
+  },
+  {
+    id: 'status',
+    header: __('Status'),
+    sortValue: (row) => row.status,
+    cell: (row) => <StatusPill status={row.status} />,
+  },
 ];
 
 /**
@@ -93,13 +110,9 @@ export function SuppliersList(): JSX.Element {
     queryFn: () => api.get<SuppliersResponse>('/procurement/suppliers'),
   }));
 
-  const table = createSolidTable({
-    get data() {
-      return query.data?.suppliers ?? [];
-    },
-    columns,
-    getCoreRowModel: getCoreRowModel(),
-  });
+  // The operator's column choices for this list.
+  const model = createColumnModel({ scope: 'suppliers' });
+  const columns = supplierColumns();
 
   const isEmpty = (): boolean => query.isSuccess && 0 === (query.data?.suppliers.length ?? 0);
 
@@ -118,7 +131,21 @@ export function SuppliersList(): JSX.Element {
     >
       <header class="mb-4 flex items-center justify-between">
         <h1 class="text-xl font-semibold">{__('Suppliers')}</h1>
-        <Button onClick={() => setShowAdd(true)}>{__('+ Add supplier')}</Button>
+        <div class="flex items-center gap-2">
+          <Button onClick={() => setShowAdd(true)}>{__('+ Add supplier')}</Button>
+          <Button
+            variant="secondary"
+            size="xs"
+            class="px-1.5!"
+            title={__('Columns')}
+            aria-label={__('Columns')}
+            // Nothing to pick from while the table is not mounted (no rows).
+            disabled={!query.isSuccess || isEmpty()}
+            onClick={model.openPicker}
+          >
+            <ColumnsSettingsIcon class="h-4 w-4" />
+          </Button>
+        </div>
       </header>
 
       <Show when={query.isPending}>
@@ -132,69 +159,25 @@ export function SuppliersList(): JSX.Element {
       </Show>
 
       <Show when={query.isSuccess && !isEmpty()}>
-        {/* `min-h-0`: lets the panel shrink below its rows and scroll them, instead of pushing the
-            section past the height it was given. A short list still hugs its rows. */}
-        <div class="min-h-0 overflow-auto rounded border border-border bg-surface">
-          <table class="w-full border-collapse text-sm">
-            <thead class="sticky top-0 z-10 bg-surface-raised">
-              <For each={table.getHeaderGroups()}>
-                {(hg) => (
-                  <tr>
-                    <For each={hg.headers}>
-                      {(header) => (
-                        <th class="whitespace-nowrap border-b border-slate-200 px-3 py-2 text-left font-semibold text-slate-600">
-                          {flexRender(header.column.columnDef.header, header.getContext())}
-                        </th>
-                      )}
-                    </For>
-                  </tr>
-                )}
-              </For>
-            </thead>
-            <tbody>
-              <For each={table.getRowModel().rows}>
-                {(row) => {
-                  const href = (): string => `/suppliers/${row.original.id}`;
-
-                  return (
-                    <tr
-                      class="cursor-pointer hover:bg-slate-50"
-                      onClick={(event) => {
-                        // The first cell is a real link now, and the row click is only an
-                        // enhancement over it. Without this guard both fire: a plain click
-                        // navigates twice, and a ctrl/middle-click opens the row in a new tab AND
-                        // navigates this one — the row losing its place as the cost of the shortcut.
-                        if ((event.target as HTMLElement).closest('a,button,input,select,label')) {
-                          return;
-                        }
-                        navigate(href());
-                      }}
-                    >
-                      <For each={row.getVisibleCells()}>
-                        {(cell, index) => (
-                          <td class="border-b border-slate-100 px-3 py-2 align-top">
-                            <Show
-                              when={index() === 0}
-                              fallback={flexRender(cell.column.columnDef.cell, cell.getContext())}
-                            >
-                              {/* The row's keyboard and assistive-tech entry point. A `<tr>` takes
-                                no focus and announces no destination, so a click handler on it is
-                                reachable by pointer only; the supplier name is the cell that names
-                                where the row goes, so it carries the link. */}
-                              <A href={href()} class="block">
-                                {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                              </A>
-                            </Show>
-                          </td>
-                        )}
-                      </For>
-                    </tr>
-                  );
-                }}
-              </For>
-            </tbody>
-          </table>
-        </div>
+        {/* The table's box is a flex child of this section, whose height is fixed: its own overflow
+            lets it shrink below its rows and scroll them, instead of pushing the section past the
+            height it was given. A short list still hugs its rows. */}
+        <DataTable
+          columns={columns}
+          rows={query.data?.suppliers ?? []}
+          rowKey={(row) => String(row.id)}
+          model={model}
+          rowProps={() => ({ class: 'cursor-pointer' })}
+          onRowClick={(row, event) => {
+            // The name is a real link, and the row click is only an enhancement over it. Without
+            // this guard both fire: a plain click navigates twice, and a ctrl/middle-click opens the
+            // row in a new tab AND navigates this one.
+            if ((event.target as HTMLElement).closest('a,button,input,select,label')) return;
+            navigate(`/suppliers/${row.id}`);
+          }}
+          empty={null}
+          testId="supplier-list"
+        />
       </Show>
 
       <Show when={showAdd()}>

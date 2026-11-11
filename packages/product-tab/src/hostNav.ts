@@ -22,5 +22,6 @@ export const productTabHostNav: HostNav = {
     return `admin.php?page=invflux-app#${path}${query ? `?${query}` : ''}`;
   },
   pageHref: (page) => wordpressHostNav.pageHref(page),
+  termsHref: (taxonomy) => wordpressHostNav.termsHref?.(taxonomy) ?? null,
   opensNewTab: true,
 };

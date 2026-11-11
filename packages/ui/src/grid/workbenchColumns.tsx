@@ -41,6 +41,9 @@ export interface WorkbenchColumnDeps {
   stagedValue: (subjectId: number, columnId: string, original: unknown) => unknown;
   /** Whether a (subject, column) cell carries a staged (unsaved) edit — drives the amber tint. */
   isCellDirty: (subjectId: number, columnId: string) => boolean;
+  /** The field error on a cell from its staged values (a sale price not below the regular price), or
+   *  undefined. Drawn as a red outline with the message as the cell's tooltip. Absent → never. */
+  fieldError?: (row: WorkbenchRow, columnId: string) => string | undefined;
   /** Optional read-mode transform for the name cell (e.g. strip a variation's parent-name prefix).
    *  Receives the staged-or-persisted full name; returns the string to show. Edit mode uses the full
    *  name regardless. Absent → show the name verbatim. */
@@ -148,11 +151,22 @@ export function buildWorkbenchColumns(
     original: unknown,
     baseClass: string,
     format: (value: unknown) => string,
-  ): JSX.Element => (
-    <span class={baseClass} classList={{ 'text-amber-700': isCellDirty(row.subjectId, columnId) }}>
-      {format(stagedValue(row.subjectId, columnId, original))}
-    </span>
-  );
+  ): JSX.Element => {
+    const error = (): string | undefined => deps.fieldError?.(row, columnId);
+    return (
+      <span
+        class={baseClass}
+        classList={{
+          'text-amber-700': isCellDirty(row.subjectId, columnId),
+          'rounded px-1 ring-1 ring-red-400': error() !== undefined,
+        }}
+        title={error()}
+        data-field-error={error() !== undefined ? 'true' : undefined}
+      >
+        {format(stagedValue(row.subjectId, columnId, original))}
+      </span>
+    );
+  };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const defs: ColumnDef<WorkbenchRow, any>[] = [
@@ -317,7 +331,7 @@ export function buildWorkbenchColumns(
         return (
           <>
             {url ? (
-              <span class="absolute inset-y-1 left-2 block aspect-square">
+              <span class="absolute inset-y-1 left-2 block aspect-square rounded-sm">
                 <ThumbnailZoom src={url} fill />
               </span>
             ) : (

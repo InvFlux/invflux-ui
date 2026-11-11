@@ -170,7 +170,11 @@ export interface PoReceptionLine {
   /** The supplier's own code — the one printed on the carton, so the one a receiver matches. */
   supplierSku: string | null;
   gtin: string | null;
+  /** Every code a scan may match the line by: the product's barcodes, primary first. Empty when none. */
+  codes: string[];
   imageUrl: string | null;
+  /** Every size of the same picture, as an HTML `srcset`; null when the product has no picture. */
+  imageSrcset: string | null;
   /** Whether the host still has the product. A line whose product was deleted is shown, not hidden. */
   exists: boolean;
   /** Host post id, for the deep-link into the stock workbench. */
@@ -183,6 +187,11 @@ export interface PoReceptionLine {
   qtyOpen: number;
   /** What this count has staged but not committed — null while the line is uncounted. */
   staged: { received: number; damaged: number } | null;
+  /** The line's version a write must name — null while it has no row. */
+  version: number | null;
+  /** Who entered the staged figure, and when (ISO 8601). */
+  countedBy: string | null;
+  countedAt: string | null;
 }
 
 /** `GET /receiving/purchase-orders/{id}` — what to count, and what has been counted so far. */
@@ -209,6 +218,29 @@ export interface PoReceptionResponse {
   sessionOpen: boolean;
   note: string;
   participants: { name: string; lastSeen: number }[];
+  /** Where the next refresh starts: sent back as `since`. */
+  cursor: string;
+}
+
+/** A count line as a write or a refresh answers it. */
+export interface PoCountLine {
+  staged: { received: number; damaged: number } | null;
+  version: number | null;
+  countedBy: string | null;
+  countedAt: string | null;
+}
+
+/** `GET /receiving/purchase-orders/{id}/session/changes?since=` — what changed since the screen looked. */
+export interface PoReceptionChanges {
+  /** False once the count is over — posted, closed short or discarded, possibly by a coworker. */
+  sessionOpen: boolean;
+  receiving: boolean;
+  lines: (PoCountLine & { subjectId: number })[];
+  note: string;
+  participants: { name: string; lastSeen: number }[];
+  cursor: string;
+  /** How long an idle screen waits between refreshes — the store's setting. */
+  refreshSeconds?: number;
 }
 
 /** One staged row of a count that answers no document, with its product named. */

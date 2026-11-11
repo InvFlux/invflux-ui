@@ -3,6 +3,10 @@ import type { EditMove } from '@invflux/ui';
 /**
  * Where focus goes after a grid cell is committed — the seam a contributed capability fills.
  *
+ * A grid may also ask on Enter pressed over a cell it did not edit, as a commit that left the value
+ * unchanged: the receiving grid does, for its quantity cells, so a line found and needing nothing typed
+ * closes the way a counted one does.
+ *
  * The base moves focus the way the editor asked (`down` on Enter, `right` on Tab) and offers no
  * opinion beyond that. A capability that wants a different move — closing a filter/edit cycle so an
  * operator never reaches for the keyboard between entries — contributes a rule here and composes it

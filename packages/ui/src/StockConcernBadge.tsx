@@ -1,6 +1,6 @@
 import { __, _x, formatDateOnly, sprintf } from '@invflux/i18n';
 import { For, Show, useContext, type Component } from 'solid-js';
-import { HostNavCtx } from './hostNav';
+import { HostNavCtx, linksTo } from './hostNav';
 import { StockConcernBits, type StockConcerns } from './types';
 import { STOCK_CONCERN_LABEL } from './stockConcernLabels';
 
@@ -335,13 +335,18 @@ export const StockConcernBadge: Component<{
                     .filter((part) => part !== '')
                     .join(' — ');
                 const text = (): string => `${when()} (${po.qty})`;
+                const route = `/procurement/purchase-orders/${po.poId}`;
                 return (
                   <>
                     <Show when={i() > 0}>{', '}</Show>
-                    <Show when={hostNav} fallback={<span title={title()}>{text()}</span>}>
+                    {/* Linked only for someone who can open the order; the rest read the chip. */}
+                    <Show
+                      when={linksTo(hostNav, route)}
+                      fallback={<span title={title()}>{text()}</span>}
+                    >
                       <a
                         class="text-primary hover:text-primary-hover no-underline hover:underline"
-                        href={hostNav!.routeHref(`/procurement/purchase-orders/${po.poId}`)}
+                        href={hostNav!.routeHref(route)}
                         title={title()}
                         onClick={(e) => e.stopPropagation()}
                       >

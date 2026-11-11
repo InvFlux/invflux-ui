@@ -29,7 +29,25 @@ export interface HostNav {
    * should open a new tab; false when they navigate within a single-page host.
    */
   opensNewTab: boolean;
+
+  /**
+   * Href for the host's own page that edits a taxonomy's terms (a product attribute's values, the
+   * categories), or null when the host has none. Optional: a binding that links to no such page
+   * leaves it out.
+   */
+  termsHref?(taxonomy: string): string | null;
+
+  /**
+   * Whether the current user can open `route` on this host. False where the route belongs to a
+   * surface this user may not open, so a caller shows the text without a link to a page that would
+   * refuse them. Optional: a binding that cannot tell leaves it out, and callers link as before.
+   */
+  canOpen?(route: string): boolean;
 }
+
+/** Whether `route` may be linked on `nav`: a host that cannot tell is trusted to serve it. */
+export const linksTo = (nav: HostNav | undefined, route: string): nav is HostNav =>
+  undefined !== nav && false !== nav.canOpen?.(route);
 
 /**
  * Deliberately has **no default**. A default binding would make a missing provider invisible: every

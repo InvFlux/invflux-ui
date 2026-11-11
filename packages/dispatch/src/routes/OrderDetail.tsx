@@ -33,6 +33,7 @@ import {
   WorkbenchLinkIcon,
   buildProductActionItems,
   buttonClass,
+  Spinner,
   cx,
   slotRegistry,
   useHostNav,
@@ -45,12 +46,13 @@ import {
   ModalFooter,
   ModalHeader,
   ModalPanel,
-  ColumnPicker,
   ColumnsSettingsIcon,
+  DataTable,
+  createColumnModel,
   Input,
   usePortalRootOptional,
 } from '@invflux/ui';
-import type { PillTone, StageCode } from '@invflux/ui';
+import type { DataTableColumn, PillTone, StageCode } from '@invflux/ui';
 import { Dynamic } from 'solid-js/web';
 import { formatWallClock, type DispatchUser } from '@invflux/ui';
 import {
@@ -72,12 +74,6 @@ import { CapturePaymentModal } from '../components/CapturePaymentModal';
 import { noPaymentRecorded } from '../components/NoRecordedPaymentQuestion';
 import { SettleManualRefundModal } from '../components/SettleManualRefundModal';
 import { OrderNotesPanel } from '../components/OrderNotesPanel';
-import {
-  ORDER_LINE_COLUMNS,
-  loadHiddenOrderLineColumns,
-  saveHiddenOrderLineColumns,
-  type OrderLineColumnId,
-} from '../components/orderLineColumns';
 import { TimelinePanel } from '../components/TimelinePanel';
 import { useDispatch } from '../context';
 import { standaloneOrderPath, useOrderView } from '../orderView';
@@ -87,6 +83,7 @@ import { ALL_LINE_FILTER_FIELDS, filterLines } from './lineFilter';
 import { publishQueueSortEntitlements } from '../queueSort';
 import { hasDiscount, netUnitPrice } from '../lineRefund';
 import { useListStore } from '../listStore';
+import { useQueueSequence } from '../queueSequence';
 import {
   useDispatchOrderDetailQuery,
   useOrderCorrectionsQuery,
@@ -437,8 +434,23 @@ export function OrderDetail() {
     });
   });
 
-  const prevId = createMemo(() => listStore.getPrevId(hexIdForQuery()));
-  const nextId = createMemo(() => listStore.getNextId(hexIdForQuery()));
+  // The queue's sequence, published by the queue or worked out here when the queue has not been
+  // shown since the page loaded. An order in a tab of its own has no queue behind it.
+  const sequence = useQueueSequence(() => !view.standalone);
+  const neighbour = (step: -1 | 1): string | null => {
+    const ids = sequence.ids();
+    const at = ids.indexOf(hexIdForQuery());
+
+    return at < 0 ? null : (ids[at + step] ?? null);
+  };
+  const prevId = createMemo(() => neighbour(-1));
+  const nextId = createMemo(() => neighbour(1));
+  // Where this order stands in the sequence, for the readout between the two buttons.
+  const position = createMemo<QueuePosition | null>(() => {
+    const at = sequence.ids().indexOf(hexIdForQuery());
+
+    return at < 0 ? null : { at: at + 1, of: sequence.total() };
+  });
 
   /**
    * Prefetch the neighbour orders as soon as the current one is in
@@ -673,6 +685,8 @@ export function OrderDetail() {
             counts={null}
             prevDisabled={true}
             nextDisabled={true}
+            neighboursLoading={sequence.loading()}
+            neighbourPosition={position()}
             onPrev={goPrev}
             onNext={goNext}
           />
@@ -690,6 +704,8 @@ export function OrderDetail() {
             counts={null}
             prevDisabled={prevId() === null}
             nextDisabled={nextId() === null}
+            neighboursLoading={sequence.loading()}
+            neighbourPosition={position()}
             onPrev={goPrev}
             onNext={goNext}
           />
@@ -709,6 +725,8 @@ export function OrderDetail() {
             counts={null}
             prevDisabled={prevId() === null}
             nextDisabled={nextId() === null}
+            neighboursLoading={sequence.loading()}
+            neighbourPosition={position()}
             onPrev={goPrev}
             onNext={goNext}
           />
@@ -731,7 +749,10 @@ export function OrderDetail() {
             wcStatus={query.data!.order.wcStatus}
             nativeStatusOptions={ctx.nativeStatus.options}
             shortHex={null}
-            viewers={query.data!.viewers}
+            // Everyone else on this order: the operator knows they are looking at it, and listing them
+            // put their own name back in the pill on every order they opened, after a moment
+            // without it. Presence is per user, so a second tab of their own was never told apart.
+            viewers={query.data!.viewers.filter((v) => v.userId !== ctx.currentUser.id)}
             tagBar={<OrderTagsBar orderHexId={routeHexId()} tags={query.data!.order.tags} />}
             counts={{
               staged: query.data!.order.stagedCount,
@@ -740,6 +761,8 @@ export function OrderDetail() {
             }}
             prevDisabled={prevId() === null}
             nextDisabled={nextId() === null}
+            neighboursLoading={sequence.loading()}
+            neighbourPosition={position()}
             onPrev={goPrev}
             onNext={goNext}
           />
@@ -1013,6 +1036,8 @@ export function OrderDetail() {
             neighbours={!view.standalone}
             prevDisabled={prevId() === null}
             nextDisabled={nextId() === null}
+            neighboursLoading={sequence.loading()}
+            neighbourPosition={position()}
             onPrev={goPrev}
             onNext={goNext}
           />
@@ -1065,6 +1090,10 @@ function Header(props: {
   counts: { staged: number; settled: number; total: number } | null;
   prevDisabled: boolean;
   nextDisabled: boolean;
+  /** The queue's sequence is still arriving, so the neighbours are not known yet. */
+  neighboursLoading?: boolean;
+  /** This order's place in the queue, or null when it is not in it. */
+  neighbourPosition?: QueuePosition | null;
   onPrev: () => void;
   onNext: () => void;
 }) {
@@ -1166,28 +1195,141 @@ function Header(props: {
           </a>
         </Show>
         <Show when={props.neighbours}>
-          <div class="flex items-center gap-1">
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={props.prevDisabled}
-              onClick={props.onPrev}
-              title={__('Previous order in queue')}
-            >
-              {_x('← Prev', 'order navigation')}
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={props.nextDisabled}
-              onClick={props.onNext}
-              title={__('Next order in queue')}
-            >
-              {_x('Next →', 'order navigation')}
-            </Button>
-          </div>
+          <NeighbourNav
+            prevDisabled={props.prevDisabled}
+            nextDisabled={props.nextDisabled}
+            loading={props.neighboursLoading}
+            position={props.neighbourPosition}
+            onPrev={props.onPrev}
+            onNext={props.onNext}
+          />
         </Show>
       </div>
+    </div>
+  );
+}
+
+/** An order's place in the queue's sequence: `at` counts from 1, `of` is the whole view. */
+interface QueuePosition {
+  at: number;
+  of: number;
+}
+
+/**
+ * The previous and next orders in the queue, as one control: two halves of a single pill, since they
+ * are the two directions of one move rather than two separate actions, with the order's place in
+ * the queue between them — the count of the same list the two buttons step through. Glyphs, not
+ * words — the pair reads as a direction at a glance and spends no width on a narrow header; what
+ * each does is in its accessible name and tooltip.
+ *
+ * Below the `sm` breakpoint the control stands upright (▲ previous, ▼ next, the queue's own ↑/↓),
+ * which hands its width back to a header that has little to spare on a phone.
+ *
+ * `nextVariant` lets the shipped order's bar keep Next as the filled button: once an order has
+ * shipped, moving on is the one thing left to do there.
+ */
+function NeighbourNav(props: {
+  prevDisabled: boolean;
+  nextDisabled: boolean;
+  /** The queue's sequence is still arriving: a spinner stands between the two halves until it is in. */
+  loading?: boolean;
+  /** This order's place in the queue, shown between the two halves; nothing when it is not in it. */
+  position?: QueuePosition | null;
+  onPrev: () => void;
+  onNext: () => void;
+  nextVariant?: 'secondary' | 'primary';
+}) {
+  // The middle segment, upright or not: `-ml-px` / `-mt-px` lay its borders over its neighbours',
+  // so each seam is one line, not two.
+  const middle =
+    '-ml-px max-sm:ml-0 max-sm:-mt-px inline-flex items-center justify-center border border-border bg-surface px-2 text-xs text-text-muted tabular-nums';
+
+  // U+FE0E asks for the text form of the triangles: without it some platforms draw them as emoji.
+  return (
+    <div
+      class="inline-flex items-stretch max-sm:flex-col"
+      role="group"
+      aria-label={__('Orders in the queue')}
+    >
+      <button
+        type="button"
+        class={buttonClass(
+          'secondary',
+          'sm',
+          'rounded-l rounded-r-none max-sm:rounded-t max-sm:rounded-b-none',
+        )}
+        disabled={props.prevDisabled}
+        onClick={() => props.onPrev()}
+        title={__('Previous order in queue')}
+        aria-label={__('Previous order in queue')}
+        data-testid="order-nav-prev"
+      >
+        <span aria-hidden="true" class="max-sm:hidden">
+          {'\u25C0\uFE0E'}
+        </span>
+        <span aria-hidden="true" class="sm:hidden">
+          {'\u25B2\uFE0E'}
+        </span>
+      </button>
+      {/*
+        While the queue's orders are still arriving — an order opened by a link, or a reload on an
+        order — the neighbours are not known yet, so both halves are disabled; the middle segment
+        says why, and gives way to the order's place once the sequence is in. An order that is not
+        part of it (closed, or outside the remembered view) has no place to show.
+        Nothing to press: the orders are already downloading.
+      */}
+      <Switch>
+        <Match when={props.loading}>
+          <span class={middle} data-testid="order-nav-loading">
+            <Spinner size="xs" label={__('Loading the queue…')} />
+          </span>
+        </Match>
+        <Match when={props.position}>
+          {(position) => {
+            const label = (): string =>
+              sprintf(
+                /* translators: 1: the order's place in the dispatch queue, 2: orders in the queue. */
+                __('Order %1$d of %2$d in the queue'),
+                position().at,
+                position().of,
+              );
+
+            return (
+              <span class={middle} title={label()} data-testid="order-nav-position">
+                <span aria-hidden="true">
+                  {sprintf(
+                    /* translators: the order's place in the dispatch queue, as a compact count between the previous and next buttons: 1: its place, 2: orders in the queue. */
+                    _x('%1$d/%2$d', 'order page: place in the queue'),
+                    position().at,
+                    position().of,
+                  )}
+                </span>
+                <span class="sr-only">{label()}</span>
+              </span>
+            );
+          }}
+        </Match>
+      </Switch>
+      <button
+        type="button"
+        class={buttonClass(
+          props.nextVariant ?? 'secondary',
+          'sm',
+          'rounded-r rounded-l-none -ml-px max-sm:ml-0 max-sm:-mt-px max-sm:rounded-b max-sm:rounded-t-none',
+        )}
+        disabled={props.nextDisabled}
+        onClick={() => props.onNext()}
+        title={__('Next order in queue')}
+        aria-label={__('Next order in queue')}
+        data-testid="order-nav-next"
+      >
+        <span aria-hidden="true" class="max-sm:hidden">
+          {'\u25B6\uFE0E'}
+        </span>
+        <span aria-hidden="true" class="sm:hidden">
+          {'\u25BC\uFE0E'}
+        </span>
+      </button>
     </div>
   );
 }
@@ -1282,261 +1424,185 @@ function LineTable(props: {
     );
   };
 
-  // Which optional columns this operator has put away — see `orderLineColumns.ts`.
-  const [hiddenColumns, setHiddenColumns] = createSignal<OrderLineColumnId[]>(
-    loadHiddenOrderLineColumns(),
-  );
-  const [pickerOpen, setPickerOpen] = createSignal(false);
-  const toggleColumn = (id: OrderLineColumnId): void => {
-    const next = hiddenColumns().includes(id)
-      ? hiddenColumns().filter((c) => c !== id)
-      : [...hiddenColumns(), id];
-    setHiddenColumns(next);
-    saveHiddenOrderLineColumns(next);
-  };
-  const chosen = (id: OrderLineColumnId): boolean => !hiddenColumns().includes(id);
+  // The operator's choices for this table — order, visibility, widths, display settings — kept per
+  // browser under the table's own scope, so hiding a column here says nothing about any other table.
+  const model = createColumnModel({ scope: 'dispatch-order-lines' });
 
-  // Two different reasons a column is absent, kept apart. The operator's choice (`chosen`) is a
-  // preference; the data test is what stops a column of dashes on an order with nothing to say in
-  // it. A column shows only when both allow it.
-  const showPrice = createMemo(() => chosen('price'));
-  const showShippingClass = createMemo(
-    () => chosen('shipping_class') && props.lines.some((l) => (l.shippingClass ?? '') !== ''),
+  // Two different reasons a column is absent, kept apart. The operator's choice lives in the model; the
+  // data test below is what stops a column of dashes on an order with nothing to say in it. A column
+  // that is unavailable for this order keeps its saved place and visibility for the next one.
+  const hasShippingClass = createMemo(() =>
+    props.lines.some((l) => (l.shippingClass ?? '') !== ''),
   );
   const me = useDispatch().currentUser;
   // Everything the stock cell can say, not just the concern bits: an unmanaged line or inbound
   // cover renders there too, and hiding the column on the bits alone would hide those with it.
-  const showStock = createMemo(
+  const hasStockSignal = createMemo(
     () =>
       !props.hideStock &&
       props.lines.some(
         (l) => l.stockState !== 0 || l.unmanaged === true || l.inbound !== undefined,
       ),
   );
-  // Thumbnail, product, SKU, qty and stage are always there; the rest are counted.
-  const emptyColSpan = createMemo(
-    () => 5 + Number(showPrice()) + Number(showShippingClass()) + Number(showStock()),
+
+  /*
+    Header content is built once, here, rather than inside the column list: the list is rebuilt when a
+    column's availability flips, and a header rebuilt with it would be a new element each time.
+  */
+  const productHeader = (
+    <span class="inline-flex items-center gap-2">
+      {__('Product')}
+      {/* Open EVERY line of this order in the workbench at once, addressed by subject id — no host id
+        needed, so the hand-off carries no platform assumption. Embedded this navigates in-app;
+        standalone the workbench is another admin page, hence a new tab.
+
+        A glyph button, matching the product tab's hand-off to the same destination: one affordance
+        appearing in two places should look like one affordance. Its name lives in the accessible
+        name, which is the same sentence the tooltip carries. */}
+      <Show when={props.lines.length > 0}>
+        <a
+          class={buttonClass('secondary', 'xs', 'px-1.5!')}
+          href={hostNav.routeHref(
+            '/workbench',
+            `subject_ids=${[...new Set(props.lines.map((l) => l.subjectId))].join('-')}&bring_children=1`,
+          )}
+          target={hostNav.opensNewTab ? '_blank' : undefined}
+          rel={hostNav.opensNewTab ? 'noopener' : undefined}
+          title={__("Open this order's products in the workbench")}
+          aria-label={__("Open this order's products in the workbench")}
+        >
+          <WorkbenchLinkIcon class="h-4 w-4" />
+        </a>
+      </Show>
+    </span>
+  );
+  const skuHeader = (
+    <span>
+      {_x('SKU', 'WooCommerce product field: SKU (stock keeping unit)')} /{' '}
+      <i>{_x('GTIN', 'product barcode number: GTIN (Global Trade Item Number — EAN, UPC)')}</i>
+    </span>
+  );
+  // The picker lives on the table it controls — the table has no toolbar, and a control anywhere
+  // else reads as page-wide. It sits in the last header cell, right-aligned like the stage cells
+  // below it. A click on it never sorts: the header ignores clicks on its own controls.
+  const stageHeader = (
+    <span class="flex items-center justify-end gap-2">
+      {_x('Stage', 'order line column')}
+      <button
+        type="button"
+        class={buttonClass('secondary', 'xs', 'px-1.5!')}
+        title={__('Columns')}
+        aria-label={__('Columns')}
+        onClick={() => model.openPicker()}
+      >
+        <ColumnsSettingsIcon class="h-4 w-4" />
+      </button>
+    </span>
   );
 
-  return (
-    /*
-      `border-separate` with a row gap, so each line is its OWN surface on the page ground rather
-      than a stripe inside one slab — a line becomes an object you can pick out. Note the borders
-      move with it: in separate mode a border on `<tr>` is not painted at all, so the header's rule
-      lives on its cells instead.
-    */
-    // Scrolls inside itself, so a narrow screen never scrolls the page sideways.
-    <div class="overflow-x-auto">
-      <table class="w-full border-separate border-spacing-y-[3px] text-sm">
-        <thead>
-          {/*
-          The fill and the radius live on the CELLS, not on the row. A `<tr>` honours neither
-          `border-radius` nor — in `border-separate` mode — a border, so the row can only ever paint
-          a square block; the cells can do both. Horizontal spacing is 0, so they abut and the fill
-          reads as one continuous band with only its two outer corners rounded.
-        */}
-          <tr
-            class={cx(
-              '[&>th]:border-b [&>th]:border-border [&>th]:bg-surface-raised',
-              '[&>th:first-child]:rounded-tl-lg [&>th:last-child]:rounded-tr-lg',
-            )}
-          >
-            <th class="px-1.5 py-2" />
-            <th class="px-1.5 py-2 text-left text-xs font-medium text-text uppercase tracking-wide">
-              <span class="inline-flex items-center gap-2">
-                {__('Product')}
-                {/* Open EVERY line of this order in the workbench at once, addressed by subject id —
-                  no host id needed, so the hand-off carries no platform assumption. Embedded this
-                  navigates in-app; standalone the workbench is another admin page, hence a new tab.
+  /*
+    Only two columns can be put away: Price and Shipping class. Everything else is what a packer needs
+    to do the job — what the item is, how to identify it, how many, what state it is in, what is wrong
+    with it — so it is required, and the picker shows it checked and disabled rather than leaving it
+    out, so the list matches the headers. Price is public data, visible on the storefront; hiding it is
+    a convenience for someone who wants only operational information on screen, never access control.
 
-                  A glyph button, matching the product tab's hand-off to the same destination: one
-                  affordance appearing in two places should look like one affordance, and the icon
-                  is what a reader already associates with the workbench. It was a text link, which
-                  read as part of the column heading it sits beside and wrapped to two lines on a
-                  narrow viewport — a control that looks like a label. The name it loses lives in
-                  the accessible name, which is the same sentence the tooltip carries. */}
-                <Show when={props.lines.length > 0}>
-                  <a
-                    class={buttonClass('secondary', 'xs', 'px-1.5!')}
-                    href={hostNav.routeHref(
-                      '/workbench',
-                      `subject_ids=${[...new Set(props.lines.map((l) => l.subjectId))].join('-')}&bring_children=1`,
-                    )}
-                    target={hostNav.opensNewTab ? '_blank' : undefined}
-                    rel={hostNav.opensNewTab ? 'noopener' : undefined}
-                    title={__("Open this order's products in the workbench")}
-                    aria-label={__("Open this order's products in the workbench")}
-                  >
-                    <WorkbenchLinkIcon class="h-4 w-4" />
-                  </a>
-                </Show>
-              </span>
-            </th>
-            <th class="px-1.5 py-2 text-left text-xs font-medium text-text uppercase tracking-wide">
-              {_x('SKU', 'WooCommerce product field: SKU (stock keeping unit)')} /{' '}
-              <i>
-                {_x('GTIN', 'product barcode number: GTIN (Global Trade Item Number — EAN, UPC)')}
-              </i>
-            </th>
-            <Show when={showPrice()}>
-              <th class="px-1.5 py-2 text-right text-xs font-medium text-text uppercase tracking-wide">
-                {_x('Price', 'order line column')}
-              </th>
-            </Show>
-            <th class="px-1.5 py-2 text-center text-xs font-medium text-text uppercase tracking-wide">
-              {_x('Qty', 'order line column')}
-            </th>
-            <Show when={showShippingClass()}>
-              <th class="px-1.5 py-2 text-left text-xs font-medium text-text uppercase tracking-wide">
-                {__('Shipping class')}
-              </th>
-            </Show>
-            <Show when={showStock()}>
-              <th class="px-1.5 py-2 text-left text-xs font-medium text-text uppercase tracking-wide">
-                {_x('Stock concerns', 'order line column')}
-              </th>
-            </Show>
-            {/* The picker lives on the table it controls — the table has no toolbar, and a control
-              anywhere else reads as page-wide. It sits in the last header cell, right-aligned like
-              the stage cells below it. */}
-            <th class="px-1.5 py-2 text-xs font-medium text-text uppercase tracking-wide">
-              <div class="flex items-center justify-end gap-2">
-                {_x('Stage', 'order line column')}
-                <button
-                  type="button"
-                  class={buttonClass('secondary', 'xs', 'px-1.5!')}
-                  title={__('Columns')}
-                  aria-label={__('Columns')}
-                  onClick={() => setPickerOpen(true)}
-                >
-                  <ColumnsSettingsIcon class="h-4 w-4" />
-                </button>
-              </div>
-            </th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-gray-100">
-          <For
-            each={props.lines}
-            fallback={
-              <tr>
-                <td colspan={emptyColSpan()} class="px-3 py-6 text-center text-text-muted text-sm">
-                  {props.filtered
-                    ? __('No line on this order matches the filter.')
-                    : __('No lines on this order.')}
-                </td>
-              </tr>
-            }
-          >
-            {(line) => {
-              const stage = lineStage(line);
-              const shippable = unshippedQty(line);
-              // `stagedQty > 0`, not `shippable > 0`: a line can hold a stage it is no longer allowed
-              // to ship — stage it, then correct away the rest of the quantity, and `shippable` falls
-              // to 0 while the units stay staged. Keyed on `shippable` the button flipped back to
-              // "Stage" and disabled itself, so the operator could see the staged units and had no way
-              // to release them. What decides the label is what is staged, not what is still shippable.
-              const isFullyStaged = line.stagedQty > 0 && line.stagedQty >= shippable;
-              // On an order that cannot ship, the only move is back: a line holding a stage — even
-              // a partial one — releases it, and an unstaged one is disabled with the order's reason.
-              const releases = (): boolean =>
-                isFullyStaged || (props.stageBlockedReason !== undefined && line.stagedQty > 0);
-              const blockedByOrder = (): boolean =>
-                props.stageBlockedReason !== undefined && !releases();
-              const buttonLabel = (): string =>
-                releases() ? _x('Un-stage', 'order line action') : _x('Stage', 'order line action');
-              // ACCESSORS, not values. `props.pendingLineId` goes on changing after this row is
-              // built, and a plain const captures whatever it happened to be at build time — which
-              // is the worst possible instant. The row is rebuilt when `lines` changes identity, and
-              // the LAST such rebuild is the one inside `onSuccess`, while the mutation is still
-              // pending; settling changes no line, so nothing rebuilt the row again and the button
-              // stayed disabled until a reload. Read through a function and it tracks.
-              const isPending = (): boolean => props.pendingLineId === line.lineId;
-              const isArmed = (): boolean => props.armedLineId === line.lineId;
-              // Nothing to ship AND nothing staged means there is no toggle to make. Either one alone
-              // still leaves a move available: stage it, or give the stage back.
-              // A line committed stock cannot cover is not staged: the server refuses it, and the
-              // button says so before the click rather than after. Giving a stage back stays open.
-              const blockedByStock = (): boolean => !releases() && (line.stockShortQty ?? 0) > 0;
-              const isDisabled = (): boolean =>
-                (shippable === 0 && line.stagedQty === 0) ||
-                blockedByOrder() ||
-                blockedByStock() ||
-                isPending();
-              return (
-                <tr
-                  class={cx(
-                    'group bg-surface transition-colors',
-                    stage === 'M' ? 'bg-green-50/40' : 'hover:bg-surface-hover',
-                    // The armed line: tinted, with a bar down its leading edge. On the cells, since
-                    // a row in this table paints neither a border nor a fill of its own.
-                    isArmed() &&
-                      '[&>td]:bg-primary/10 [&>td:first-child]:shadow-[inset_3px_0_0_var(--color-primary)]',
-                  )}
-                  data-armed={isArmed() ? 'true' : undefined}
-                >
-                  {/* The thumbnail is the tallest thing in the row, so its padding sets the row
-                    height for every line. `py-0.5` — the image already carries its own visual
-                    padding, and the rows are separated by a gap now, so the cell does not need to
-                    provide the breathing room a contiguous table wanted. */}
-                  <td class="px-1.5 py-0.5">
-                    <ThumbnailZoom src={line.imageUrl} alt={line.name} />
-                  </td>
-                  <td class="px-1.5 py-2">
-                    {/*
+    A column sorts exactly when it has a `sortValue`. The thumbnail and the stage controls have no
+    order worth giving the operator, so they do not. Sorting is a view of the lines only: what a scan
+    stages is decided by line id, never by the line's position.
+  */
+  const thumbnailColumn: DataTableColumn<DispatchOrderLine> = {
+    id: 'thumbnail',
+    label: () => _x('Image', 'order line column: the product thumbnail'),
+    required: true,
+    // Starts at the thumbnail (36px) plus the cell's padding, and the operator may widen it: a
+    // table hands spare width to columns without a width, and an image column is the last place
+    // it is any use.
+    defaultSize: 52,
+    cell: (line) => <ThumbnailZoom src={line.imageUrl} alt={line.name} />,
+  };
+  // A line's SKU, and its GTIN below when that is a different number: the SKU column's content,
+  // and what the product cell shows under the name while that column is collapsed for width.
+  const lineCodes = (line: DispatchOrderLine) => (
+    <>
+      {line.sku ? highlighted(line.sku, 'sku') : '—'}
+      {/* Only when it adds something: plenty of stores use the barcode as the SKU, and
+          printing the same digits twice spends a line saying nothing. Compared with
+          leading zeros stripped — a GTIN is zero-padded to a fixed length, so a UPC-12
+          SKU and its EAN-13 form are the same number. */}
+      <Show when={line.gtin && line.gtin.replace(/^0+/, '') !== line.sku.replace(/^0+/, '')}>
+        <div class="text-[11px] italic">{line.gtin}</div>
+      </Show>
+    </>
+  );
+  const productColumn: DataTableColumn<DispatchOrderLine> = {
+    id: 'product',
+    header: productHeader,
+    label: () => __('Product'),
+    required: true,
+    sortValue: (line) => line.name,
+    cell: (line, ctx) => (
+      <>
+        {/*
                     The product name opens a platform-agnostic links menu (the
                     adapter supplies label+url+kind; the SPA knows nothing about
                     WooCommerce). Falls back to plain text when no links resolved.
                   */}
-                    <Show
-                      when={line.links.length > 0}
-                      fallback={
-                        <span class="font-medium text-gray-800">
-                          {highlighted(line.name, 'name')}
-                        </span>
-                      }
-                    >
-                      <DropdownMenu
-                        ariaLabel={sprintf(
-                          /* translators: %s: the product's name */ __('Product actions for %s'),
-                          line.name,
-                        )}
-                        triggerClass="inline-flex items-center gap-1 text-left font-medium text-gray-800 hover:text-primary cursor-pointer decoration-dotted underline-offset-2 hover:underline"
-                        trigger={
-                          <>
-                            {highlighted(line.name, 'name')}
-                            <span class="text-2xs text-text-muted" aria-hidden="true">
-                              ▾
-                            </span>
-                          </>
-                        }
-                        // Host-platform links (editor, storefront) + the client-built ledger route —
-                        // one shared builder so this menu stays identical to the workbench name cell.
-                        items={buildProductActionItems({
-                          links: line.links,
-                          subjectId: line.subjectId,
-                          hostNav,
-                        })}
-                      />
-                    </Show>
-                  </td>
-                  <td class="px-1.5 py-2 font-mono text-xs text-gray-500">
-                    {line.sku ? highlighted(line.sku, 'sku') : '—'}
-                    {/* Only when it adds something: plenty of stores use the barcode as the SKU, and
-                      printing the same digits twice spends a line saying nothing. Compared with
-                      leading zeros stripped — a GTIN is zero-padded to a fixed length, so a UPC-12
-                      SKU and its EAN-13 form are the same number. */}
-                    <Show
-                      when={
-                        line.gtin && line.gtin.replace(/^0+/, '') !== line.sku.replace(/^0+/, '')
-                      }
-                    >
-                      <div class="text-[11px] italic">{line.gtin}</div>
-                    </Show>
-                  </td>
-                  <Show when={showPrice()}>
-                    <td class="px-1.5 py-2 text-right tabular-nums text-gray-700">
-                      {/*
+        <Show
+          when={line.links.length > 0}
+          fallback={<span class="font-medium text-gray-800">{highlighted(line.name, 'name')}</span>}
+        >
+          <DropdownMenu
+            ariaLabel={sprintf(
+              /* translators: %s: the product's name */ __('Product actions for %s'),
+              line.name,
+            )}
+            triggerClass="inline-flex items-center gap-1 text-left font-medium text-gray-800 hover:text-primary cursor-pointer decoration-dotted underline-offset-2 hover:underline"
+            trigger={
+              <>
+                {highlighted(line.name, 'name')}
+                <span class="text-2xs text-text-muted" aria-hidden="true">
+                  ▾
+                </span>
+              </>
+            }
+            // Host-platform links (editor, storefront) + the client-built ledger route —
+            // one shared builder so this menu stays identical to the workbench name cell.
+            items={buildProductActionItems({
+              links: line.links,
+              subjectId: line.subjectId,
+              hostNav,
+            })}
+          />
+        </Show>
+        <Show when={ctx.collapsed('sku')}>
+          <div class="mt-0.5 font-mono text-xs text-text-muted" data-testid="line-codes-under-name">
+            {lineCodes(line)}
+          </div>
+        </Show>
+      </>
+    ),
+  };
+  const skuColumn: DataTableColumn<DispatchOrderLine> = {
+    id: 'sku',
+    header: skuHeader,
+    label: () =>
+      `${_x('SKU', 'WooCommerce product field: SKU (stock keeping unit)')} / ${_x('GTIN', 'product barcode number: GTIN (Global Trade Item Number — EAN, UPC)')}`,
+    required: true,
+    kind: 'code',
+    sortValue: (line) => line.sku,
+    // On a narrow table the column gives way and the product cell carries its codes instead.
+    collapseBelow: 'md',
+    cell: (line) => lineCodes(line),
+  };
+  const priceColumn: DataTableColumn<DispatchOrderLine> = {
+    id: 'price',
+    header: _x('Price', 'order line column'),
+    kind: 'num',
+    sortValue: (line) => Number(netUnitPrice(line)),
+    cell: (line) => (
+      <>
+        {/*
                     Resolve through the shared `decimal:money` view
                     so a future merchant
                     override (e.g. currency-prefixed) lands in every
@@ -1544,112 +1610,161 @@ function LineTable(props: {
                     The price shown is the one paid; a discounted line keeps its list price above
                     it, struck, so the figures still match the host order's.
                   */}
-                      <Show when={hasDiscount(line)}>
-                        <s
-                          class="block text-[11px] text-text-muted"
-                          title={__('Price before discount')}
-                        >
-                          <Show when={moneyView} fallback={line.unitPrice}>
-                            <Dynamic
-                              component={moneyView!}
-                              value={line.unitPrice}
-                              row={line}
-                              column={{ dataType: 'decimal:money', editorConfig: {} }}
-                              ctx={{}}
-                            />
-                          </Show>
-                        </s>
-                      </Show>
-                      <Show when={moneyView} fallback={<span>{netUnitPrice(line)}</span>}>
-                        <Dynamic
-                          component={moneyView!}
-                          value={netUnitPrice(line)}
-                          row={line}
-                          column={{ dataType: 'decimal:money', editorConfig: {} }}
-                          ctx={{}}
-                        />
-                      </Show>
-                    </td>
-                  </Show>
-                  <td class="px-1.5 py-2 text-center tabular-nums">
-                    <span
-                      class={
-                        line.qtyOrdered > 1 ? 'font-bold text-base text-gray-900' : 'text-gray-700'
-                      }
-                    >
-                      {line.qtyOrdered}
-                    </span>
-                    <Show when={line.qtyCorrected > 0}>
-                      <span
-                        class="ml-1 text-xs text-red-500"
-                        title={sprintf(
-                          _n(
-                            '%d corrected (cancelled / written-off)',
-                            '%d corrected (cancelled / written-off)',
-                            line.qtyCorrected,
-                          ),
-                          line.qtyCorrected,
-                        )}
-                      >
-                        −{line.qtyCorrected}
-                      </span>
-                    </Show>
-                    <Show when={line.qtyShipped > 0}>
-                      <span
-                        class="ml-1 text-xs text-emerald-600"
-                        title={sprintf(
-                          _n('%d already shipped', '%d already shipped', line.qtyShipped),
-                          line.qtyShipped,
-                        )}
-                      >
-                        ✓{line.qtyShipped}
-                      </span>
-                    </Show>
-                  </td>
-                  <Show when={showShippingClass()}>
-                    <td class="px-1.5 py-2 text-xs whitespace-nowrap">
-                      {/* A dash, as this table prints for a missing SKU. Per line a cell holds one value,
+        <Show when={hasDiscount(line)}>
+          <s class="block text-[11px] text-text-muted" title={__('Price before discount')}>
+            <Show when={moneyView} fallback={line.unitPrice}>
+              <Dynamic
+                component={moneyView!}
+                value={line.unitPrice}
+                row={line}
+                column={{ dataType: 'decimal:money', editorConfig: {} }}
+                ctx={{}}
+              />
+            </Show>
+          </s>
+        </Show>
+        <Show when={moneyView} fallback={<span>{netUnitPrice(line)}</span>}>
+          <Dynamic
+            component={moneyView!}
+            value={netUnitPrice(line)}
+            row={line}
+            column={{ dataType: 'decimal:money', editorConfig: {} }}
+            ctx={{}}
+          />
+        </Show>
+      </>
+    ),
+  };
+  const qtyColumn: DataTableColumn<DispatchOrderLine> = {
+    id: 'qty',
+    header: _x('Qty', 'order line column'),
+    required: true,
+    kind: 'center',
+    sortValue: (line) => line.qtyOrdered,
+    cell: (line) => (
+      <>
+        <span class={line.qtyOrdered > 1 ? 'font-bold text-base text-gray-900' : 'text-gray-700'}>
+          {line.qtyOrdered}
+        </span>
+        <Show when={line.qtyCorrected > 0}>
+          <span
+            class="ml-1 text-xs text-red-500"
+            title={sprintf(
+              _n(
+                '%d corrected (cancelled / written-off)',
+                '%d corrected (cancelled / written-off)',
+                line.qtyCorrected,
+              ),
+              line.qtyCorrected,
+            )}
+          >
+            −{line.qtyCorrected}
+          </span>
+        </Show>
+        <Show when={line.qtyShipped > 0}>
+          <span
+            class="ml-1 text-xs text-emerald-600"
+            title={sprintf(
+              _n('%d already shipped', '%d already shipped', line.qtyShipped),
+              line.qtyShipped,
+            )}
+          >
+            ✓{line.qtyShipped}
+          </span>
+        </Show>
+      </>
+    ),
+  };
+  const shippingClassColumn: DataTableColumn<DispatchOrderLine> = {
+    id: 'shipping_class',
+    header: __('Shipping class'),
+    sortValue: (line) => line.shippingClass ?? '',
+    cell: (line) => (
+      <span class="text-xs whitespace-nowrap">
+        {/* A dash, as this table prints for a missing SKU. Per line a cell holds one value,
                         so the dash says "no class" unambiguously; the queue's column keeps the word
                         `none` because there it sits inside a list, where a dash reads as punctuation. */}
-                      <Show
-                        when={line.shippingClass}
-                        fallback={<span class="text-gray-300">—</span>}
-                      >
-                        {line.shippingClass}
-                      </Show>
-                    </td>
-                  </Show>
-                  <Show when={showStock()}>
-                    <td class="px-1.5 py-2 text-center">
-                      {/*
+        <Show when={line.shippingClass} fallback={<span class="text-gray-300">—</span>}>
+          {line.shippingClass}
+        </Show>
+      </span>
+    ),
+  };
+  const stockColumn: DataTableColumn<DispatchOrderLine> = {
+    id: 'stock',
+    header: _x('Stock concerns', 'order line column'),
+    required: true,
+    kind: 'center',
+    cell: (line) => (
+      <>
+        {/*
                     Resolve through the shared `stock-concerns` view.
                     The built-in renders
                     a StockConcernBadge; a plug-in can override it
                     once and the new component renders everywhere.
                   */}
-                      <Show
-                        when={stockConcernsView}
-                        fallback={
-                          <StockConcernBadge
-                            bits={line.stockState}
-                            deficitQty={line.stockDeficitQty}
-                            unmanaged={line.unmanaged}
-                            inbound={line.inbound}
-                          />
-                        }
-                      >
-                        <Dynamic
-                          component={stockConcernsView!}
-                          value={line.stockState}
-                          row={line}
-                          column={{ dataType: 'stock-concerns', editorConfig: {} }}
-                          ctx={{}}
-                        />
-                      </Show>
-                    </td>
-                  </Show>
-                  <td class="px-1.5 py-2">
-                    {/*
+        <Show
+          when={stockConcernsView}
+          fallback={
+            <StockConcernBadge
+              bits={line.stockState}
+              deficitQty={line.stockDeficitQty}
+              unmanaged={line.unmanaged}
+              inbound={line.inbound}
+            />
+          }
+        >
+          <Dynamic
+            component={stockConcernsView!}
+            value={line.stockState}
+            row={line}
+            column={{ dataType: 'stock-concerns', editorConfig: {} }}
+            ctx={{}}
+          />
+        </Show>
+      </>
+    ),
+  };
+  const stageColumn: DataTableColumn<DispatchOrderLine> = {
+    id: 'stage',
+    header: stageHeader,
+    label: () => _x('Stage', 'order line column'),
+    required: true,
+    cell: (line) => {
+      const shippable = unshippedQty(line);
+      // `stagedQty > 0`, not `shippable > 0`: a line can hold a stage it is no longer allowed
+      // to ship — stage it, then correct away the rest of the quantity, and `shippable` falls
+      // to 0 while the units stay staged. Keyed on `shippable` the button flipped back to
+      // "Stage" and disabled itself, so the operator could see the staged units and had no way
+      // to release them. What decides the label is what is staged, not what is still shippable.
+      const isFullyStaged = line.stagedQty > 0 && line.stagedQty >= shippable;
+      // On an order that cannot ship, the only move is back: a line holding a stage — even
+      // a partial one — releases it, and an unstaged one is disabled with the order's reason.
+      const releases = (): boolean =>
+        isFullyStaged || (props.stageBlockedReason !== undefined && line.stagedQty > 0);
+      const blockedByOrder = (): boolean => props.stageBlockedReason !== undefined && !releases();
+      const buttonLabel = (): string =>
+        releases() ? _x('Un-stage', 'order line action') : _x('Stage', 'order line action');
+      // ACCESSORS, not values. `props.pendingLineId` goes on changing after this cell is
+      // built, and a plain const captures whatever it happened to be at build time — which
+      // is the worst possible instant. The cell is rebuilt when its line's data changes, and
+      // the LAST such rebuild is the one inside `onSuccess`, while the mutation is still
+      // pending; settling changes no line, so nothing rebuilds the cell again and a captured
+      // value would leave the button disabled until a reload. Read through a function and it tracks.
+      const isPending = (): boolean => props.pendingLineId === line.lineId;
+      // Nothing to ship AND nothing staged means there is no toggle to make. Either one alone
+      // still leaves a move available: stage it, or give the stage back.
+      // A line committed stock cannot cover is not staged: the server refuses it, and the
+      // button says so before the click rather than after. Giving a stage back stays open.
+      const blockedByStock = (): boolean => !releases() && (line.stockShortQty ?? 0) > 0;
+      const isDisabled = (): boolean =>
+        (shippable === 0 && line.stagedQty === 0) ||
+        blockedByOrder() ||
+        blockedByStock() ||
+        isPending();
+      return (
+        <>
+          {/*
                       The line's state and the controls that change it share one cell. Pills first,
                       buttons after, in a row that wraps *upward* (`flex-wrap-reverse`): where the
                       row is wide enough they sit side by side, and where it is not the buttons move
@@ -1663,178 +1778,157 @@ function LineTable(props: {
                       row whatever the number of pills — it is the control an operator works down the
                       list with, and a target that moves row to row is one they have to look for.
                     */}
-                    <div class="flex flex-wrap-reverse items-center justify-end gap-2 md:flex-nowrap">
-                      {(() => {
-                        // Break the ordered qty into its disposition buckets and
-                        // show one pill per non-empty bucket (staged + pending +
-                        // shipped + corrected always sum to qty_ordered). This
-                        // replaces the single "Pending" pill, which read wrong on
-                        // a fully shipped / corrected line (nothing outstanding).
-                        const pending = Math.max(0, shippable - line.stagedQty);
-                        // The count is inside the msgid, not concatenated around it: these labels are
-                        // adjectives agreeing with a quantity, so a language that inflects for number
-                        // (fr: "1 préparé" / "2 préparés") needs both forms — and one that orders the
-                        // number differently needs to place it. English's two forms are identical.
-                        const pills: Array<{
-                          text: string;
-                          count: number;
-                          tone: PillTone;
-                          /** Awaiting a person: draws the waiting glyph beside the count. */
-                          pending?: boolean;
-                          title?: string;
-                        }> = [
-                          {
-                            text: sprintf(
-                              _nx(
-                                '%d staged',
-                                '%d staged',
-                                line.stagedQty,
-                                'dispatch line disposition',
-                              ),
-                              line.stagedQty,
-                            ),
-                            count: line.stagedQty,
-                            // Yellow-green, one hue short of the emerald `shipped` wears. Staged is
-                            // work that is done but not final, so it reads as green-on-the-way rather
-                            // than as its own unrelated color — the row's pills are a progression
-                            // (pending → staged → shipped) and should look like one.
-                            tone: 'lime' as PillTone,
-                            title: packedTitle(line, 'staged', me),
-                          },
-                          {
-                            text: sprintf(
-                              _nx('%d pending', '%d pending', pending, 'dispatch line disposition'),
-                              pending,
-                            ),
-                            count: pending,
-                            tone: 'neutral' as PillTone,
-                          },
-                          {
-                            text: sprintf(
-                              _nx(
-                                '%d shipped',
-                                '%d shipped',
-                                line.qtyShipped,
-                                'dispatch line disposition',
-                              ),
-                              line.qtyShipped,
-                            ),
-                            count: line.qtyShipped,
-                            tone: 'success' as PillTone,
-                            title: packedTitle(line, 'shipped', me),
-                          },
-                          // Corrected splits in two. `unprocessed` is counted from the corrections
-                          // themselves; `processed` is the remainder of the line's own total rather
-                          // than a second count, so the buckets still sum to qty_ordered even if the
-                          // two sources disagree — a visible arithmetic hole would be worse than a
-                          // pill that is momentarily one short.
-                          ...(() => {
-                            const known = props.unprocessedCorrectedByLine;
-                            // Not knowing is not "nothing is waiting". Until the corrections resolve,
-                            // show the single undifferentiated pill rather than defaulting the unknown
-                            // half to zero, which would render every correction as settled — the
-                            // reassuring reading, reached by having no data.
-                            if (!known) {
-                              return [
-                                {
-                                  text: sprintf(
-                                    _nx(
-                                      '%d corrected',
-                                      '%d corrected',
-                                      line.qtyCorrected,
-                                      'dispatch line disposition',
-                                    ),
-                                    line.qtyCorrected,
-                                  ),
-                                  count: line.qtyCorrected,
-                                  tone: 'danger' as PillTone,
-                                },
-                              ];
-                            }
-                            const unprocessed = Math.min(
-                              line.qtyCorrected,
-                              known.get(line.lineId) ?? 0,
-                            );
-                            const processed = Math.max(0, line.qtyCorrected - unprocessed);
-                            return [
-                              {
-                                text: sprintf(
-                                  _nx(
-                                    '%d corrected',
-                                    '%d corrected',
-                                    processed,
-                                    'dispatch line disposition',
-                                  ),
-                                  processed,
-                                ),
-                                count: processed,
-                                tone: 'danger' as PillTone,
-                                pending: false,
-                                title: sprintf(
-                                  _n(
-                                    '%d corrected unit, already processed',
-                                    '%d corrected units, already processed',
-                                    processed,
-                                  ),
-                                  processed,
-                                ),
-                              },
-                              {
-                                // Same msgid as above: the units are corrected either way, and the
-                                // waiting is carried by the tone, the glyph and the tooltip rather
-                                // than by a second word a translator would have to keep in step.
-                                text: sprintf(
-                                  _nx(
-                                    '%d corrected',
-                                    '%d corrected',
-                                    unprocessed,
-                                    'dispatch line disposition',
-                                  ),
-                                  unprocessed,
-                                ),
-                                count: unprocessed,
-                                // Amber is this page's "a person still owes an action" color — the
-                                // same one the corrections panel's Pending chip and the pending-action
-                                // filter use. Categorical elsewhere in this row, deliberately stateful
-                                // here.
-                                tone: 'warning' as PillTone,
-                                pending: true,
-                                title: sprintf(
-                                  _n(
-                                    '%d corrected unit, not yet processed',
-                                    '%d corrected units, not yet processed',
-                                    unprocessed,
-                                  ),
-                                  unprocessed,
-                                ),
-                              },
-                            ];
-                          })(),
-                        ].filter((p) => p.count > 0);
-                        return (
-                          <div class="flex flex-wrap items-center justify-end gap-1 md:flex-nowrap">
-                            <For
-                              each={pills}
-                              fallback={<span class="text-xs text-text-muted">—</span>}
-                            >
-                              {(p) => (
-                                <Pill tone={p.tone} class="tabular-nums" title={p.title}>
-                                  {p.text}
-                                  <Show when={p.pending}>
-                                    {/* The tone alone would carry this, and tone alone is what a
+          <div class="flex flex-wrap-reverse items-center justify-end gap-2 md:flex-nowrap">
+            {(() => {
+              // Break the ordered qty into its disposition buckets and
+              // show one pill per non-empty bucket (staged + pending +
+              // shipped + corrected always sum to qty_ordered). This
+              // replaces the single "Pending" pill, which read wrong on
+              // a fully shipped / corrected line (nothing outstanding).
+              const pending = Math.max(0, shippable - line.stagedQty);
+              // The count is inside the msgid, not concatenated around it: these labels are
+              // adjectives agreeing with a quantity, so a language that inflects for number
+              // (fr: "1 préparé" / "2 préparés") needs both forms — and one that orders the
+              // number differently needs to place it. English's two forms are identical.
+              const pills: Array<{
+                text: string;
+                count: number;
+                tone: PillTone;
+                /** Awaiting a person: draws the waiting glyph beside the count. */
+                pending?: boolean;
+                title?: string;
+              }> = [
+                {
+                  text: sprintf(
+                    _nx('%d staged', '%d staged', line.stagedQty, 'dispatch line disposition'),
+                    line.stagedQty,
+                  ),
+                  count: line.stagedQty,
+                  // Yellow-green, one hue short of the emerald `shipped` wears. Staged is
+                  // work that is done but not final, so it reads as green-on-the-way rather
+                  // than as its own unrelated color — the row's pills are a progression
+                  // (pending → staged → shipped) and should look like one.
+                  tone: 'lime' as PillTone,
+                  title: packedTitle(line, 'staged', me),
+                },
+                {
+                  text: sprintf(
+                    _nx('%d pending', '%d pending', pending, 'dispatch line disposition'),
+                    pending,
+                  ),
+                  count: pending,
+                  tone: 'neutral' as PillTone,
+                },
+                {
+                  text: sprintf(
+                    _nx('%d shipped', '%d shipped', line.qtyShipped, 'dispatch line disposition'),
+                    line.qtyShipped,
+                  ),
+                  count: line.qtyShipped,
+                  tone: 'success' as PillTone,
+                  title: packedTitle(line, 'shipped', me),
+                },
+                // Corrected splits in two. `unprocessed` is counted from the corrections
+                // themselves; `processed` is the remainder of the line's own total rather
+                // than a second count, so the buckets still sum to qty_ordered even if the
+                // two sources disagree — a visible arithmetic hole would be worse than a
+                // pill that is momentarily one short.
+                ...(() => {
+                  const known = props.unprocessedCorrectedByLine;
+                  // Not knowing is not "nothing is waiting". Until the corrections resolve,
+                  // show the single undifferentiated pill rather than defaulting the unknown
+                  // half to zero, which would render every correction as settled — the
+                  // reassuring reading, reached by having no data.
+                  if (!known) {
+                    return [
+                      {
+                        text: sprintf(
+                          _nx(
+                            '%d corrected',
+                            '%d corrected',
+                            line.qtyCorrected,
+                            'dispatch line disposition',
+                          ),
+                          line.qtyCorrected,
+                        ),
+                        count: line.qtyCorrected,
+                        tone: 'danger' as PillTone,
+                      },
+                    ];
+                  }
+                  const unprocessed = Math.min(line.qtyCorrected, known.get(line.lineId) ?? 0);
+                  const processed = Math.max(0, line.qtyCorrected - unprocessed);
+                  return [
+                    {
+                      text: sprintf(
+                        _nx('%d corrected', '%d corrected', processed, 'dispatch line disposition'),
+                        processed,
+                      ),
+                      count: processed,
+                      tone: 'danger' as PillTone,
+                      pending: false,
+                      title: sprintf(
+                        _n(
+                          '%d corrected unit, already processed',
+                          '%d corrected units, already processed',
+                          processed,
+                        ),
+                        processed,
+                      ),
+                    },
+                    {
+                      // Same msgid as above: the units are corrected either way, and the
+                      // waiting is carried by the tone, the glyph and the tooltip rather
+                      // than by a second word a translator would have to keep in step.
+                      text: sprintf(
+                        _nx(
+                          '%d corrected',
+                          '%d corrected',
+                          unprocessed,
+                          'dispatch line disposition',
+                        ),
+                        unprocessed,
+                      ),
+                      count: unprocessed,
+                      // Amber is this page's "a person still owes an action" color — the
+                      // same one the corrections panel's Pending chip and the pending-action
+                      // filter use. Categorical elsewhere in this row, deliberately stateful
+                      // here.
+                      tone: 'warning' as PillTone,
+                      pending: true,
+                      title: sprintf(
+                        _n(
+                          '%d corrected unit, not yet processed',
+                          '%d corrected units, not yet processed',
+                          unprocessed,
+                        ),
+                        unprocessed,
+                      ),
+                    },
+                  ];
+                })(),
+              ].filter((p) => p.count > 0);
+              return (
+                <div class="flex flex-wrap items-center justify-end gap-1 md:flex-nowrap">
+                  <For each={pills} fallback={<span class="text-xs text-text-muted">—</span>}>
+                    {(p) => (
+                      <Pill tone={p.tone} class="tabular-nums" title={p.title}>
+                        {p.text}
+                        <Show when={p.pending}>
+                          {/* The tone alone would carry this, and tone alone is what a
                                     color-blind operator cannot read — amber against the
                                     neighbouring danger pill is the confusable pair. Decorative to
                                     assistive tech, which reads the pill's title instead. */}
-                                    <HourglassIcon class="h-3 w-3 shrink-0" />
-                                  </Show>
-                                </Pill>
-                              )}
-                            </For>
-                          </div>
-                        );
-                      })()}
-                      <div class="inline-flex shrink-0 items-center gap-1.5">
-                        {/*
+                          <HourglassIcon class="h-3 w-3 shrink-0" />
+                        </Show>
+                      </Pill>
+                    )}
+                  </For>
+                </div>
+              );
+            })()}
+            <div class="inline-flex shrink-0 items-center gap-1.5">
+              {/*
                       Per-line correction affordance, present on every line rather than revealed by
                       hovering it. A control you cannot see is a control most operators never learn
                       exists, and it is discoverable by mouse only — a keyboard user meets it by
@@ -1843,79 +1937,77 @@ function LineTable(props: {
                       red and full strength when the line already has unresolved stock concerns.
                       Disabled when nothing remains to correct.
                     */}
-                        <Show when={props.onOpenCorrection}>
-                          {(() => {
-                            const hasConcern = line.stockState !== 0;
-                            const correctable =
-                              props.correctionSides !== undefined
-                                ? lineCorrectable(line, props.correctionSides)
-                                : shippable > 0;
-                            // Recessive at rest, full strength under the row's hover. Not `opacity-0`:
-                            // the point is that it is always there. `disabled:` outranks this on
-                            // specificity, so a line with nothing left to correct still reads as off.
-                            const visibility = hasConcern
-                              ? 'opacity-100'
-                              : 'opacity-70 group-hover:opacity-100 focus-visible:opacity-100';
-                            const color = hasConcern
-                              ? 'text-red-600 hover:bg-red-50 hover:border-red-300 border-red-200'
-                              : 'text-text-muted hover:bg-amber-50 hover:border-amber-300 hover:text-amber-700 border-border';
-                            return (
-                              <button
-                                type="button"
-                                class={`px-1.5 py-0.5 text-sm leading-none rounded border font-bold cursor-pointer transition-opacity ${visibility} ${color} disabled:opacity-40 disabled:cursor-not-allowed`}
-                                disabled={!correctable}
-                                onClick={() => props.onOpenCorrection!(line.lineId)}
-                                title={
-                                  correctable
-                                    ? __('Create a correction on this line (C)')
-                                    : __('Nothing left to correct on this line')
-                                }
-                                aria-label={__('Create correction on this line')}
-                              >
-                                !
-                              </button>
-                            );
-                          })()}
-                        </Show>
-                        <Show when={props.onToggleStage}>
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            // Neutral at rest — it is one control among several on a dense row, and a
-                            // row of colored buttons ranks nothing. The color arrives on hover, when
-                            // the pointer has already picked this button out and the only question
-                            // left is which way it moves the line: lime to stage (the same "pending a
-                            // good change" the staged pill wears, so the button previews the pill it
-                            // will produce), red to give the stage back. `secondary`'s own
-                            // `hover:bg-surface-raised` stands down for these — see `namesHoverBg`.
-                            class={
-                              releases()
-                                ? 'hover:border-red-300 hover:bg-red-50 hover:text-red-700'
-                                : 'hover:border-lime-300 hover:bg-lime-50 hover:text-lime-800'
-                            }
-                            disabled={isDisabled()}
-                            onClick={() => props.onToggleStage!(line)}
-                            data-testid="line-stage-toggle"
-                            data-stage-blocked={
-                              blockedByOrder() ? 'order' : blockedByStock() ? 'stock' : undefined
-                            }
-                            title={
-                              blockedByOrder() && !isPending()
-                                ? props.stageBlockedReason
-                                : isFullyStaged && shippable === 0
-                                  ? __(
-                                      'These units are staged but no longer shippable — release them',
-                                    )
-                                  : blockedByStock() && !isPending()
-                                    ? __(
-                                        'Not enough stock for this order. Record stock found on the shelf with an on-hand correction, or correct the order (!) for the units that cannot ship.',
-                                      )
-                                    : isDisabled() && !isPending()
-                                      ? __('Nothing left to stage on this line')
-                                      : undefined
-                            }
-                          >
-                            {/*
+              <Show when={props.onOpenCorrection}>
+                {(() => {
+                  const hasConcern = line.stockState !== 0;
+                  const correctable =
+                    props.correctionSides !== undefined
+                      ? lineCorrectable(line, props.correctionSides)
+                      : shippable > 0;
+                  // Recessive at rest, full strength under the row's hover. Not `opacity-0`:
+                  // the point is that it is always there. `disabled:` outranks this on
+                  // specificity, so a line with nothing left to correct still reads as off.
+                  const visibility = hasConcern
+                    ? 'opacity-100'
+                    : 'opacity-70 group-hover:opacity-100 focus-visible:opacity-100';
+                  const color = hasConcern
+                    ? 'text-red-600 hover:bg-red-50 hover:border-red-300 border-red-200'
+                    : 'text-text-muted hover:bg-amber-50 hover:border-amber-300 hover:text-amber-700 border-border';
+                  return (
+                    <button
+                      type="button"
+                      class={`px-1.5 py-0.5 text-sm leading-none rounded border font-bold cursor-pointer transition-opacity ${visibility} ${color} disabled:opacity-40 disabled:cursor-not-allowed`}
+                      disabled={!correctable}
+                      onClick={() => props.onOpenCorrection!(line.lineId)}
+                      title={
+                        correctable
+                          ? __('Create a correction on this line (C)')
+                          : __('Nothing left to correct on this line')
+                      }
+                      aria-label={__('Create correction on this line')}
+                    >
+                      !
+                    </button>
+                  );
+                })()}
+              </Show>
+              <Show when={props.onToggleStage}>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  // Neutral at rest — it is one control among several on a dense row, and a
+                  // row of colored buttons ranks nothing. The color arrives on hover, when
+                  // the pointer has already picked this button out and the only question
+                  // left is which way it moves the line: lime to stage (the same "pending a
+                  // good change" the staged pill wears, so the button previews the pill it
+                  // will produce), red to give the stage back. `secondary`'s own
+                  // `hover:bg-surface-raised` stands down for these — see `namesHoverBg`.
+                  class={
+                    releases()
+                      ? 'hover:border-red-300 hover:bg-red-50 hover:text-red-700'
+                      : 'hover:border-lime-300 hover:bg-lime-50 hover:text-lime-800'
+                  }
+                  disabled={isDisabled()}
+                  onClick={() => props.onToggleStage!(line)}
+                  data-testid="line-stage-toggle"
+                  data-stage-blocked={
+                    blockedByOrder() ? 'order' : blockedByStock() ? 'stock' : undefined
+                  }
+                  title={
+                    blockedByOrder() && !isPending()
+                      ? props.stageBlockedReason
+                      : isFullyStaged && shippable === 0
+                        ? __('These units are staged but no longer shippable — release them')
+                        : blockedByStock() && !isPending()
+                          ? __(
+                              'Not enough stock for this order. Record stock found on the shelf with an on-hand correction, or correct the order (!) for the units that cannot ship.',
+                            )
+                          : isDisabled() && !isPending()
+                            ? __('Nothing left to stage on this line')
+                            : undefined
+                  }
+                >
+                  {/*
                           The optimistic mutation already wrote the post-toggle
                           stagedQty into the cache, so `isFullyStaged` (and
                           therefore `buttonLabel`) reflects the *target* state.
@@ -1924,27 +2016,61 @@ function LineTable(props: {
                           beats a `…` placeholder that flickers the
                           merchant's mental model.
                         */}
-                            {buttonLabel()}
-                          </Button>
-                        </Show>
-                      </div>
-                    </div>
-                  </td>
-                </tr>
-              );
-            }}
-          </For>
-        </tbody>
-      </table>
-      <Show when={pickerOpen()}>
-        <ColumnPicker
-          columns={ORDER_LINE_COLUMNS}
-          hidden={hiddenColumns()}
-          onToggle={toggleColumn}
-          onClose={() => setPickerOpen(false)}
-        />
-      </Show>
-    </div>
+                  {buttonLabel()}
+                </Button>
+              </Show>
+            </div>
+          </div>
+        </>
+      );
+    },
+  };
+
+  const columns = createMemo(() => [
+    thumbnailColumn,
+    productColumn,
+    skuColumn,
+    priceColumn,
+    qtyColumn,
+    ...(hasShippingClass() ? [shippingClassColumn] : []),
+    ...(hasStockSignal() ? [stockColumn] : []),
+    stageColumn,
+  ]);
+
+  return (
+    /*
+      `separated`: each line is its OWN surface on the page ground rather than a stripe inside one
+      slab — a line becomes an object you can pick out. The fill lives on the cells, so a row's tint is
+      written on them too.
+    */
+    <DataTable
+      columns={columns()}
+      rows={props.lines}
+      model={model}
+      look="separated"
+      testId="dispatch-order-lines"
+      // Rows are matched by line, so a refetch keeps each row's element instead of rebuilding it.
+      rowKey={(line) => String(line.lineId)}
+      rowProps={(line) => {
+        const armed = props.armedLineId === line.lineId;
+
+        return {
+          class: cx(
+            'group transition-colors',
+            lineStage(line) === 'M' ? '[&>td]:bg-green-50/40' : 'hover:[&>td]:bg-surface-hover',
+            // The armed line: tinted, with a bar down its leading edge.
+            armed &&
+              '[&>td]:bg-primary/10 [&>td:first-child]:shadow-[inset_3px_0_0_var(--color-primary)]',
+          ),
+          attrs: { 'data-armed': armed ? 'true' : undefined },
+        };
+      }}
+      empty={
+        props.filtered
+          ? __('No line on this order matches the filter.')
+          : __('No lines on this order.')
+      }
+    />
   );
 }
 
@@ -1962,6 +2088,10 @@ function ShipBar(props: {
   neighbours: boolean;
   prevDisabled: boolean;
   nextDisabled: boolean;
+  /** The queue's sequence is still arriving, so the neighbours are not known yet. */
+  neighboursLoading?: boolean;
+  /** This order's place in the queue, or null when it is not in it. */
+  neighbourPosition?: QueuePosition | null;
   onPrev: () => void;
   onNext: () => void;
 }) {
@@ -1995,25 +2125,16 @@ function ShipBar(props: {
             on. The confirmation itself is a toast (see the ship mutation), so the bar is free for
             the one thing left to do here. */}
         <Show when={props.neighbours}>
-          <div class="ml-auto flex items-center gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={props.prevDisabled}
-              onClick={() => props.onPrev()}
-              title={__('Previous order in queue')}
-            >
-              {_x('← Prev', 'order navigation')}
-            </Button>
-            <Button
-              variant="primary"
-              size="sm"
-              disabled={props.nextDisabled}
-              onClick={() => props.onNext()}
-              title={__('Next order in queue')}
-            >
-              {_x('Next →', 'order navigation')}
-            </Button>
+          <div class="ml-auto">
+            <NeighbourNav
+              prevDisabled={props.prevDisabled}
+              nextDisabled={props.nextDisabled}
+              loading={props.neighboursLoading}
+              position={props.neighbourPosition}
+              onPrev={props.onPrev}
+              onNext={props.onNext}
+              nextVariant="primary"
+            />
           </div>
         </Show>
       </Show>

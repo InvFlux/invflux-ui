@@ -42,7 +42,9 @@ export function ThumbnailZoom(props: ThumbnailZoomProps): JSX.Element {
       <img
         src={props.src!}
         alt={props.alt ?? ''}
-        class={`rounded object-cover bg-gray-100 shrink-0 cursor-zoom-in ring-1 ring-black/5${props.fill ? ' h-full w-full' : ''}`}
+        // Every class whole and space-separated: Tailwind generates only the names it can read in the
+        // source, and one glued to a `${` is read as part of a longer token and never generated.
+        class={`rounded object-cover bg-gray-100 shrink-0 cursor-zoom-in ring-1 ring-black/5 ${props.fill ? 'h-full w-full' : ''}`}
         style={props.fill ? undefined : { width: `${size()}px`, height: `${size()}px` }}
         onMouseEnter={(e) => setRect(e.currentTarget.getBoundingClientRect())}
         onMouseLeave={() => setRect(null)}

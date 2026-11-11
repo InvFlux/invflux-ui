@@ -1,5 +1,14 @@
 import { __, _n, _x, formatDateTime, sprintf } from '@invflux/i18n';
-import { Button, ErrorBanner, Hint, Pill } from '@invflux/ui';
+import {
+  Button,
+  ColumnsSettingsIcon,
+  createColumnModel,
+  DataTable,
+  type DataTableColumn,
+  ErrorBanner,
+  Hint,
+  Pill,
+} from '@invflux/ui';
 import { StatusPill } from '@invflux/procurement/src/components/StatusPill';
 import { CorrectedFigure } from '@invflux/procurement/src/sections/purchase-orders/CorrectedFigure';
 import {
@@ -8,7 +17,7 @@ import {
 } from '@invflux/procurement/src/sections/purchase-orders/PoReceiptsList';
 import { A, useNavigate } from '@solidjs/router';
 import { createQuery } from '@tanstack/solid-query';
-import { For, type JSX, Show } from 'solid-js';
+import { type JSX, Show } from 'solid-js';
 import { useApp } from '../../context';
 import { createApi } from '../../lib/api';
 import { purchaseOrderHref, sourceLabel } from './procurementLink';
@@ -21,12 +30,6 @@ import type {
 } from './types';
 
 const CARD = 'rounded border border-border bg-surface';
-// `pr-4` is not decoration: these headings are short uppercase phrases in narrow fixed-width
-// columns, so without a gutter "LINES COUNTED" and "PEOPLE COUNTING" render as one word.
-const TH = 'p-2 text-nowrap pr-4 text-left text-xs font-medium uppercase text-text-muted';
-const TD = 'p-2 pr-4';
-const TD_NOWRAP = TD + ' text-nowrap';
-
 // `formatDateTime`, not `toLocaleString`: the latter takes the *browser's* locale, which has nothing
 // to do with the language WordPress resolved for this user — so it renders US-ordered dates beside
 // French labels, and `8/9` against `9/8` is two different days for half the year.
@@ -97,6 +100,243 @@ export function ReceivingHome(): JSX.Element {
     queryFn: () => api.get<ReceiptHistoryResponse>('/receiving/receipts'),
   }));
 
+
+  // The operator's column choices, kept per table: the two lists answer different questions, so a
+  // column hidden on one says nothing about the other.
+  const sessionsModel = createColumnModel({ scope: 'receiving-sessions' });
+  const receiptsModel = createColumnModel({ scope: 'receiving-receipts' });
+
+  const sessionColumns = (): DataTableColumn<OpenReceivingSession>[] => [
+    {
+      id: 'against',
+      header: __('Against'),
+      required: true,
+      sortValue: (session) => sessionLabel(session),
+      cell: (session) => (
+        <>
+          <Show when={sessionHref(session)} fallback={<span>{sessionLabel(session)}</span>}>
+            {(href) => (
+              <A href={href()} class="text-primary hover:underline">
+                {sessionLabel(session)}
+              </A>
+            )}
+          </Show>
+          <Show when={null !== session.note && '' !== session.note}>
+            <span class="ml-2 text-xs text-text-muted">{session.note}</span>
+          </Show>
+        </>
+      ),
+    },
+    {
+      id: 'lines',
+      header: __('Lines counted'),
+      kind: 'num',
+      widthClass: 'w-28',
+      sortValue: (session) => session.lineCount,
+      // Counted out of total: on its own a count says how much work has been done and nothing
+      // about how much is left, which is the question someone watching a colleague's reception is
+      // actually asking. Falls back to the bare number where the document's own line count is
+      // unknown, rather than inventing a denominator.
+      cell: (session) => (
+        <Show when={null !== session.documentLineCount} fallback={session.lineCount}>
+          {session.lineCount}
+          <span class="text-text-muted">/{session.documentLineCount}</span>
+        </Show>
+      ),
+    },
+    {
+      id: 'people',
+      header: __('People counting'),
+      kind: 'num',
+      widthClass: 'w-32',
+      sortValue: (session) => session.participants.length,
+      cell: (session) => (
+        <Show
+          when={session.participants.length > 0}
+          fallback={<span class="text-text-muted">—</span>}
+        >
+          {String(session.participants.length)}
+        </Show>
+      ),
+    },
+    {
+      id: 'activity',
+      header: __('Last activity'),
+      widthClass: 'w-48',
+      sortValue: (session) => session.lastActivityAt,
+      cell: (session) => <span class="text-text-muted">{when(session.lastActivityAt)}</span>,
+    },
+  ];
+
+  const receiptColumns = (): DataTableColumn<ReceiptSummary>[] => [
+    {
+      id: 'received',
+      header: __('Received'),
+      sortValue: (receipt) => receipt.receivedAt,
+      cell: (receipt) => <span class="text-nowrap">{when(receipt.receivedAt)}</span>,
+    },
+    {
+      id: 'against',
+      header: __('Against'),
+      required: true,
+      sortValue: (receipt) =>
+        null !== receipt.source
+          ? sourceLabel(receipt.source)
+          : (receipt.reasonLabel ?? __('No document')),
+      cell: (receipt) => (
+        <>
+          {/* A receipt carries a source *or* a reason, never both — the reason is what
+              stands in for the document a source-less intake does not have. */}
+          <Show
+            when={documentHref(receipt.source)}
+            fallback={
+              null !== receipt.source ? (
+                sourceLabel(receipt.source)
+              ) : (
+                // No document to open, so the receipt itself is the page.
+                <A
+                  href={`/receiving/receipts/${receipt.id}`}
+                  data-testid="receipt-link"
+                  class="text-primary hover:underline"
+                >
+                  {receipt.reasonLabel ?? __('No document')}
+                </A>
+              )
+            }
+          >
+            {(href) => (
+              <A href={href()} class="text-primary hover:underline">
+                {sourceLabel(receipt.source)}
+              </A>
+            )}
+          </Show>
+          {/* A receipt against a document opens on its own page too — the one place
+              any receipt is read and corrected, whatever it answers. */}
+          <Show when={null !== receipt.source}>
+            <span class="text-text-muted">{' · '}</span>
+            <A
+              href={`/receiving/receipts/${receipt.id}`}
+              data-testid="receipt-link"
+              class="text-primary hover:underline"
+            >
+              {sprintf(
+                /* translators: %d is a goods receipt's internal id. */
+                __('Receipt #%d'),
+                receipt.id,
+              )}
+            </A>
+          </Show>
+          <Show when={'posted' !== receipt.state}>
+            <Pill
+              class="ml-2"
+              tone={'reversed' === receipt.state ? 'neutral' : 'info'}
+              title={
+                'reversed' === receipt.state
+                  ? __(
+                      'Every quantity was corrected to zero. The receipt stays on file.',
+                    )
+                  : __(
+                      'Figures were corrected after posting. The receipt lists the corrections.',
+                    )
+              }
+              data-testid="receipt-state"
+            >
+              {'reversed' === receipt.state
+                ? _x(
+                    'Reversed',
+                    'goods receipt status: every quantity corrected to zero',
+                  )
+                : _x(
+                    'Corrected',
+                    'goods receipt status: figures corrected after posting',
+                  )}
+            </Pill>
+          </Show>
+          <Show when={null !== receipt.note && '' !== receipt.note}>
+            <span class="ml-2 text-xs text-text-muted">{receipt.note}</span>
+          </Show>
+        </>
+      ),
+    },
+    {
+      id: 'status',
+      header: __('Document status'),
+      widthClass: 'w-40',
+      sortValue: (receipt) => receipt.source?.stage,
+      // How the document itself stands now, which is the question a list of what arrived is read
+      // to answer: is that order finished, or still owed?
+      cell: (receipt) => (
+        <Show when={receipt.source?.stage} fallback={<span class="text-slate-300">—</span>}>
+          {(stage) => <StatusPill status={stage()} />}
+        </Show>
+      ),
+    },
+    {
+      id: 'lines',
+      header: __('Lines'),
+      kind: 'num',
+      widthClass: 'w-24',
+      sortValue: (receipt) => receipt.lineCount,
+      cell: (receipt) => receipt.lineCount,
+    },
+    {
+      id: 'units',
+      header: __('Units'),
+      kind: 'num',
+      widthClass: 'w-24',
+      sortValue: (receipt) => receipt.correctedQty ?? receipt.qty,
+      cell: (receipt) => (
+        <>
+          <CorrectedFigure
+            posted={receipt.qty}
+            current={receipt.correctedQty}
+            format={(n) => n}
+            title={receivedCorrected}
+          />
+          <Show when={receipt.damagedQty > 0 || (receipt.correctedDamagedQty ?? 0) > 0}>
+            <span class="ml-1 text-xs text-amber-600">
+              <CorrectedFigure
+                posted={receipt.damagedQty}
+                current={receipt.correctedDamagedQty}
+                format={(n) =>
+                  sprintf(
+                    /* translators: %d is a count of damaged units, recorded beside the good ones. */
+                    _n('+%d damaged', '+%d damaged', n),
+                    n,
+                  )
+                }
+                title={damagedCorrected}
+              />
+            </span>
+          </Show>
+        </>
+      ),
+    },
+    {
+      id: 'actions',
+      // No heading: a verb over one button is a label for a label, and the buttons only appear on
+      // the rows that can take one.
+      label: () => __('Actions'),
+      widthClass: 'w-36',
+      kind: 'num',
+      cell: (receipt) => (
+        <Show when={receipt.source?.receivable && receipt.source}>
+          {/* A link, not a write: the reception opens with the first counted line, so going to
+              the count changes nothing, and joining one already open is the same trip. */}
+          {(source) => (
+            <Button
+              size="xs"
+              variant="secondary"
+              onClick={() => navigate(`/receiving/new/purchase-order/${source().id}`)}
+            >
+              {__('Receive again')}
+            </Button>
+          )}
+        </Show>
+      ),
+    },
+  ];
+
   return (
     <div class="p-4">
       {/* No page title bar: the surface tab above already says "Receiving", and a heading that
@@ -114,245 +354,70 @@ export function ReceivingHome(): JSX.Element {
             />
           </h2>
           {/* The action sits with the list it adds to, rather than in a bar of its own. */}
-          <A href="/receiving/new">
-            <Button>{__('Start a reception')}</Button>
-          </A>
+          <div class="flex items-center gap-2">
+            <A href="/receiving/new">
+              <Button>{__('Start a reception')}</Button>
+            </A>
+            <Button
+              variant="secondary"
+              size="xs"
+              class="px-1.5!"
+              title={__('Columns')}
+              aria-label={__('Columns')}
+              onClick={sessionsModel.openPicker}
+            >
+              <ColumnsSettingsIcon class="h-4 w-4" />
+            </Button>
+          </div>
         </div>
         <Show when={sessions.isError}>
           <ErrorBanner class="text-sm">
             {__('Could not load the receptions in progress.')}
           </ErrorBanner>
         </Show>
-        <Show
-          when={(sessions.data?.sessions.length ?? 0) > 0}
-          fallback={
-            <Show
-              when={!sessions.isPending}
-              fallback={<p class="text-sm text-text-muted">{__('Loading…')}</p>}
-            >
-              <p class="text-sm text-text-muted">{__('Nothing is being counted right now.')}</p>
-            </Show>
+        <DataTable
+          columns={sessionColumns()}
+          rows={sessions.data?.sessions ?? []}
+          rowKey={(session) => String(session.id)}
+          model={sessionsModel}
+          empty={
+            <span class="text-text-muted">
+              {sessions.isPending ? __('Loading…') : __('Nothing is being counted right now.')}
+            </span>
           }
-        >
-          <table class="w-full text-sm">
-            <thead class="bg-surface-raised">
-              <tr class="border-b border-border">
-                <th class={TH}>{__('Against')}</th>
-                <th class={`${TH} w-28 text-right`}>{__('Lines counted')}</th>
-                <th class={`${TH} w-32`}>{__('People counting')}</th>
-                <th class={`${TH} w-48`}>{__('Last activity')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <For each={sessions.data?.sessions ?? []}>
-                {(session: OpenReceivingSession) => (
-                  <tr class="border-b border-border/60">
-                    <td class={TD}>
-                      <Show
-                        when={sessionHref(session)}
-                        fallback={<span>{sessionLabel(session)}</span>}
-                      >
-                        {(href) => (
-                          <A href={href()} class="text-primary hover:underline">
-                            {sessionLabel(session)}
-                          </A>
-                        )}
-                      </Show>
-                      <Show when={null !== session.note && '' !== session.note}>
-                        <span class="ml-2 text-xs text-text-muted">{session.note}</span>
-                      </Show>
-                    </td>
-                    <td class={`${TD} text-center tabular-nums`}>
-                      {/* Counted out of total: on its own a count says how much work has been done
-                          and nothing about how much is left, which is the question someone watching
-                          a colleague's reception is actually asking. Falls back to the bare number
-                          where the document's own line count is unknown, rather than inventing a
-                          denominator. */}
-                      <Show when={null !== session.documentLineCount} fallback={session.lineCount}>
-                        {session.lineCount}
-                        <span class="text-text-muted">/{session.documentLineCount}</span>
-                      </Show>
-                    </td>
-                    <td class={`${TD} text-center tabular-nums`}>
-                      <Show
-                        when={session.participants.length > 0}
-                        fallback={<span class="text-text-muted">—</span>}
-                      >
-                        {String(session.participants.length)}
-                      </Show>
-                    </td>
-                    <td class={`${TD} text-text-muted`}>{when(session.lastActivityAt)}</td>
-                  </tr>
-                )}
-              </For>
-            </tbody>
-          </table>
-        </Show>
+          testId="receiving-sessions"
+        />
       </section>
 
       <section class={`${CARD} p-4`}>
-        <h2 class="mb-2 text-sm font-semibold">{__('Recently received')}</h2>
+        <div class="mb-2 flex items-center justify-between gap-4">
+          <h2 class="text-sm font-semibold">{__('Recently received')}</h2>
+          <Button
+            variant="secondary"
+            size="xs"
+            class="px-1.5!"
+            title={__('Columns')}
+            aria-label={__('Columns')}
+            onClick={receiptsModel.openPicker}
+          >
+            <ColumnsSettingsIcon class="h-4 w-4" />
+          </Button>
+        </div>
         <Show when={receipts.isError}>
           <ErrorBanner class="text-sm">{__('Could not load the receiving history.')}</ErrorBanner>
         </Show>
-        <Show
-          when={(receipts.data?.receipts.length ?? 0) > 0}
-          fallback={
-            <Show
-              when={!receipts.isPending}
-              fallback={<p class="text-sm text-text-muted">{__('Loading…')}</p>}
-            >
-              <p class="text-sm text-text-muted">{__('Nothing has been received yet.')}</p>
-            </Show>
+        <DataTable
+          columns={receiptColumns()}
+          rows={receipts.data?.receipts ?? []}
+          rowKey={(receipt) => String(receipt.id)}
+          model={receiptsModel}
+          empty={
+            <span class="text-text-muted">
+              {receipts.isPending ? __('Loading…') : __('Nothing has been received yet.')}
+            </span>
           }
-        >
-          <table class="w-full text-sm">
-            <thead class="bg-surface-raised">
-              <tr class="border-b border-border">
-                <th class={TH}>{__('Received')}</th>
-                <th class={TH}>{__('Against')}</th>
-                <th class={`${TH} w-40`}>{__('Document status')}</th>
-                <th class={`${TH} w-24 text-right`}>{__('Lines')}</th>
-                <th class={`${TH} w-24 text-right`}>{__('Units')}</th>
-                {/* The action column carries no header: a verb over one button is a label for a
-                    label, and the buttons only appear on the rows that can take one. */}
-                <th class={`${TH} w-36`} />
-              </tr>
-            </thead>
-            <tbody>
-              <For each={receipts.data?.receipts ?? []}>
-                {(receipt: ReceiptSummary) => (
-                  <tr class="border-b border-border/60">
-                    <td class={TD_NOWRAP}>{when(receipt.receivedAt)}</td>
-                    <td class={TD}>
-                      {/* A receipt carries a source *or* a reason, never both — the reason is what
-                          stands in for the document a source-less intake does not have. */}
-                      <Show
-                        when={documentHref(receipt.source)}
-                        fallback={
-                          null !== receipt.source ? (
-                            sourceLabel(receipt.source)
-                          ) : (
-                            // No document to open, so the receipt itself is the page.
-                            <A
-                              href={`/receiving/receipts/${receipt.id}`}
-                              data-testid="receipt-link"
-                              class="text-primary hover:underline"
-                            >
-                              {receipt.reasonLabel ?? __('No document')}
-                            </A>
-                          )
-                        }
-                      >
-                        {(href) => (
-                          <A href={href()} class="text-primary hover:underline">
-                            {sourceLabel(receipt.source)}
-                          </A>
-                        )}
-                      </Show>
-                      {/* A receipt against a document opens on its own page too — the one place
-                          any receipt is read and corrected, whatever it answers. */}
-                      <Show when={null !== receipt.source}>
-                        <span class="text-text-muted">{' · '}</span>
-                        <A
-                          href={`/receiving/receipts/${receipt.id}`}
-                          data-testid="receipt-link"
-                          class="text-primary hover:underline"
-                        >
-                          {sprintf(
-                            /* translators: %d is a goods receipt's internal id. */
-                            __('Receipt #%d'),
-                            receipt.id,
-                          )}
-                        </A>
-                      </Show>
-                      <Show when={'posted' !== receipt.state}>
-                        <Pill
-                          class="ml-2"
-                          tone={'reversed' === receipt.state ? 'neutral' : 'info'}
-                          title={
-                            'reversed' === receipt.state
-                              ? __(
-                                  'Every quantity was corrected to zero. The receipt stays on file.',
-                                )
-                              : __(
-                                  'Figures were corrected after posting. The receipt lists the corrections.',
-                                )
-                          }
-                          data-testid="receipt-state"
-                        >
-                          {'reversed' === receipt.state
-                            ? _x(
-                                'Reversed',
-                                'goods receipt status: every quantity corrected to zero',
-                              )
-                            : _x(
-                                'Corrected',
-                                'goods receipt status: figures corrected after posting',
-                              )}
-                        </Pill>
-                      </Show>
-                      <Show when={null !== receipt.note && '' !== receipt.note}>
-                        <span class="ml-2 text-xs text-text-muted">{receipt.note}</span>
-                      </Show>
-                    </td>
-                    <td class={TD}>
-                      {/* How the document itself stands now, which is the question a list of what
-                          arrived is read to answer: is that order finished, or still owed? */}
-                      <Show
-                        when={receipt.source?.stage}
-                        fallback={<span class="text-slate-300">—</span>}
-                      >
-                        {(stage) => <StatusPill status={stage()} />}
-                      </Show>
-                    </td>
-                    <td class={`${TD} text-right tabular-nums`}>{receipt.lineCount}</td>
-                    <td class={`${TD} text-right tabular-nums`}>
-                      <CorrectedFigure
-                        posted={receipt.qty}
-                        current={receipt.correctedQty}
-                        format={(n) => n}
-                        title={receivedCorrected}
-                      />
-                      <Show when={receipt.damagedQty > 0 || (receipt.correctedDamagedQty ?? 0) > 0}>
-                        <span class="ml-1 text-xs text-amber-600">
-                          <CorrectedFigure
-                            posted={receipt.damagedQty}
-                            current={receipt.correctedDamagedQty}
-                            format={(n) =>
-                              sprintf(
-                                /* translators: %d is a count of damaged units, recorded beside the good ones. */
-                                _n('+%d damaged', '+%d damaged', n),
-                                n,
-                              )
-                            }
-                            title={damagedCorrected}
-                          />
-                        </span>
-                      </Show>
-                    </td>
-                    <td class={`${TD} text-right`}>
-                      <Show when={receipt.source?.receivable && receipt.source}>
-                        {/* A link, not a write: the reception opens with the first counted line,
-                            so going to the count changes nothing, and joining one already open is
-                            the same trip. */}
-                        {(source) => (
-                          <Button
-                            size="xs"
-                            variant="secondary"
-                            onClick={() => navigate(`/receiving/new/purchase-order/${source().id}`)}
-                          >
-                            {__('Receive again')}
-                          </Button>
-                        )}
-                      </Show>
-                    </td>
-                  </tr>
-                )}
-              </For>
-            </tbody>
-          </table>
-        </Show>
+          testId="receiving-receipts"
+        />
       </section>
     </div>
   );

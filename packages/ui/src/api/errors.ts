@@ -12,8 +12,13 @@
  * generic handling (`isAuthExpired`, `unreachable`) still works one level up.
  */
 
+import { __, sprintf } from '@invflux/i18n';
+
 /** WordPress's slug for a nonce that has aged out. */
 const WP_INVALID_NONCE = 'rest_cookie_invalid_nonce';
+
+/** WordPress's slug for a request a PHP fatal ended; its `message` is the error page's HTML. */
+const WP_FATAL = 'internal_server_error';
 
 /** The shape WordPress's REST layer uses for an error body. */
 interface WpErrorBody {
@@ -44,6 +49,61 @@ function readMessage(body: unknown): string | undefined {
   return typeof m === 'string' && m !== '' ? m : undefined;
 }
 
+/**
+ * What a failed request's body says, as text an operator can read; undefined when it says nothing.
+ *
+ * WordPress answers a PHP fatal in a REST request with its "critical error" page: slug
+ * `internal_server_error`, and HTML in `message`. That page is not something to show as text, and
+ * nothing in it is actionable from here, so a fatal reads as a plain server error. Any other message
+ * is shown as text, with markup removed: a message is prose, never a fragment of page.
+ *
+ * @param own a message the caller's own route contract puts elsewhere in the body, preferred
+ */
+export function failureMessage(status: number, body: unknown, own?: string): string | undefined {
+  if (readSlug(body) === WP_FATAL) {
+    return sprintf(
+      /* translators: %d = the HTTP status code, e.g. 500. */
+      __(
+        'The server ran into an error (%d). Try again; if it keeps happening, the site’s error log says why.',
+      ),
+      status,
+    );
+  }
+  const message = own ?? readMessage(body);
+  if (message === undefined) return undefined;
+  if (!/<[a-z!/]/i.test(message)) return message;
+  const text = decodeEntities(message.replace(/<[^>]*>/g, ' '))
+    .replace(/\s+/g, ' ')
+    // A tag becomes a space so two paragraphs do not run together, which leaves one before the
+    // punctuation that followed an inline tag.
+    .replace(/ ([.,;:!?])/g, '$1')
+    .trim();
+  return text === '' ? undefined : text;
+}
+
+const ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' ',
+};
+
+/** The named entities markup commonly carries, and numeric ones; no DOM needed. */
+function decodeEntities(text: string): string {
+  return text.replace(/&(#x[0-9a-f]+|#[0-9]+|[a-z]+);/gi, (entity, name: string) => {
+    if (name[0] === '#') {
+      const code =
+        name[1] === 'x' || name[1] === 'X'
+          ? parseInt(name.slice(2), 16)
+          : parseInt(name.slice(1), 10);
+      return Number.isNaN(code) ? entity : String.fromCodePoint(code);
+    }
+    return ENTITIES[name.toLowerCase()] ?? entity;
+  });
+}
+
 export class ApiError extends Error {
   /** HTTP status, or 0 when the request never produced a response (offline, DNS, CORS, abort). */
   readonly status: number;
@@ -53,7 +113,7 @@ export class ApiError extends Error {
   readonly body: unknown;
 
   constructor(status: number, body: unknown, fallbackMessage?: string) {
-    super(readMessage(body) ?? fallbackMessage ?? `Request failed (${String(status)})`);
+    super(failureMessage(status, body) ?? fallbackMessage ?? `Request failed (${String(status)})`);
     this.name = new.target.name;
     this.status = status;
     this.code = readSlug(body);

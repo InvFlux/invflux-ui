@@ -4,23 +4,29 @@ import type { Accessor, Setter } from 'solid-js';
 /**
  * Cross-route store of the current dispatch queue's order-id sequence.
  *
- * OrderList writes the ids in display order on every successful fetch;
- * OrderDetail reads them to compute prev/next navigation (per §6.3 of the
- * dispatch plan). When the operator deep-links to a detail page directly
- * (no list visit in this session), the ids signal is empty and the prev/
- * next buttons render disabled — that's the trade-off for cross-route
- * navigation without coupling the detail route to a query refetch.
+ * OrderList writes the ids in display order whenever its rows change; OrderDetail reads them for
+ * its previous and next buttons. When the queue has not been shown since the page loaded (a
+ * deep link, or a reload on an order), the ids are empty and the order page works the sequence out
+ * itself, from the queue's view as {@link ListStore.queueSearch} remembers it (`useQueueSequence`).
  */
 export interface ListStore {
   ids: Accessor<string[]>;
   setIds: Setter<string[]>;
   /**
-   * The queue's current URL search string (including a leading `?`
-   * when present, or `''` when the queue is bare). OrderList writes
-   * this on every render so OrderDetail's "← Queue" link can
-   * restore the filter / search state without forcing the operator
-   * to redo their work. Cleared when the operator deep-links into a
-   * detail page (the back link then sends them to a bare queue).
+   * How many orders the queue's view holds — more than {@link ids} when the view is read from the
+   * server a page at a time and only the first pages are loaded. The order page's position readout
+   * counts against it, so "12/950" stays true while 500 of the 950 are on hand.
+   */
+  total: Accessor<number>;
+  setTotal: Setter<number>;
+  /**
+   * The queue's current URL search string (including a leading `?` when present, or `''` when the
+   * queue is bare). OrderList writes it as the view changes, so the order page's "← Queue" link
+   * returns to the same view and its previous and next buttons step through it.
+   *
+   * Kept in the tab's session storage, so the view survives a reload — on the queue or on an
+   * order. Per tab, not per browser: two tabs on two views do not overwrite each other, and a new
+   * tab, or an order link someone sent, starts from the queue's default view.
    */
   queueSearch: Accessor<string>;
   setQueueSearch: Setter<string>;
@@ -36,10 +42,6 @@ export interface ListStore {
    */
   focusId: Accessor<string>;
   setFocusId: Setter<string>;
-  /** Return the order id before `currentId` in the cached sequence, or null. */
-  getPrevId(currentId: string): string | null;
-  /** Return the order id after `currentId` in the cached sequence, or null. */
-  getNextId(currentId: string): string | null;
 }
 
 export const ListStoreCtx = createContext<ListStore | undefined>(undefined);
@@ -50,30 +52,47 @@ export function useListStore(): ListStore {
   return ctx;
 }
 
+/** Where {@link ListStore.queueSearch} is kept for the tab. */
+const QUEUE_SEARCH_KEY = 'invflux:dispatch:queue-search';
+
+function readQueueSearch(): string {
+  try {
+    return sessionStorage.getItem(QUEUE_SEARCH_KEY) ?? '';
+  } catch {
+    // Storage the browser refuses (a sandboxed frame, blocked site data): the default view.
+    return '';
+  }
+}
+
+function writeQueueSearch(search: string): void {
+  try {
+    if ('' === search) sessionStorage.removeItem(QUEUE_SEARCH_KEY);
+    else sessionStorage.setItem(QUEUE_SEARCH_KEY, search);
+  } catch {
+    // Nothing to do: the view is still remembered until the page reloads.
+  }
+}
+
 export function createListStore(): ListStore {
   const [ids, setIds] = createSignal<string[]>([]);
-  const [queueSearch, setQueueSearch] = createSignal<string>('');
-  const [focusId, setFocusId] = createSignal<string>('');
+  const [total, setTotal] = createSignal<number>(0);
+  const [queueSearch, setQueueSearchSignal] = createSignal<string>(readQueueSearch());
+  const setQueueSearch = ((value: string | ((prev: string) => string)) => {
+    const next = setQueueSearchSignal(value as Parameters<typeof setQueueSearchSignal>[0]);
+    writeQueueSearch(next);
 
-  function indexOf(currentId: string): number {
-    return ids().indexOf(currentId);
-  }
+    return next;
+  }) as Setter<string>;
+  const [focusId, setFocusId] = createSignal<string>('');
 
   return {
     ids,
     setIds,
+    total,
+    setTotal,
     queueSearch,
     setQueueSearch,
     focusId,
     setFocusId,
-    getPrevId(currentId) {
-      const i = indexOf(currentId);
-      return i > 0 ? ids()[i - 1] : null;
-    },
-    getNextId(currentId) {
-      const i = indexOf(currentId);
-      const list = ids();
-      return i >= 0 && i < list.length - 1 ? list[i + 1] : null;
-    },
   };
 }

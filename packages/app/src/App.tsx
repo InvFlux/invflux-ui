@@ -4,6 +4,7 @@ import {
   deepActiveElement,
   HostNavCtx,
   IconButton,
+  keepUnchanged,
   PortalCtx,
   restoreFocusTo,
   PaneActiveCtx,
@@ -78,7 +79,10 @@ const queryClient = new QueryClient({
   // The real fix is not this flag: it is that stock-moving mutations should invalidate the grid
   // directly (see the invalidation groups in `queryKeys`), and that the delta poller should be
   // finished. Both make focus-refetch a backstop rather than the mechanism.
-  defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },
+  //
+  // `reconcile: keepUnchanged` makes a refetch keep every object whose content did not change, so
+  // a poll that brings back the same data redraws nothing.
+  defaultOptions: { queries: { retry: 1, staleTime: 30_000, reconcile: keepUnchanged } },
 });
 
 /** Every *available* top-level surface (mode ≠ disabled) — the keep-alive render + route source. */

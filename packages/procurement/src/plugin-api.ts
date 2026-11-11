@@ -21,6 +21,8 @@ import { A } from '@solidjs/router';
 import { OnOrderDrilldown } from './components/OnOrderDrilldown';
 import { StatusPill } from './components/StatusPill';
 import { commitNavEntitlements, commitNavRegistry, type CommitNavRule } from './gridCommitNav';
+import { registerReceiveScanHandler, type ReceiveScanHandler } from './receiveScan';
+import { registerReceiveCaptureHandler, type ReceiveCaptureHandler } from './receiveCapture';
 
 /**
  * The `window.invflux.procurement.*` plug-in surface — a thin host binding over the shared
@@ -46,6 +48,24 @@ export interface ProcurementBridge {
    * feature; an unconditional rule would leave a lapsed install still behaving as though paid.
    */
   registerCommitNav: (rule: CommitNavRule) => void;
+  /**
+   * Contribute what a scan on the goods-receipt grid does.
+   *
+   * The base narrows the grid to the lines the code names and, when it names one, goes to its first
+   * editable cell, as typing the code and pressing Enter does. A capability that does more with a
+   * scan contributes a handler here; one returning `false` leaves the scan to the base.
+   *
+   * Gate it through `enabled`, for the same reason as {@link registerCommitNav}.
+   */
+  registerReceiveScan: (handler: ReceiveScanHandler) => void;
+  /**
+   * Make the goods-receipt grid's GTIN column a capture cell: a code typed or scanned into it is handed
+   * to the handler, which stores it on the line's product. Read-only while no handler is enabled.
+   *
+   * Gate it through `enabled`, which should also answer whether this user may add codes, since the
+   * cell is offered exactly where it does.
+   */
+  registerReceiveCapture: (handler: ReceiveCaptureHandler) => void;
   /** This install's procurement entitlements, for gating a contributed rule. */
   entitlements: () => Record<string, boolean>;
   /** Curated SolidJS runtime subset for add-on components. */
@@ -98,6 +118,8 @@ export function installPluginApi(): ProcurementPluginApi {
       Dynamic,
     },
     registerCommitNav: (rule) => commitNavRegistry.register(rule),
+    registerReceiveScan: (handler) => registerReceiveScanHandler(handler),
+    registerReceiveCapture: (handler) => registerReceiveCaptureHandler(handler),
     entitlements: () => commitNavEntitlements(),
     ui: {
       ...sharedPluginUi,

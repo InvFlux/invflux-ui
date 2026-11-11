@@ -23,8 +23,10 @@ export type PoLineColumnId =
   | 'received'
   | 'damaged'
   | 'open'
+  | 'invoiced'
   | 'status'
   | 'unit_cost'
+  | 'invoiced_cost'
   | 'line_total';
 
 /**
@@ -46,8 +48,10 @@ export const PO_LINE_COLUMNS: PickableColumn<PoLineColumnId>[] = [
   { id: 'received', label: () => __('Received') },
   { id: 'damaged', label: () => __('Damaged') },
   { id: 'open', label: () => _x('Open', 'quantity remaining to receive') },
+  { id: 'invoiced', label: () => _x('Invoiced', 'quantity the supplier has billed') },
   { id: 'status', label: () => __('Status') },
   { id: 'unit_cost', label: () => __('Unit cost') },
+  { id: 'invoiced_cost', label: () => _x('Invoiced cost', 'unit price on the supplier invoice') },
   { id: 'line_total', label: () => __('Line total') },
 ];
 
@@ -60,9 +64,21 @@ export const PO_LINE_COLUMNS: PickableColumn<PoLineColumnId>[] = [
  */
 const DELIVERY_COLUMNS: PoLineColumnId[] = ['received', 'damaged', 'open'];
 
+/**
+ * What the supplier billed, shown once an invoice is recorded on the order — before that, two
+ * empty columns would say nothing on every order of a merchant who never records invoices. Plain
+ * figures beside ordered and received: no comparison is made here.
+ */
+const INVOICE_COLUMNS: PoLineColumnId[] = ['invoiced', 'invoiced_cost'];
+
 /** The columns this order can show at its current stage, in render order. */
-export function availablePoLineColumns(preReception: boolean): PickableColumn<PoLineColumnId>[] {
-  return preReception
-    ? PO_LINE_COLUMNS.filter((c) => !DELIVERY_COLUMNS.includes(c.id))
-    : PO_LINE_COLUMNS;
+export function availablePoLineColumns(
+  preReception: boolean,
+  invoiced = false,
+): PickableColumn<PoLineColumnId>[] {
+  return PO_LINE_COLUMNS.filter(
+    (c) =>
+      !(preReception && DELIVERY_COLUMNS.includes(c.id)) &&
+      !(!invoiced && INVOICE_COLUMNS.includes(c.id)),
+  );
 }

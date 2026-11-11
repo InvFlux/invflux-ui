@@ -1,10 +1,11 @@
 import { StockConcernBadge, type InboundCover } from '../StockConcernBadge';
 import { For, Show, type JSX } from 'solid-js';
 import { __, formatNumber } from '@invflux/i18n';
-import { useHostNav } from '../hostNav';
+import { linksTo, useHostNav } from '../hostNav';
 import type { ViewProps } from './registry';
 import { viewRegistry } from './registry';
 import { formatDateValue, parseDateValue } from './dateValue';
+import { enumMultiText } from './enumMulti';
 
 /**
  * Built-in read-only view components, keyed by datatype slug, registered into the shared
@@ -28,7 +29,7 @@ function TextView(props: ViewProps) {
   return <span>{text()}</span>;
 }
 
-function NumberView(props: ViewProps) {
+function IntegerView(props: ViewProps) {
   return (
     <span class="tabular-nums">
       {typeof props.value === 'number' ? formatNumber(props.value) : DASH}
@@ -126,6 +127,12 @@ function EnumView(props: ViewProps) {
   };
 
   return <span>{label()}</span>;
+}
+
+/** Some of an enum's options: their labels, joined; a value no longer among them as stored. */
+function EnumMultiView(props: ViewProps) {
+  const text = (): string => enumMultiText(props.value, props.column.editorConfig);
+  return <span>{text() === '' ? DASH : text()}</span>;
 }
 
 /**
@@ -261,15 +268,32 @@ function SupplierPillsView(props: ViewProps) {
     <Show when={suppliers().length > 0} fallback={<span class="text-text-muted">{DASH}</span>}>
       <span class="flex gap-1" classList={{ 'flex-wrap': !noWrap() }}>
         <For each={suppliers()}>
-          {(s) => (
-            <a
-              href={hostNav.routeHref(`/procurement/suppliers/${s.supplierId}/products`)}
-              class="inline-flex items-center rounded bg-slate-100 px-1 py-0.5 text-xs font-medium text-slate-700 no-underline hover:bg-slate-200 hover:text-slate-900"
-              title={s.nickname}
-            >
-              {s.nickname === '' ? __('(unnamed)') : s.nickname}
-            </a>
-          )}
+          {(s) => {
+            const route = `/procurement/suppliers/${s.supplierId}/products`;
+            const label = s.nickname === '' ? __('(unnamed)') : s.nickname;
+            // A supplier's catalog is purchasing's: someone who cannot open it sees the name alone.
+            return (
+              <Show
+                when={linksTo(hostNav, route)}
+                fallback={
+                  <span
+                    class="inline-flex items-center rounded bg-slate-100 px-1 py-0.5 text-xs font-medium text-slate-700"
+                    title={s.nickname}
+                  >
+                    {label}
+                  </span>
+                }
+              >
+                <a
+                  href={hostNav.routeHref(route)}
+                  class="inline-flex items-center rounded bg-slate-100 px-1 py-0.5 text-xs font-medium text-slate-700 no-underline hover:bg-slate-200 hover:text-slate-900"
+                  title={s.nickname}
+                >
+                  {label}
+                </a>
+              </Show>
+            );
+          }}
         </For>
       </span>
     </Show>
@@ -482,10 +506,11 @@ function LinkView(props: ViewProps) {
 }
 
 viewRegistry.register('text', 'core.text', TextView, { default: true });
-viewRegistry.register('number', 'core.number', NumberView, { default: true });
+viewRegistry.register('integer', 'core.integer', IntegerView, { default: true });
 viewRegistry.register('decimal', 'core.decimal', DecimalView, { default: true });
 viewRegistry.register('decimal:money', 'core.money', MoneyView, { default: true });
 viewRegistry.register('enum', 'core.enum', EnumView, { default: true });
+viewRegistry.register('enum-multi', 'core.enum-multi', EnumMultiView, { default: true });
 viewRegistry.register('bool', 'core.bool', BoolView, { default: true });
 viewRegistry.register('date', 'core.date', DateView, { default: true });
 viewRegistry.register('image:url', 'core.image', ImageUrlView, { default: true });

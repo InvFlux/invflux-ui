@@ -147,11 +147,12 @@ describe('operator predicates', () => {
 
   it('recognises the numeric column families', () => {
     expect(isNumericDataType('decimal:money')).toBe(true);
-    expect(isNumericDataType('number')).toBe(true);
+    expect(isNumericDataType('integer')).toBe(true);
+    expect(isNumericDataType('quantity:stock')).toBe(true);
     expect(isNumericDataType('number:receipt')).toBe(true);
     expect(isNumericDataType('text')).toBe(false);
     expect(isMoneyDataType('decimal:money')).toBe(true);
-    expect(isMoneyDataType('number')).toBe(false);
+    expect(isMoneyDataType('integer')).toBe(false);
   });
 
   // Bare `decimal` is what the shipped Weight column declares, and what a host reaches for when its

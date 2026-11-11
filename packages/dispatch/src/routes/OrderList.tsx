@@ -1,4 +1,5 @@
 import {
+  type Accessor,
   createEffect,
   createMemo,
   createSignal,
@@ -13,11 +14,14 @@ import {
 } from 'solid-js';
 import { __, _n, _x, formatDate, formatNumber, sprintf } from '@invflux/i18n';
 import { A, useLocation, useNavigate, useSearchParams } from '@solidjs/router';
-import { createVirtualizer, type VirtualItem } from '@tanstack/solid-virtual';
 import {
   ErrorBanner,
   Button,
-  ColumnPicker,
+  createColumnModel,
+  cx,
+  DataTable,
+  type ColumnModel,
+  type DataTableColumn,
   FILTER_CONTROL_MULTISELECT,
   FILTER_CONTROL_MULTISELECT_ASYNC,
   FILTER_CONTROL_NUMERIC_IDS,
@@ -47,11 +51,17 @@ import { remainingProgress } from '../lineProgress';
 import {
   countFacet,
   type FacetCombination,
-  matchesLocalFilters,
   needsServerMode,
   pendingActionsOf,
 } from '../workingSet';
-import { publishQueueRank, publishQueueSortEntitlements, sortQueue } from '../queueSort';
+import {
+  ANY_PENDING_ACTION,
+  localQueue,
+  NO_FILTER_SENTINEL,
+  parseQueueFilters,
+  pendingActionFilter,
+  spansClosure,
+} from '../queueFilters';
 import { useListStore } from '../listStore';
 import {
   BulkTagAssign,
@@ -64,18 +74,6 @@ import {
 } from '../components/OrderTags';
 import { OrderNotesCell } from '../components/OrderNotesCell';
 import { PendingActionChips } from '../components/PendingActionChips';
-import {
-  loadColumnOrder,
-  defaultHiddenColumns,
-  loadHiddenColumns,
-  moveColumn,
-  orderColumns,
-  QUEUE_COLUMNS,
-  type QueueColumn,
-  type QueueColumnId,
-  saveColumnOrder,
-  saveHiddenColumns,
-} from '../components/queueColumns';
 import { OrderStatusChip, STATUS_LABEL } from '../components/OrderStatusChip';
 import {
   nativeStatusExplanation,
@@ -97,7 +95,6 @@ import type {
   DispatchQueueFilters,
   DispatchToolbarSlotProps,
   OrderStatus,
-  OrderWorkflowState,
   TagSummary,
 } from '../types';
 
@@ -133,94 +130,6 @@ function relativeAge(iso: string | null): string {
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
   return `${Math.floor(seconds / 86400)}d`;
-}
-
-/**
- * Sentinel value used as a URL filter value to mean **"explicit no
- * filter override"** — distinct from the param being absent (which
- * lets the chip's default apply). Solid Router's `mergeSearchString`
- * collapses `''` and `null` into "delete the param", so we can't use
- * an empty string for this purpose: the user's click to uncheck the
- * last value would silently re-apply the default. The sentinel
- * survives the round-trip.
- *
- * Picked underscore for compactness + URL safety; never a valid
- * status / workflow / WC-status code.
- */
-const NO_FILTER_SENTINEL = '_';
-
-/**
- * The `pending_action` token meaning "any kind of waiting work this install registers".
- *
- * **Not {@link NO_FILTER_SENTINEL}, and the difference is the direction.** An absent
- * `pending_action` already means no constraint, so a widening token would say nothing; this one
- * *narrows*, to the orders waiting on a person. It is what the multiselect writes once every option
- * is ticked, so a saved view records the capability rather than today's list — an add-on that
- * contributes "receipts to book" joins such a view, where `manual_refund,corrections` would keep
- * answering the older question under a name that promised otherwise.
- *
- * The adapter resolves it against its live registry per request
- * (`DispatchQueueQuery::ANY_PENDING_ACTION`); this constant is the same string on the client side.
- */
-const ANY_PENDING_ACTION = '_any';
-
-/**
- * Rows per fetch when the queue reads from the server (a filter reaching past the open orders). Not
- * a setting: the list scrolls and fetches the next batch as it nears the end, so the batch size
- * only decides how often that happens — the same 500 the open-order set replicates in.
- */
-const SERVER_PAGE_SIZE = 500;
-
-function parseStatusList(raw: string | undefined): OrderStatus[] | undefined {
-  if (raw === undefined) return undefined;
-  if (raw === '' || raw === NO_FILTER_SENTINEL) return [];
-  const known = new Set<OrderStatus>(['Untouched', 'Started', 'Staged', 'Shipped', 'Canceled']);
-  return raw
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s): s is OrderStatus => known.has(s as OrderStatus));
-}
-
-/**
- * Parse the URL's `workflow_state` token against the states this install
- * declares (`ctx.workflowState.options`) rather than a list held here — an
- * add-on's state is as real as the adapter's, and the SPA has no basis for
- * ranking them.
- *
- * Unrecognized values are dropped rather than passed through, which keeps a
- * stale link from rendering a checkbox for a state the install cannot answer
- * for. Dropping every value leaves `[]`, i.e. no filter — matching the backend,
- * which falls back to its default instead of widening to everything.
- */
-function parseWorkflowList(
-  raw: string | undefined,
-  known: Set<string>,
-): OrderWorkflowState[] | undefined {
-  if (raw === undefined) return undefined;
-  if (raw === '' || raw === NO_FILTER_SENTINEL) return [];
-  return raw
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s) => known.has(s));
-}
-
-function parseNativeStatusList(raw: string | undefined): string[] | undefined {
-  if (raw === undefined) return undefined;
-  if (raw === '' || raw === NO_FILTER_SENTINEL) return [];
-  return raw
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-}
-
-/** Parse a generic comma-separated multi-value URL filter — same contract as the others. */
-function parseGenericList(raw: string | undefined): string[] | undefined {
-  if (raw === undefined) return undefined;
-  if (raw === '' || raw === NO_FILTER_SENTINEL) return [];
-  return raw
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
 }
 
 export function OrderList() {
@@ -380,45 +289,11 @@ export function OrderList() {
     assignTagOptimistically(tag, orderIds);
   };
   const [tagManagerOpen, setTagManagerOpen] = createSignal(false);
-  // Which columns this operator has put away. Per-browser (localStorage), like the DataGrid's own
-  // display settings — see queueColumns.ts for why it is not store policy.
-  const [hiddenColumns, setHiddenColumns] = createSignal<QueueColumnId[]>(loadHiddenColumns());
-  const [columnPickerOpen, setColumnPickerOpen] = createSignal(false);
-  const toggleColumn = (id: QueueColumnId): void => {
-    setHiddenColumns((prev) => {
-      const next = prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id];
-      saveHiddenColumns(next);
-      return next;
-    });
-  };
-  const columnVisible = (id: QueueColumnId): boolean => !hiddenColumns().includes(id);
-  /**
-   * The operator's column order, held as a **complete** list of ids.
-   *
-   * `orderColumns` resolves the stored (possibly partial, possibly stale) list against the shipped
-   * defaults once, here — so everything downstream, the picker included, works on a sequence that
-   * is known to name every column exactly once, and a reorder is a plain array move.
-   */
-  const [columnOrder, setColumnOrder] = createSignal<QueueColumnId[]>(
-    orderColumns(loadColumnOrder()).map((c) => c.id),
-  );
-  const orderedColumns = createMemo<QueueColumn[]>(() => orderColumns(columnOrder()));
-  const reorderColumn = (sourceId: QueueColumnId, targetId: QueueColumnId): void => {
-    const next = moveColumn(columnOrder(), sourceId, targetId);
-    setColumnOrder(next);
-    saveColumnOrder(next);
-  };
-  /** Both choices back to shipped defaults — the picker offers one reset because an operator who
-   *  wants the queue back does not distinguish "which columns" from "in what order". */
-  const resetColumns = (): void => {
-    const defaults = QUEUE_COLUMNS.map((c) => c.id);
-    // Back to the shipped defaults, which include the columns that start hidden.
-    const hiddenByDefault = defaultHiddenColumns();
-    setHiddenColumns(hiddenByDefault);
-    saveHiddenColumns(hiddenByDefault);
-    setColumnOrder(defaults);
-    saveColumnOrder(defaults);
-  };
+  // The operator's choices for the queue table — which columns, in what order, how wide, the display
+  // settings — kept per browser under the table's own scope. Which columns *this operator* wants on
+  // *this screen* is a convenience, not store policy: on the server, one packer's narrow laptop would
+  // reshape the queue for everyone.
+  const columnModel = createColumnModel({ scope: 'dispatch-queue' });
   // The surface's title and settings are the shell's to render: it names the surface in its tab
   // strip and carries the contextual gear, whose panel this SPA registers once in its router root
   const toolbarSlots = (): ReturnType<typeof slotRegistry.get<DispatchToolbarSlotProps>> =>
@@ -444,10 +319,6 @@ export function OrderList() {
    * would just fit unstacked, which is invisible; an oscillation is not.
    */
   const [filterLines, setFilterLines] = createSignal(1);
-  // Row element refs by index so keyboard nav can scroll the focused
-  // row into view. Cleared / rebuilt on every render via the row's ref
-  // callback.
-  const rowEls = new Map<number, HTMLTableRowElement>();
 
   /**
    * States this install offers, as advertised by the adapter — never a list held here. Typed from
@@ -455,86 +326,18 @@ export function OrderList() {
    * the chip ignores and {@link workflowWideningFor} needs.
    */
   const workflowOptions = createMemo(() => ctx.workflowState.options);
-  const knownWorkflowValues = createMemo(() => new Set(workflowOptions().map((o) => o.value)));
 
-  /**
-   * Which deliberate filters make the `Active` default *yield* rather than narrow.
-   *
-   * Only the ones whose meaning spans closure — today, waiting work: a refund settled by a
-   * whole-order cancel sits on a closed order, so "refunds owed" under the open-orders floor is a
-   * different and misleading number.
-   *
-   * This was briefly every filter, on the reasoning that the queue sort ranks closed orders last so
-   * widening costs nothing. Replication changed the arithmetic: the client holds the *open* set, so
-   * widening now means leaving it and paying for a server query. A SKU search wanting live work
-   * first was never asking to see three years of history, and now it does not silently buy it.
-   */
-  const widensPastClosure = (): boolean => pendingActions().length > 0;
+  /** Whether this view's filters make the `Active` default yield (see `spansClosure`). */
+  const widensPastClosure = (): boolean => spansClosure(pendingActions());
 
-  /**
-   * The kinds of waiting work currently filtered to, as wire values.
-   *
-   * Unrecognized values are kept rather than dropped: which actions exist is an install-level
-   * question, the server resolves them against what it registered, and a value dropped here would
-   * *widen* the union — a work queue silently showing more than was asked for is the failure mode
-   * that matters, since a longer backlog looks like a busy day.
-   *
-   * {@link ANY_PENDING_ACTION} expands to whatever this install advertises, so every consumer here
-   * — the chip's summary, the dropdown's ticks, the local predicate — sees a plain list and none of
-   * them has to know the token exists. The *URL* keeps the token; only this reading widens it.
-   */
-  const pendingActions = (): string[] => {
-    const raw = searchParams.pending_action;
-    if (raw !== undefined && raw.split(',').some((v) => v.trim() === ANY_PENDING_ACTION)) {
-      return ctx.pendingAction.options.map((o) => o.value);
-    }
-
-    return parseGenericList(raw) ?? [];
-  };
+  /** The kinds of waiting work filtered to, `_any` expanded (see `pendingActionFilter`). */
+  const pendingActions = (): string[] =>
+    pendingActionFilter(searchParams.pending_action, ctx.pendingAction.options);
 
   const pendingActionLabel = (value: string): string =>
     ctx.pendingAction.options.find((o) => o.value === value)?.label ?? value;
 
-  const filters = createMemo<DispatchQueueFilters>(() => ({
-    status: parseStatusList(searchParams.status),
-    // The `Active` default yields to *any* deliberate filter, rather than narrowing it.
-    //
-    // Nobody chose `Active` — it is what the queue shows when asked nothing — so a real question
-    // replaces it instead of intersecting with it (the default-vs-deliberate contract read across
-    // filters rather than within one). An operator who set `workflow_state` themselves has made
-    // a choice, and a choice is never overridden.
-    //
-    // What makes this safe rather than overwhelming is the queue's **sort**, not a narrower rule:
-    // closed orders always rank last, so a SKU filter answers with live work first and history
-    // below it. Excluding them would answer "should this row exist" when the question was "how
-    // urgent is it" — and for some filters the exclusion is a lie outright, since a refund settled
-    // by a whole-order cancel sits on a *Closed* order.
-    //
-    // Rendered, not merely applied — the workflow chip shows the widened cut, so this is a
-    workflowState:
-      parseWorkflowList(searchParams.workflow_state, knownWorkflowValues()) ??
-      (widensPastClosure() ? [] : undefined),
-    // Bake the adapter-provided default in at parse time so the server
-    // receives the same filter the user sees. URL absent → default
-    // applies. URL present-but-empty → no filter (explicit override).
-    wcStatus: parseNativeStatusList(searchParams.wc_status) ?? ctx.nativeStatus.defaultSelected,
-    worksheetIds: parseGenericList(searchParams.worksheet_id),
-    skus: parseGenericList(searchParams.sku),
-    // Domain-key filter set by the workbench "Orders" link (dash-joined to keep the URL free of
-    // encoded commas). Normalize dashes to the shared comma parser; the server accepts both.
-    subjectIds: parseGenericList(searchParams.subject_ids?.replace(/-/g, ',')),
-    paymentMethods: parseGenericList(searchParams.payment_method),
-    shippingClasses: parseGenericList(searchParams.shipping_class),
-    shippingMethods: parseGenericList(searchParams.shipping_method),
-    tagIds: parseGenericList(searchParams.tag_id),
-    tagMatch: searchParams.tag_match === 'all' ? 'all' : undefined,
-    tagIdsNot: parseGenericList(searchParams.tag_id_not),
-    hasTags: parseGenericList(searchParams.has_tags),
-    hasNotes: parseGenericList(searchParams.has_notes),
-    pendingActions: pendingActions(),
-    search: searchParams.search?.trim() || undefined,
-    perPage: SERVER_PAGE_SIZE,
-  }));
+  const filters = createMemo<DispatchQueueFilters>(() => parseQueueFilters(searchParams, ctx));
 
   // Worksheet options preload (small + stable enough to fetch once per session).
   const worksheetOptionsQuery = useWorksheetFilterOptionsQuery();
@@ -589,31 +392,13 @@ export function OrderList() {
   );
 
   /**
-   * The queue's rows: filtered and sorted **here** while the client holds the set, and read from
-   * the server's pages when it does not.
-   *
-   * Sorting locally is not a shortcut — it is what makes the poll honest. A merged row that kept
-   * its old position would be correct and in the wrong place, which reads as the queue ignoring
-   * the change that just arrived.
+   * The queue's rows: filtered and sorted **here** while the client holds the set (`localQueue`),
+   * and read from the server's pages when it does not.
    */
-  // Hand the queue's sort seam this install's entitlements, so a contributed ranking rule can gate
-  // itself on the license the way the server's fragment does. Read through a getter rather than
-  // copied, because the context is fetched lazily and a snapshot taken here would freeze the
-  // pre-fetch defaults.
-  publishQueueSortEntitlements(() => ctx.entitlements as unknown as Record<string, boolean>);
-  // And the shop's queue order, read the same way: the server resolved it, and the local sort
-  // follows it so a polled row lands where the server's own page would put it.
-  publishQueueRank(() => ctx.settings?.queueRank);
-
   const allOrders = createMemo<DispatchOrderSummary[]>(() => {
     if (serverMode()) return (query.data?.pages ?? []).flatMap((p) => p.orders);
 
-    const gateways = ctx.paymentMethods.manualIds ?? [];
-    const matching = [...workingSet.orders().values()].filter((o) =>
-      matchesLocalFilters(o, filters(), gateways),
-    );
-
-    return sortQueue(matching);
+    return localQueue(workingSet.orders().values(), filters(), ctx.paymentMethods.manualIds ?? []);
   });
 
   /**
@@ -724,6 +509,10 @@ export function OrderList() {
   const location = useLocation();
   createEffect(() => {
     listStore.setIds(displayedOrders().map((o) => o.id));
+    // A server view counts every match, loaded or not. A search still being typed narrows the loaded
+    // rows ahead of the server, and then the rows shown are the whole sequence.
+    const shown = displayedOrders().length;
+    listStore.setTotal(shown < allOrders().length ? shown : Math.max(shown, totalCount()));
   });
   // Mirror the queue's URL search string into the cross-route store
   // so OrderDetail's "← Queue" back link can restore the operator's
@@ -1753,66 +1542,30 @@ export function OrderList() {
   });
 
   /**
-   * Row virtualization via TanStack Virtual. Matches the Central
-   * Workbench setup (same `createVirtualizer` shape, same overscan
-   * window) so the two grids feel uniform under the operator's
-   * scroll wheel.
+   * The next page, when the table's last drawn row comes near the end of what is loaded: the queue
+   * scrolls on continuously rather than by pages. The table asks once per length of the list, so
+   * this guard is for a fetch already under way from elsewhere (a refetch, the first page).
+   */
+  const loadMore = (): void => {
+    if (serverMode() && query.hasNextPage && !query.isFetchingNextPage) void query.fetchNextPage();
+  };
+
+  /** Where each displayed order sits, for the hover report, which names a row rather than a place. */
+  const indexById = createMemo(() => new Map(displayedOrders().map((o, i) => [o.id, i])));
+
+  /**
+   * The order the table should keep in view: set by the keyboard, cleared by the mouse.
    *
-   * Row height estimate is the rendered dispatch row — two-line
-   * customer cell + pill row + table padding works out to ~56px.
-   * The virtualizer re-measures actual heights once rows render, so
-   * the estimate only matters for initial scrollbar positioning.
+   * Apart from {@link focusedIndex} because the two move the highlight for different reasons. The
+   * arrows go past the edge of the box and need it to follow; a hover is already on screen, and
+   * scrolling to it would fight the operator's own scroll wheel. Cleared on hover, too, so the next
+   * arrow press is always a *change* of the table's active row — the only thing it scrolls on.
    */
-  let scrollContainerEl: HTMLDivElement | undefined;
-  const virtualizer = createVirtualizer({
-    get count() {
-      return displayedOrders().length;
-    },
-    getScrollElement: () => scrollContainerEl ?? null,
-    estimateSize: () => 56,
-    overscan: 10,
-  });
-  const virtualItems = createMemo(() => virtualizer.getVirtualItems());
-  const paddingTop = createMemo(() => virtualItems()[0]?.start ?? 0);
-  const paddingBottom = createMemo(() => {
-    const items = virtualItems();
-    return Math.max(0, virtualizer.getTotalSize() - (items.at(-1)?.end ?? 0));
-  });
+  const [scrollTarget, setScrollTarget] = createSignal<string | undefined>(undefined);
 
-  /**
-   * Auto-load next page when the virtualizer's last rendered row is
-   * within 20 of the end of the loaded set. Cleaner than an
-   * IntersectionObserver sentinel because the virtualizer already
-   * tracks visible row indices — no extra DOM node, no observer
-   * lifecycle.
-   */
-  createEffect(() => {
-    const items = virtualItems();
-    const total = displayedOrders().length;
-    if (
-      serverMode() &&
-      items.length > 0 &&
-      total > 0 &&
-      items[items.length - 1].index >= total - 20 &&
-      query.hasNextPage &&
-      !query.isFetchingNextPage
-    ) {
-      void query.fetchNextPage();
-    }
-  });
-
-  /**
-   * Keep the focused row in view as the user arrows through. Uses
-   * the virtualizer's own scroll API so off-screen rows materialize
-   * before scrollIntoView can see them. Skips the scroll for mouse-
-   * driven hovers — forcibly scrolling on hover would fight the
-   * user's scroll input.
-   */
   function focusRow(index: number, options: { scroll?: boolean } = {}) {
     setFocusedIndex(index);
-    if (options.scroll && index >= 0) {
-      virtualizer.scrollToIndex(index, { align: 'auto' });
-    }
+    if (options.scroll && index >= 0) setScrollTarget(displayedOrders()[index]?.id);
   }
 
   /**
@@ -2104,14 +1857,14 @@ export function OrderList() {
             >
               <RefreshIcon class={`h-4 w-4${isRefreshing() ? ' animate-spin' : ''}`} />
             </Button>
-            {/* Column visibility for the queue table. Beside Refresh because both act on what the
-              table shows rather than on what the query asks for. */}
+            {/* The queue table's column picker. Beside Refresh because both act on what the table
+              shows rather than on what the query asks for. */}
             <Button
               variant="secondary"
               class="h-9"
               aria-label={__('Columns')}
               title={__('Columns')}
-              onClick={() => setColumnPickerOpen(true)}
+              onClick={() => columnModel.openPicker()}
             >
               <ColumnsSettingsIcon class="h-4 w-4" />
             </Button>
@@ -2131,22 +1884,22 @@ export function OrderList() {
         </div>
       </Show>
 
-      <div
-        ref={scrollContainerEl}
-        class="min-h-0 flex-1 overflow-auto rounded border border-gray-200 bg-surface"
-        tabindex="-1"
-      >
+      {/* The table scrolls inside its own box, which takes whatever height the toolbar and the
+          selection bar leave, so they stay put while the rows scroll. The box is the first child
+          (the table's menus and dialogs follow it); it is sized from here because a fill measured
+          to the viewport bottom would not follow the selection bar appearing above it. */}
+      <div class="relative flex min-h-0 flex-1 flex-col [&>:first-child]:min-h-0 [&>:first-child]:flex-1">
         <Switch>
           {/* Loading is "nothing to show yet", from whichever source is feeding the table. Page one
               of the replication arrives before the set completes, so this clears as early as a
               paged queue's would. */}
           <Match when={loadingFirstRows()}>
-            <div class="text-center text-text-muted text-sm py-6">
+            <div class="rounded border border-border bg-surface text-center text-text-muted text-sm py-6">
               {__('Loading dispatch queue…')}
             </div>
           </Match>
           <Match when={queueError() !== null}>
-            <ErrorBanner as="div" class="text-center text-sm py-6">
+            <ErrorBanner as="div" class="rounded border border-border text-center text-sm py-6">
               {sprintf(
                 __('Failed to load orders: %s'),
                 queueError()?.message ?? __('unknown error'),
@@ -2164,9 +1917,8 @@ export function OrderList() {
           <Match when={!loadingFirstRows() || allOrders().length > 0}>
             <OrderTable
               orders={displayedOrders()}
-              virtualItems={virtualItems()}
-              paddingTop={paddingTop()}
-              paddingBottom={paddingBottom()}
+              model={columnModel}
+              onNearEnd={loadMore}
               nativeColumnLabel={ctx.nativeStatus.columnLabel}
               nativeStatusLabel={nativeStatusLabel}
               nativeStatusColor={nativeStatusColor}
@@ -2179,26 +1931,29 @@ export function OrderList() {
               onToggleRow={toggleRowSelect}
               allSelected={displayedAllSelected()}
               onToggleAll={toggleSelectAll}
-              focusedIndex={focusedIndex()}
-              onHoverRow={(idx) => setFocusedIndex(idx)}
-              registerRowEl={(idx, el) => {
-                if (el) rowEls.set(idx, el);
-                else rowEls.delete(idx);
+              focusedId={displayedOrders()[focusedIndex()]?.id}
+              scrollTarget={scrollTarget()}
+              onHoverRow={(order) => {
+                // Leaving the table keeps the highlight: the arrows and Enter carry on from the row
+                // the pointer was last on. Only Escape clears it.
+                if (null === order) return;
+                setScrollTarget(undefined);
+                setFocusedIndex(indexById().get(order.id) ?? -1);
               }}
-              columnVisible={columnVisible}
-              columns={orderedColumns()}
               manualGateways={ctx.paymentMethods.manualIds ?? []}
             />
           </Match>
         </Switch>
+        {/* Only paging progress: it belongs at the edge the operator is scrolling toward, so it sits
+            over the foot of the table rather than below it, where it would push the table's bottom
+            edge off the screen. The counts and the refreshing state are in the toolbar readout,
+            read before the table rather than after it. */}
+        <Show when={query.isFetchingNextPage}>
+          <div class="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded bg-surface-raised px-2 py-0.5 text-xs text-text-muted shadow-sm">
+            {__('Loading more…')}
+          </div>
+        </Show>
       </div>
-
-      {/* Only paging progress: it belongs at the edge the operator is scrolling toward. The counts
-          and the refreshing state moved to the toolbar readout, where they are read before the
-          table rather than after it. */}
-      <Show when={query.isFetchingNextPage}>
-        <div class="mt-2 shrink-0 text-xs text-text-muted">{__('Loading more…')}</div>
-      </Show>
 
       <Show when={rowMenu()}>
         {(menu) => (
@@ -2235,31 +1990,34 @@ export function OrderList() {
       <Show when={tagManagerOpen()}>
         <TagManagerModal onClose={() => setTagManagerOpen(false)} />
       </Show>
-
-      <Show when={columnPickerOpen()}>
-        <ColumnPicker
-          columns={orderedColumns()}
-          hidden={hiddenColumns()}
-          onToggle={toggleColumn}
-          // Passing `onMove` is what turns reordering on: the queue renders its columns from this
-          // same ordered list, so a stored order is honored and the handles are not decorative.
-          onMove={reorderColumn}
-          onReset={resetColumns}
-          onClose={() => setColumnPickerOpen(false)}
-          // The store's own wording for the host-status column, so the picker and its header agree.
-          labelFor={(c) => ('native' === c.id ? ctx.nativeStatus.columnLabel : undefined)}
-        />
-      </Show>
     </div>
   );
 }
 
 /**
+ * The queue's data columns. The ids are what the operator's stored column choices are keyed by, so
+ * renaming one loses that column's saved place, visibility and width.
+ */
+type QueueColumnId =
+  | 'order'
+  | 'age'
+  | 'customer'
+  | 'annotations'
+  | 'payment'
+  | 'dispatch'
+  | 'native'
+  | 'stock'
+  | 'progress'
+  | 'edt'
+  | 'shipping_method'
+  | 'shipping_class';
+
+/**
  * The `title` on each column header — the long-form explanation of what the column means.
  *
- * **Getters, not strings**, for the same reason `QUEUE_COLUMNS` uses them: this module is evaluated
- * at chunk load, and a `__()` called there resolves before the locale is installed, freezing the
- * English into the bundle. Calling per render costs nothing and is the only form that translates.
+ * **Getters, not strings**: this module is evaluated at chunk load, and a `__()` called there
+ * resolves before the locale is installed, freezing the English into the bundle. The table calls
+ * them as it builds its columns, at render time.
  */
 const COLUMN_DESCRIPTIONS: Record<QueueColumnId, () => string> = {
   order: () => __('Source-system order id (linked). Click the row to open the detail view.'),
@@ -2389,10 +2147,10 @@ function settledTitle(order: DispatchOrderSummary): string | undefined {
 
 function OrderTable(props: {
   orders: DispatchOrderSummary[];
-  /** Virtual rows from the parent's TanStack virtualizer. */
-  virtualItems: VirtualItem[];
-  paddingTop: number;
-  paddingBottom: number;
+  /** The operator's column choices. Owned by the surface, whose toolbar opens the picker. */
+  model: ColumnModel;
+  /** The table's cue that its last drawn row is near the end of the loaded orders. */
+  onNearEnd: () => void;
   nativeColumnLabel: string;
   nativeStatusLabel: (value: string) => string;
   nativeStatusColor: (value: string) => number;
@@ -2404,15 +2162,12 @@ function OrderTable(props: {
   onToggleRow: (id: string) => void;
   allSelected: boolean;
   onToggleAll: () => void;
-  /** -1 = no row currently focused. */
-  focusedIndex: number;
-  onHoverRow: (index: number) => void;
-  registerRowEl: (index: number, el: HTMLTableRowElement | null) => void;
-  /** Operator's column choices — see queueColumns.ts. */
-  columnVisible: (id: QueueColumnId) => boolean;
-  /** Every column, in the operator's order. Hiding is still `columnVisible`'s answer, not absence
-   *  from this list, so the picker and the table are driven by one sequence. */
-  columns: QueueColumn[];
+  /** The highlighted order, which the pointer and the arrow keys both move; none until either does. */
+  focusedId: string | undefined;
+  /** The order the table keeps in view. Set by the arrow keys only: a hovered row is already on screen. */
+  scrollTarget: string | undefined;
+  /** The order under the pointer, or `null` when the pointer leaves the table. */
+  onHoverRow: (order: DispatchOrderSummary | null) => void;
   /**
    * Gateway ids that cannot refund or capture through the API.
    *
@@ -2423,235 +2178,371 @@ function OrderTable(props: {
   manualGateways: readonly string[];
 }) {
   /**
-   * Hide the Stock column when nothing on the current page would
-   * render anything in it. Concerns are exception markers — most
-   * queue rows show no badge, and a column of blank dashes wastes
-   * horizontal real estate that the Customer / Payment cells
-   * could use. We re-evaluate per render so a refetch that brings
-   * a concern back in surfaces the column again automatically.
+   * Offer the Stock concerns column only when some loaded order has something to show in it.
+   * Concerns are exception markers — most queue rows show no badge, and a column of blanks spends
+   * width the Customer and Payment cells could use. Re-evaluated as the orders change, so a refetch
+   * that brings a concern back brings the column back with it. Apart from the operator's choice: a
+   * column that is not offered keeps its place and visibility for when it is.
    */
-  const showStockColumn = createMemo(
-    () =>
-      props.columnVisible('stock') &&
-      props.orders.some((o) => o.stockState !== 0 || o.hasUnmanagedLine),
-  );
-  /**
-   * Whether a column renders at all — the operator's choice, plus `stock`'s own emptiness gate.
-   *
-   * One predicate rather than two, because the header, the cells and the spacers' `colspan` must
-   * agree exactly: a column that appears in one and not the others is a table whose columns are
-   * offset by one, which reads as every value being wrong rather than as one column missing.
-   */
-  const visible = (col: QueueColumn): boolean =>
-    col.id === 'stock' ? showStockColumn() : props.columnVisible(col.id);
-
-  /** The column's own label — `native` excepted, whose header is the *store's* wording for its own
-   *  status field and arrives as a prop. */
-  const label = (col: QueueColumn): string =>
-    col.id === 'native' ? props.nativeColumnLabel : col.label();
-
-  /**
-   * Header count for the full-width rows (empty state, and the virtualizer's two spacers). Derived
-   * rather than a constant: it has to follow both gates, and a stale number leaves the spacers
-   * short, which shows up as a scroll height that drifts from the row count.
-   */
-  const colSpan = createMemo(
-    () =>
-      1 + // the selection checkbox, which is structure and never hidden
-      props.columns.filter(visible).length,
+  const hasStockSignal = createMemo(() =>
+    props.orders.some((o) => o.stockState !== 0 || o.hasUnmanagedLine),
   );
 
-  /**
-   * One row's cell for one column.
-   *
-   * Takes the order as an **accessor**, not a value: the cells are created once per row by the
-   * `<For>` over columns, so reading the row eagerly here would freeze each cell on the data it
-   * first rendered with and a poll would update nothing.
-   */
-  const cell = (col: QueueColumn, order: () => DispatchOrderSummary): JSX.Element => {
-    switch (col.id) {
-      case 'order':
-        return (
-          <td class="px-3 py-2">
-            <A
-              href={`/${order().id}`}
-              class="font-mono text-primary hover:text-primary-hover font-medium"
-              onClick={(e) => e.stopPropagation()}
-            >
-              #{order().externalId}
-            </A>
-          </td>
-        );
-      case 'age':
-        return (
-          <td class="px-3 py-2 text-xs text-gray-500 tabular-nums whitespace-nowrap">
-            {relativeAge(order().createdAt)}
-          </td>
-        );
-      case 'customer':
-        return (
-          <td class="px-3 py-2">
-            <div class="font-medium text-gray-800">{order().customerName}</div>
-            <div class="text-xs text-text-muted">{order().customerEmail}</div>
-          </td>
-        );
-      case 'annotations':
-        return (
-          <td class="px-3 py-2">
-            <div class="flex flex-col items-start gap-1">
-              <Show when={(order().tags?.length ?? 0) > 0}>
-                <TagPillRow tags={order().tags} />
-              </Show>
-              {/*
-                Above the notes, because what the order is *waiting on someone to do* outranks what
-                someone has already written about it — a row that needs an operator should not have
-                to be read past a note to be noticed.
-              */}
-              <PendingActionChips order={order()} manualGateways={props.manualGateways} />
-              <OrderNotesCell order={order()} />
-            </div>
-          </td>
-        );
-      case 'payment':
-        return (
-          <td
-            class="px-3 py-2 text-xs text-gray-700 whitespace-nowrap"
-            title={order().paymentMethod ?? undefined}
-            data-payment-method={order().paymentMethod ?? ''}
-          >
-            <Show when={order().paymentMethodTitle} fallback={<span class="text-gray-300">—</span>}>
-              {order().paymentMethodTitle}
-            </Show>
-          </td>
-        );
-      case 'dispatch':
-        return (
-          <td class="px-3 py-2">
-            <OrderStatusChip status={order().status} />
-          </td>
-        );
-      case 'native':
-        return (
-          <td class="px-3 py-2">
-            <Show when={order().wcStatus} fallback={<span class="text-xs text-gray-300">—</span>}>
-              <Pill
-                colorId={props.nativeStatusColor(order().wcStatus!)}
-                title={props.nativeStatusExplanation(order().wcStatus!)}
-              >
-                {props.nativeStatusLabel(order().wcStatus!)}
-              </Pill>
-            </Show>
-          </td>
-        );
-      case 'stock':
-        return (
-          <td class="px-3 py-2">
-            <Show when={!isSettledOrder(order())}>
-              <StockConcernBadge
-                bits={order().stockState}
-                unmanaged={order().hasUnmanagedLine}
-                shortQty={order().stockShortQty}
-              />
-            </Show>
-          </td>
-        );
-      case 'progress':
-        return (
-          <td class="px-3 py-2 text-gray-600 tabular-nums">
-            <StagingProgress
-              staged={order().stagedCount}
-              lines={order().lineCount}
-              settled={order().settledCount ?? 0}
-            />
-          </td>
-        );
-      case 'shipping_class':
-        return (
-          <td class="px-3 py-2 text-xs whitespace-nowrap">
-            <Show
-              when={(order().shippingClasses ?? []).length > 0}
-              fallback={<span class="text-gray-300">—</span>}
-            >
-              {/*
-                Joined for reading, never for matching — the filter keys on the lines server-side.
-                `none` is muted because it is the *absence* of an obligation: on a mixed order the
-                real class is the word a packer has to act on, and giving both equal weight makes
-                them hunt for it. It still renders, because "some lines are unclassified" is a fact
-                about the parcel and an empty cell would not say it.
-              */}
-              <For each={order().shippingClasses ?? []}>
-                {(cls, i) => (
-                  <>
-                    <Show when={i() > 0}>
-                      <span class="text-gray-300">, </span>
-                    </Show>
-                    <span classList={{ 'text-gray-400 italic': cls === 'none' }}>
-                      {cls === 'none'
-                        ? _x('none', 'shipping class: the order has none (lower case)')
-                        : cls}
-                    </span>
-                  </>
-                )}
-              </For>
-            </Show>
-          </td>
-        );
-      case 'shipping_method':
-        return (
-          <td
-            class="px-3 py-2 text-xs text-gray-700 whitespace-nowrap"
-            // The id is the key the filter uses; hovering shows it, and every method on a split.
-            title={(order().shippingMethods ?? []).join(', ') || undefined}
-            data-shipping-method={order().shippingMethod ?? ''}
-          >
-            <Show
-              when={order().shippingMethodTitle}
-              fallback={<span class="text-gray-300">—</span>}
-            >
-              {order().shippingMethodTitle}
-              {/* A second package is a fact about the parcel, so it is counted rather than
-                  hidden behind the first package's name. */}
-              <Show when={(order().shippingCount ?? 0) > 1}>
-                <span class="ml-1 text-text-muted">+{(order().shippingCount ?? 1) - 1}</span>
-              </Show>
-            </Show>
-          </td>
-        );
-      case 'edt':
-        return (
-          <Show
-            when={!isSettledOrder(order())}
-            fallback={
-              <td
-                class="px-3 py-2 text-xs tabular-nums whitespace-nowrap text-text-muted"
-                title={settledTitle(order())}
-              >
-                {settledOn(order())}
-              </td>
-            }
-          >
-            <td
-              class="px-3 py-2 text-xs tabular-nums whitespace-nowrap"
-              classList={{
-                'text-red-600 font-medium': edtLate(order().estDispatch).isLate,
-                'text-gray-500': !edtLate(order().estDispatch).isLate,
-              }}
-              title={edtTitle(order().estDispatch)}
-            >
-              {/* Late says it once: "28d ago · 28d late" gave the same number twice, since both
-                  halves were measured from the same date. The date itself is in the title. */}
-              {edtLate(order().estDispatch).days > 0
-                ? sprintf(
-                    /* translators: %d: whole days past the estimated dispatch date. */
-                    _x('%dd late', 'dispatch date column'),
-                    edtLate(order().estDispatch).days,
-                  )
-                : relativeEdt(order().estDispatch)}
-            </td>
-          </Show>
-        );
-    }
+  /*
+    Header content is built once, here, rather than inside the column list: the list is rebuilt when
+    the Stock column's availability flips, and a header rebuilt with it would be a new element.
+  */
+  const selectHeader = (
+    <input
+      type="checkbox"
+      class="cursor-pointer align-middle"
+      checked={props.allSelected}
+      title={__('Select all loaded orders')}
+      aria-label={__('Select all loaded orders')}
+      onChange={() => props.onToggleAll()}
+    />
+  );
+
+  /*
+    Every cell reads its order through an accessor (`cellOf`): a cell is built once per row, and the
+    queue polls, so a cell that read its order once would go on showing the data it first rendered
+    with — and the notes cell, which holds an open popover, must not be rebuilt under the operator.
+
+    The selection checkbox is a column so that it lines up with the others, but it is structure, not
+    data: it is required, and a queue you cannot select from is a different surface rather than a
+    narrower one.
+  */
+  const selectColumn: DataTableColumn<DispatchOrderSummary> = {
+    id: 'select',
+    header: selectHeader,
+    label: () => _x('Select', 'dispatch queue column: the row selection checkboxes'),
+    required: true,
+    size: 32,
+    cellOf: (order) => (
+      // The press stops here, so a click on or beside the box selects the order and never opens it.
+      <label class="flex cursor-pointer items-center" onClick={(e) => e.stopPropagation()}>
+        <input
+          aria-label={__('Select row')}
+          type="checkbox"
+          class="cursor-pointer"
+          checked={props.selectedIds.has(order().id)}
+          onChange={() => props.onToggleRow(order().id)}
+        />
+      </label>
+    ),
   };
+  const orderColumn: DataTableColumn<DispatchOrderSummary> = {
+    id: 'order',
+    header: _x('Order', 'dispatch queue column: the sales order number'),
+    title: COLUMN_DESCRIPTIONS.order(),
+    // Hiding it would leave rows with no visible identity.
+    required: true,
+    cellOf: (order) => (
+      <A
+        href={`/${order().id}`}
+        class="font-mono text-primary hover:text-primary-hover font-medium"
+        onClick={(e) => e.stopPropagation()}
+      >
+        #{order().externalId}
+      </A>
+    ),
+  };
+  const ageColumn: DataTableColumn<DispatchOrderSummary> = {
+    id: 'age',
+    header: _x('Age', 'dispatch queue column: how long ago the order was placed'),
+    title: COLUMN_DESCRIPTIONS.age(),
+    cellOf: (order) => (
+      <span class="text-xs text-gray-500 tabular-nums whitespace-nowrap">
+        {relativeAge(order().createdAt)}
+      </span>
+    ),
+  };
+  const customerColumn: DataTableColumn<DispatchOrderSummary> = {
+    id: 'customer',
+    header: __('Customer'),
+    title: COLUMN_DESCRIPTIONS.customer(),
+    cellOf: (order) => (
+      <>
+        <div class="font-medium text-gray-800">{order().customerName}</div>
+        {/* An address cannot wrap, so once the operator has set the widths it ends in an ellipsis
+            rather than running under the next column; the whole of it is in the tooltip. */}
+        <div class="truncate text-xs text-text-muted" title={order().customerEmail}>
+          {order().customerEmail}
+        </div>
+      </>
+    ),
+  };
+  /*
+    The sparse signal — tags, pending actions and notes together, because a normal order carries none
+    of them. Parked inside Customer, which has a value on every row, any of them was invisible; the
+    eye stops reading a column that is never empty. The pending actions run the same predicates as the
+    `pending_action` filter, so a row showing a chip is exactly a row that filter would return.
+  */
+  const annotationsColumn: DataTableColumn<DispatchOrderSummary> = {
+    id: 'annotations',
+    header: __('Tags, notes & actions'),
+    title: COLUMN_DESCRIPTIONS.annotations(),
+    cellOf: (order) => (
+      <div class="flex flex-col items-start gap-1">
+        <Show when={(order().tags?.length ?? 0) > 0}>
+          <TagPillRow tags={order().tags} />
+        </Show>
+        {/*
+          Above the notes, because what the order is *waiting on someone to do* outranks what
+          someone has already written about it — a row that needs an operator should not have
+          to be read past a note to be noticed.
+        */}
+        <PendingActionChips order={order()} manualGateways={props.manualGateways} />
+        <OrderNotesCell order={order()} />
+      </div>
+    ),
+  };
+
+  /*
+    On a narrow table (a box under 1024px: a tablet, a laptop with the admin menu open wide) four
+    columns give way, and a queue row is two lines high anyway, so three of them move under a
+    neighbour instead of going: the host's status under the dispatch chip, a stock concern under
+    the progress count, the shipping method under the ship-by date. The payment method is the one
+    that simply goes — it is read when a payment is in question, not while packing, and the
+    pending-action chips already say when a payment needs someone.
+  */
+  const nativePill = (order: Accessor<DispatchOrderSummary>): JSX.Element => (
+    <Show when={order().wcStatus} fallback={<span class="text-xs text-gray-300">—</span>}>
+      <Pill
+        colorId={props.nativeStatusColor(order().wcStatus!)}
+        title={props.nativeStatusExplanation(order().wcStatus!)}
+      >
+        {props.nativeStatusLabel(order().wcStatus!)}
+      </Pill>
+    </Show>
+  );
+  const stockBadge = (order: Accessor<DispatchOrderSummary>): JSX.Element => (
+    <StockConcernBadge
+      bits={order().stockState}
+      unmanaged={order().hasUnmanagedLine}
+      shortQty={order().stockShortQty}
+    />
+  );
+  /** Whether the stock cell has anything to say — a settled order's concerns are history, not alarms. */
+  const hasConcern = (order: DispatchOrderSummary): boolean =>
+    !isSettledOrder(order) && (order.stockState !== 0 || order.hasUnmanagedLine === true);
+  /**
+   * The other packages of a split shipment, counted after the first package's method: a second
+   * package is a fact about the parcel, so it is not hidden behind the first one's name.
+   */
+  const otherPackages = (order: Accessor<DispatchOrderSummary>): JSX.Element => (
+    <Show when={(order().shippingCount ?? 0) > 1}>
+      <span class="ml-1 text-text-muted">+{(order().shippingCount ?? 1) - 1}</span>
+    </Show>
+  );
+  // The id is the key the filter uses; hovering shows it, and every method on a split.
+  const shippingMethodTitle = (order: DispatchOrderSummary): string | undefined =>
+    (order.shippingMethods ?? []).join(', ') || undefined;
+
+  const paymentColumn: DataTableColumn<DispatchOrderSummary> = {
+    id: 'payment',
+    header: __('Payment method'),
+    title: COLUMN_DESCRIPTIONS.payment(),
+    collapseBelow: 'lg',
+    cellOf: (order) => (
+      <span
+        class="text-xs text-gray-700 whitespace-nowrap"
+        title={order().paymentMethod ?? undefined}
+        data-payment-method={order().paymentMethod ?? ''}
+      >
+        <Show when={order().paymentMethodTitle} fallback={<span class="text-gray-300">—</span>}>
+          {order().paymentMethodTitle}
+        </Show>
+      </span>
+    ),
+  };
+  const dispatchColumn: DataTableColumn<DispatchOrderSummary> = {
+    id: 'dispatch',
+    header: _x('Dispatch', 'dispatch queue column: where the order stands in picking and packing'),
+    title: COLUMN_DESCRIPTIONS.dispatch(),
+    cellOf: (order, ctx) => (
+      <div class="flex flex-col items-start gap-1">
+        <OrderStatusChip status={order().status} />
+        <Show when={ctx.collapsed('native')}>
+          <div data-testid="queue-native-under">{nativePill(order)}</div>
+        </Show>
+      </div>
+    ),
+  };
+  // The host's own status, headed with the *store's* wording for its status field. Read once: the
+  // wording comes with the page and does not change while it is open.
+  const nativeColumn: DataTableColumn<DispatchOrderSummary> = {
+    id: 'native',
+    // eslint-disable-next-line solid/reactivity
+    header: props.nativeColumnLabel,
+    title: COLUMN_DESCRIPTIONS.native(),
+    collapseBelow: 'lg',
+    cellOf: (order) => nativePill(order),
+  };
+  // Not "Stock": the column carries *exceptions* and is empty on a healthy order, so a bare "Stock"
+  // header invites the reader to expect a quantity.
+  const stockColumn: DataTableColumn<DispatchOrderSummary> = {
+    id: 'stock',
+    header: __('Stock concerns'),
+    title: COLUMN_DESCRIPTIONS.stock(),
+    collapseBelow: 'lg',
+    cellOf: (order) => <Show when={!isSettledOrder(order())}>{stockBadge(order)}</Show>,
+  };
+  const progressColumn: DataTableColumn<DispatchOrderSummary> = {
+    id: 'progress',
+    header: _x('Progress', 'dispatch queue column: order lines staged, out of the lines to ship'),
+    title: COLUMN_DESCRIPTIONS.progress(),
+    cellOf: (order, ctx) => (
+      <div class="flex flex-col items-start gap-1">
+        <span class="text-gray-600 tabular-nums">
+          <StagingProgress
+            staged={order().stagedCount}
+            lines={order().lineCount}
+            settled={order().settledCount ?? 0}
+          />
+        </span>
+        {/* Only an actual concern: under a count, a dash for "none" would read as part of it. */}
+        <Show when={ctx.collapsed('stock') && hasConcern(order())}>
+          <div data-testid="queue-stock-under">{stockBadge(order)}</div>
+        </Show>
+      </div>
+    ),
+  };
+  const edtColumn: DataTableColumn<DispatchOrderSummary> = {
+    id: 'edt',
+    header: _x('Ship by', 'order: the date it should ship by (a deadline)'),
+    title: COLUMN_DESCRIPTIONS.edt(),
+    cellOf: (order, ctx) => (
+      <div class="flex flex-col items-start gap-1">
+        <Show
+          when={!isSettledOrder(order())}
+          fallback={
+            <span
+              class="text-xs tabular-nums whitespace-nowrap text-text-muted"
+              title={settledTitle(order())}
+            >
+              {settledOn(order())}
+            </span>
+          }
+        >
+          <span
+            class="text-xs tabular-nums whitespace-nowrap"
+            classList={{
+              'text-red-600 font-medium': edtLate(order().estDispatch).isLate,
+              'text-gray-500': !edtLate(order().estDispatch).isLate,
+            }}
+            title={edtTitle(order().estDispatch)}
+          >
+            {/* Late says it once: "28d ago · 28d late" gave the same number twice, since both
+                halves were measured from the same date. The date itself is in the title. */}
+            {edtLate(order().estDispatch).days > 0
+              ? sprintf(
+                  /* translators: %d: whole days past the estimated dispatch date. */
+                  _x('%dd late', 'dispatch date column'),
+                  edtLate(order().estDispatch).days,
+                )
+              : relativeEdt(order().estDispatch)}
+          </span>
+        </Show>
+        {/* The header already says "Ship by", so the date needs no label of its own; the method
+            under it takes "via" so it does not read as a second date. */}
+        <Show when={ctx.collapsed('shipping_method') && order().shippingMethodTitle}>
+          <span
+            class="text-xs text-gray-700 whitespace-nowrap"
+            title={shippingMethodTitle(order())}
+            data-testid="queue-ship-via"
+          >
+            {sprintf(
+              /* translators: %s: the shipping method's name, e.g. "Flat rate" or "DHL Express". */
+              _x('via %s', 'dispatch queue: the shipping method, under the ship-by date'),
+              order().shippingMethodTitle ?? '',
+            )}
+            {otherPackages(order)}
+          </span>
+        </Show>
+      </div>
+    ),
+  };
+  // How the order ships, beside the classes of what is in it: a packer reads the two together.
+  const shippingMethodColumn: DataTableColumn<DispatchOrderSummary> = {
+    id: 'shipping_method',
+    header: __('Shipping method'),
+    title: COLUMN_DESCRIPTIONS.shipping_method(),
+    collapseBelow: 'lg',
+    cellOf: (order) => (
+      <span
+        class="text-xs text-gray-700 whitespace-nowrap"
+        title={shippingMethodTitle(order())}
+        data-shipping-method={order().shippingMethod ?? ''}
+      >
+        <Show when={order().shippingMethodTitle} fallback={<span class="text-gray-300">—</span>}>
+          {order().shippingMethodTitle}
+          {otherPackages(order)}
+        </Show>
+      </span>
+    ),
+  };
+  /*
+    Plural, because the cell is the set of classes across the order's lines — `none, fragile` is one
+    order carrying two, and a singular header would suggest one value per order.
+
+    Hidden by default: most stores use classes to price shipping, not to pack it, so on most rows the
+    cell reads `none`. The filter answers "which orders carry a fragile line" either way, and the
+    order page shows each line's class where the packing happens.
+  */
+  const shippingClassColumn: DataTableColumn<DispatchOrderSummary> = {
+    id: 'shipping_class',
+    header: __('Shipping classes'),
+    title: COLUMN_DESCRIPTIONS.shipping_class(),
+    defaultHidden: true,
+    cellOf: (order) => (
+      <span class="text-xs whitespace-nowrap">
+        <Show
+          when={(order().shippingClasses ?? []).length > 0}
+          fallback={<span class="text-gray-300">—</span>}
+        >
+          {/*
+            Joined for reading, never for matching — the filter keys on the lines server-side.
+            `none` is muted because it is the *absence* of an obligation: on a mixed order the
+            real class is the word a packer has to act on, and giving both equal weight makes
+            them hunt for it. It still renders, because "some lines are unclassified" is a fact
+            about the parcel and an empty cell would not say it.
+          */}
+          <For each={order().shippingClasses ?? []}>
+            {(cls, i) => (
+              <>
+                <Show when={i() > 0}>
+                  <span class="text-gray-300">, </span>
+                </Show>
+                <span classList={{ 'text-gray-400 italic': cls === 'none' }}>
+                  {cls === 'none'
+                    ? _x('none', 'shipping class: the order has none (lower case)')
+                    : cls}
+                </span>
+              </>
+            )}
+          </For>
+        </Show>
+      </span>
+    ),
+  };
+
+  // The default order. The operator's own order, visibility and widths are the model's.
+  const columns = createMemo(() => [
+    selectColumn,
+    orderColumn,
+    ageColumn,
+    customerColumn,
+    annotationsColumn,
+    paymentColumn,
+    dispatchColumn,
+    nativeColumn,
+    ...(hasStockSignal() ? [stockColumn] : []),
+    progressColumn,
+    edtColumn,
+    shippingMethodColumn,
+    shippingClassColumn,
+  ]);
 
   return (
     /*
@@ -2660,116 +2551,43 @@ function OrderTable(props: {
       names it), and every visible string is translated. The table is also the sharper landmark —
       it mounts only once the query has settled, so it cannot be satisfied by the loading
       placeholder standing in its place.
+
+      No header sort: the server ranks the queue (the rank the operator chose in the settings), and
+      a second, local order on top of it would show a sequence the paging does not follow.
+
+      Virtual rows: a page is 500 orders and the queue scrolls on into the next, so only the rows in
+      view are drawn. The estimate is a two-line customer cell; drawn rows are measured.
     */
-    <table class="w-full border-collapse text-sm" data-testid="dispatch-queue">
-      <thead class="sticky top-0 z-10 bg-gray-50">
-        <tr class="border-b border-gray-200">
-          <th class="w-8 px-3 py-2">
-            <input
-              type="checkbox"
-              class="cursor-pointer align-middle"
-              checked={props.allSelected}
-              title={__('Select all loaded orders')}
-              onChange={props.onToggleAll}
-            />
-          </th>
-          {/*
-            Headers and cells both loop over the same ordered list, so an operator's reordering
-            cannot desynchronise them. One of these columns carries the sparse signal — tags,
-            pending actions and notes together, because a normal order carries none of them. Parked
-            inside Customer, which has a value on every row, any of them was invisible; the eye
-            stops reading a column that is never empty. The pending actions run the same predicates
-            as the `pending_action` filter, so a row showing a chip is exactly a row that filter
-          */}
-          <For each={props.columns}>
-            {(col) => (
-              <Show when={visible(col)}>
-                <Th label={label(col)} title={COLUMN_DESCRIPTIONS[col.id]()} />
-              </Show>
-            )}
-          </For>
-        </tr>
-      </thead>
-      <tbody class="divide-y divide-gray-100">
-        <Show
-          when={props.orders.length > 0}
-          fallback={
-            <tr>
-              <td colspan={colSpan()} class="px-3 py-6 text-center text-text-muted text-sm">
-                {__('No orders match.')}
-              </td>
-            </tr>
-          }
-        >
-          {/*
-            Virtualization: the parent's createVirtualizer gives us only
-            the slice of rows that fall in the visible window + overscan.
-            Two spacer rows preserve the total scroll height — top
-            padding pushes the visible slice down to its real offset,
-            bottom padding fills the remainder so the scrollbar tracks
-            the full dataset. Matches Central Workbench's setup.
-          */}
-          <tr>
-            <td style={{ height: `${props.paddingTop}px` }} colspan={colSpan()} />
-          </tr>
-          <For each={props.virtualItems}>
-            {(virtualRow) => {
-              const order = () => props.orders[virtualRow.index];
-              const index = virtualRow.index;
-              return (
-                <Show when={order()}>
-                  {(safeOrder) => (
-                    <tr
-                      ref={(el) => props.registerRowEl(index, el)}
-                      class={[
-                        'cursor-pointer transition-colors',
-                        // Row striping is conditional so the focused row's
-                        // highlight reads cleanly even on an odd row. Hover/
-                        // keyboard focus are both modeled by `focusedIndex`
-                        // — no `hover:` Tailwind class — so the visible
-                        // selection follows the mouse OR the arrow keys with
-                        // identical paint.
-                        props.focusedIndex === index
-                          ? 'bg-gray-200'
-                          : index % 2 === 1
-                            ? 'bg-gray-50'
-                            : '',
-                      ].join(' ')}
-                      onMouseEnter={() => props.onHoverRow(index)}
-                      onClick={(e) => {
-                        if (e.metaKey || e.ctrlKey || e.shiftKey) return;
-                        if (e.defaultPrevented) return;
-                        props.onOpen(safeOrder().id);
-                      }}
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        props.onContextMenu(safeOrder(), e.clientX, e.clientY);
-                      }}
-                    >
-                      <td class="px-3 py-2" onClick={(e) => e.stopPropagation()}>
-                        <input
-                          aria-label={__('Select row')}
-                          type="checkbox"
-                          class="cursor-pointer align-middle"
-                          checked={props.selectedIds.has(safeOrder().id)}
-                          onChange={() => props.onToggleRow(safeOrder().id)}
-                        />
-                      </td>
-                      <For each={props.columns}>
-                        {(col) => <Show when={visible(col)}>{cell(col, safeOrder)}</Show>}
-                      </For>
-                    </tr>
-                  )}
-                </Show>
-              );
-            }}
-          </For>
-          <tr>
-            <td style={{ height: `${props.paddingBottom}px` }} colspan={colSpan()} />
-          </tr>
-        </Show>
-      </tbody>
-    </table>
+    <DataTable
+      columns={columns()}
+      rows={props.orders}
+      model={props.model}
+      sortable={false}
+      testId="dispatch-queue"
+      rowKey={(order) => order.id}
+      virtual={{ estimateSize: 56, onNearEnd: () => props.onNearEnd() }}
+      activeRow={props.scrollTarget}
+      onRowHover={(order) => props.onHoverRow(order)}
+      // The highlight follows the pointer *or* the arrow keys with the same paint, so the table's
+      // own hover tint is held off every other row: a row the pointer rests on while the arrows
+      // have moved on is not the highlighted one.
+      rowProps={(order) => ({
+        class: cx(
+          'cursor-pointer transition-colors',
+          props.focusedId === order.id ? 'bg-surface-hover' : 'hover:bg-transparent!',
+        ),
+      })}
+      onRowClick={(order, e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+        if (e.defaultPrevented) return;
+        props.onOpen(order.id);
+      }}
+      onRowContextMenu={(order, e) => {
+        e.preventDefault();
+        props.onContextMenu(order, e.clientX, e.clientY);
+      }}
+      empty={__('No orders match.')}
+    />
   );
 }
 
@@ -2830,15 +2648,4 @@ function activatesItself(event: Event): boolean {
   }
 
   return false;
-}
-
-function Th(props: { label: string; title: string }) {
-  return (
-    <th
-      class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wide cursor-help"
-      title={props.title}
-    >
-      {props.label}
-    </th>
-  );
 }

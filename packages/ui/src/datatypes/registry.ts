@@ -1,5 +1,6 @@
 import type { JSX } from 'solid-js';
 import type { FieldMeta, TaxonomySpace } from '../types';
+import { canonicalDataType, INTEGER, QUANTITY } from './dataTypeNames';
 
 /**
  * Datatype-keyed component registries (§5). A column's `dataType` slug selects which
@@ -79,6 +80,8 @@ export interface ComponentRegistry<C> {
  * Parent chain for a datatype slug, most-specific first.
  * `decimal:money` → `['decimal:money', 'decimal']`;
  * `myplugin.barcode:ean13` → `['myplugin.barcode:ean13', 'myplugin.barcode']`.
+ * A quantity ends in `integer`, which shows and edits it until a quantity has components of its own:
+ * `quantity:stock` → `['quantity:stock', 'quantity', 'integer']`.
  */
 export function datatypeChain(dataType: string): string[] {
   const chain = [dataType];
@@ -86,15 +89,29 @@ export function datatypeChain(dataType: string): string[] {
   if (colon > 0) {
     chain.push(dataType.slice(0, colon));
   }
+  if (chain[chain.length - 1] === QUANTITY) chain.push(INTEGER);
 
   return chain;
 }
 
-export function createComponentRegistry<C>(): ComponentRegistry<C> {
+/** Options for a registry. */
+export interface ComponentRegistryOpts {
+  /**
+   * Reads a slug under the name it is registered and resolved by, so an earlier name reaches
+   * today's registrations (the datatype registries pass `canonicalDataType`). Default: as given.
+   */
+  canonical?: (dataType: string) => string;
+}
+
+export function createComponentRegistry<C>(
+  registryOpts: ComponentRegistryOpts = {},
+): ComponentRegistry<C> {
   const byDataType = new Map<string, Registration<C>>();
+  const named = registryOpts.canonical ?? ((dataType: string) => dataType);
 
   return {
-    register(dataType, id, component, opts = {}) {
+    register(slug, id, component, opts = {}) {
+      const dataType = named(slug);
       const reg = byDataType.get(dataType) ?? {
         defaultId: null,
         byId: new Map<string, C>(),
@@ -109,7 +126,7 @@ export function createComponentRegistry<C>(): ComponentRegistry<C> {
     },
 
     resolve(dataType, chosenId) {
-      for (const candidate of datatypeChain(dataType)) {
+      for (const candidate of datatypeChain(named(dataType))) {
         const reg = byDataType.get(candidate);
         if (reg === undefined) continue;
         if (chosenId !== undefined && reg.byId.has(chosenId)) {
@@ -124,11 +141,11 @@ export function createComponentRegistry<C>(): ComponentRegistry<C> {
     },
 
     has(dataType) {
-      return datatypeChain(dataType).some((candidate) => byDataType.has(candidate));
+      return datatypeChain(named(dataType)).some((candidate) => byDataType.has(candidate));
     },
 
     list(dataType) {
-      const reg = byDataType.get(dataType);
+      const reg = byDataType.get(named(dataType));
       if (reg === undefined) return [];
       return [...reg.byId.keys()].map((id) => ({
         id,
@@ -145,7 +162,7 @@ export function createComponentRegistry<C>(): ComponentRegistry<C> {
 
 /** The app-wide view registry. Built-ins register into it at module load (see views.tsx). */
 export const viewRegistry: ComponentRegistry<ViewComponent> =
-  createComponentRegistry<ViewComponent>();
+  createComponentRegistry<ViewComponent>({ canonical: canonicalDataType });
 
 /**
  * Datatype codec: the round-trippable text representation for clipboard copy/paste (§11.5).
@@ -157,25 +174,39 @@ export interface CodecContext {
   /** The column's editorConfig (e.g. { taxonomy }, { min, max }). */
   config: Record<string, unknown>;
   taxonomySpace?: TaxonomySpace;
+  /**
+   * Where the text came from. `typed` is someone typing into a field: a decimal codec then reads it
+   * strictly (one separator, no grouping, nothing repaired) and, when the column declares a `scale`,
+   * enforces it. Absent or `paste` is text from another system (a clipboard, a file), which the
+   * decimal codecs read tolerantly because it may carry any locale's grouping and a currency sign.
+   */
+  source?: 'typed' | 'paste';
 }
 
 export interface Codec {
   format(value: unknown, ctx: CodecContext): string;
   parse(text: string, ctx: CodecContext): unknown | null;
+  /**
+   * Why typed text was refused, in words for the person typing — the one thing `parse`'s `null`
+   * cannot say. Absent for a codec that has nothing more specific to tell.
+   */
+  reject?(text: string, ctx: CodecContext): string | null;
 }
 
 /** The app-wide codec registry. Built-ins register at module load (see codecs.ts). */
-export const codecRegistry: ComponentRegistry<Codec> = createComponentRegistry<Codec>();
+export const codecRegistry: ComponentRegistry<Codec> = createComponentRegistry<Codec>({
+  canonical: canonicalDataType,
+});
 
 /** The app-wide edit-component registry. Built-ins register at module load (see editors.tsx). */
 export const editRegistry: ComponentRegistry<EditComponent> =
-  createComponentRegistry<EditComponent>();
+  createComponentRegistry<EditComponent>({ canonical: canonicalDataType });
 
 /**
  * Optional per-datatype diff renderer for the save-review modal (§11.10.3). When a column's
  * datatype has no registered preview, the modal falls back to a bare old-above-new line using
  * `codec.format`. Registered components opt into richer diffs — a git-style word/line merge for
- * `text:long`, thumbnail pairs for `image:url`, unit annotations for `number`, etc.
+ * `text:long`, thumbnail pairs for `image:url`, unit annotations for `quantity`, etc.
  */
 export interface DiffPreviewProps {
   column: FieldMeta;
@@ -188,7 +219,7 @@ export type DiffPreviewComponent = (props: DiffPreviewProps) => JSX.Element;
 
 /** The app-wide diff-preview registry. Empty by default; plug-ins / future built-ins register into it. */
 export const diffPreviewRegistry: ComponentRegistry<DiffPreviewComponent> =
-  createComponentRegistry<DiffPreviewComponent>();
+  createComponentRegistry<DiffPreviewComponent>({ canonical: canonicalDataType });
 
 /**
  * Per-datatype drill-down renderer (§11.7). A cell whose column declares a drill-down
@@ -213,4 +244,4 @@ export type DrilldownComponent = (props: DrilldownProps) => JSX.Element;
 
 /** The app-wide drill-down registry. Built-ins register at module load (see drilldowns.tsx). */
 export const drilldownRegistry: ComponentRegistry<DrilldownComponent> =
-  createComponentRegistry<DrilldownComponent>();
+  createComponentRegistry<DrilldownComponent>({ canonical: canonicalDataType });

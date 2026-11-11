@@ -34,7 +34,13 @@ describe('explainConflict', () => {
     expect(explainConflict('stale_original', 'Unit cost (WAC)')).toContain('retry');
 
     // Every one of these is a refusal, not a race: the same request would be refused identically.
-    for (const reason of ['base_currency_drift', 'cost_locked', 'negative_stock', 'forbidden']) {
+    for (const reason of [
+      'base_currency_drift',
+      'cost_locked',
+      'negative_stock',
+      'forbidden',
+      'sale_not_below_regular',
+    ]) {
       expect(explainConflict(reason, 'Col'), reason).not.toContain('retry');
     }
   });
@@ -43,6 +49,12 @@ describe('explainConflict', () => {
     const message = explainConflict('not_on_worksheet', 'Labels · Qty');
     expect(message).toContain('no longer on the worksheet');
     expect(message).toContain('Reload');
+  });
+
+  it('says a refused price pair breaks the sale-below-regular rule, and what to change', () => {
+    const message = explainConflict('sale_not_below_regular', 'Sale price');
+    expect(message).toContain('below the regular price');
+    expect(message).toContain('Lower the sale price or raise the regular price');
   });
 
   it('returns null for a code this build does not know, rather than inventing a cause', () => {

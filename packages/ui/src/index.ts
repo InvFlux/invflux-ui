@@ -30,6 +30,7 @@ export { Combobox } from './Combobox';
 export { foldText, fuzzyScore, HighlightMatch, wordMatch, wordQueryNarrows } from './fuzzy';
 export type { FuzzyScore } from './fuzzy';
 export { KobalteComboboxFirstFocus } from './KobalteComboboxFirstFocus';
+export { keepUnchanged } from './queryReconcile';
 export { SearchSelect } from './SearchSelect';
 export type { SearchSelectOption, SearchSelectProps } from './SearchSelect';
 export { SearchSelectAsync } from './SearchSelectAsync';
@@ -43,7 +44,7 @@ export {
   usePortalRoot,
   usePortalRootOptional,
 } from './portal';
-export { HostNavCtx, useHostNav } from './hostNav';
+export { HostNavCtx, linksTo, useHostNav } from './hostNav';
 export type { HostNav } from './hostNav';
 export { wordpressHostNav } from './host/wordpress';
 export { ContextCard, ContextCardPanel } from './ContextCard';
@@ -204,6 +205,7 @@ export {
   HourglassIcon,
   InfoIcon,
   WarningIcon,
+  TrashIcon,
 } from './icons';
 export type { IconProps, IconComponent } from './icons';
 export { Hint } from './Hint';
@@ -240,6 +242,17 @@ export type { SwitchProps } from './Switch';
 export { ConfirmModal } from './ConfirmModal';
 export type { ConfirmModalProps, ConfirmModalVariant } from './ConfirmModal';
 export { ColumnPicker } from './ColumnPicker';
+export { DataTable } from './DataTable';
+export type {
+  DataTableBreakpoint,
+  DataTableCellContext,
+  DataTableColumn,
+  DataTableKind,
+  DataTableProps,
+  DataTableVirtual,
+} from './DataTable';
+export { createColumnModel } from './grid/columnModel';
+export type { ColumnModel } from './grid/columnModel';
 export type { PickableColumn } from './ColumnPicker';
 export { RequiredMark } from './RequiredMark';
 export { ProPill } from './ProPill';
@@ -282,6 +295,7 @@ export {
   diffPreviewRegistry,
   drilldownRegistry,
 } from './datatypes/registry';
+export { canonicalDataType, isWholeNumberDataType } from './datatypes/dataTypeNames';
 export type {
   ComponentContext,
   ComponentRegistry,
@@ -329,6 +343,8 @@ export type {
 } from './surfaceSettings';
 export { SettingsSection } from './SettingsSection';
 export type { SettingsSectionProps } from './SettingsSection';
+export { SettingsSectionsProvider, useSettingsSections } from './settingsSections';
+export type { DropEdge, SettingsSectionsHost } from './settingsSections';
 export { SurfaceCtx, useSurface } from './surfaceCtx';
 export { PaneActiveCtx, usePaneActive } from './paneActive';
 export type { SurfaceContext } from './surfaceCtx';

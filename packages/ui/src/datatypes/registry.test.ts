@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { createComponentRegistry, datatypeChain } from './registry';
+import { canonicalDataType } from './dataTypeNames';
 
 describe('datatypeChain', () => {
   it('returns the slug alone when there is no variant', () => {
-    expect(datatypeChain('number')).toEqual(['number']);
+    expect(datatypeChain('integer')).toEqual(['integer']);
+  });
+
+  it('ends a quantity in integer, which shows and edits it', () => {
+    expect(datatypeChain('quantity')).toEqual(['quantity', 'integer']);
+    expect(datatypeChain('quantity:stock')).toEqual(['quantity:stock', 'quantity', 'integer']);
   });
 
   it('appends the variant-stripped base for `base:variant` slugs', () => {
@@ -18,10 +24,10 @@ describe('datatypeChain', () => {
 describe('createComponentRegistry', () => {
   it('resolves the default component for an exact datatype', () => {
     const reg = createComponentRegistry<string>();
-    reg.register('number', 'core.number', 'NUM', { default: true });
+    reg.register('integer', 'core.integer', 'INT', { default: true });
 
-    expect(reg.resolve('number')).toBe('NUM');
-    expect(reg.has('number')).toBe(true);
+    expect(reg.resolve('integer')).toBe('INT');
+    expect(reg.has('integer')).toBe(true);
   });
 
   it('first registration becomes default implicitly', () => {
@@ -73,18 +79,35 @@ describe('createComponentRegistry', () => {
       { id: 'demo.swatch', label: 'Swatch', isDefault: false },
     ]);
     // Label defaults to the id; parent-chain registrations are not listed for a child datatype.
-    reg.register('number', 'core.number', 'N');
-    expect(reg.list('number')).toEqual([
-      { id: 'core.number', label: 'core.number', isDefault: true },
+    reg.register('integer', 'core.integer', 'N');
+    expect(reg.list('integer')).toEqual([
+      { id: 'core.integer', label: 'core.integer', isDefault: true },
     ]);
-    expect(reg.list('number:stock')).toEqual([]);
+    expect(reg.list('integer:presets')).toEqual([]);
     expect(reg.list('unregistered')).toEqual([]);
   });
 
   it('dataTypes() enumerates every directly-registered slug', () => {
     const reg = createComponentRegistry<string>();
-    reg.register('number', 'a', 'A');
+    reg.register('integer', 'a', 'A');
     reg.register('text', 'b', 'B');
-    expect(reg.dataTypes().sort()).toEqual(['number', 'text']);
+    expect(reg.dataTypes().sort()).toEqual(['integer', 'text']);
+  });
+
+  it("with a canonical option, an earlier name registers and resolves under today's", () => {
+    const reg = createComponentRegistry<string>({ canonical: canonicalDataType });
+    reg.register('integer', 'core.integer', 'INT');
+    reg.register('number:on-order', 'addon.on-order', 'ON-ORDER');
+
+    expect(reg.resolve('number')).toBe('INT');
+    expect(reg.resolve('quantity:on-order')).toBe('ON-ORDER');
+    expect(reg.resolve('quantity:stock')).toBe('INT');
+    expect(reg.dataTypes().sort()).toEqual(['integer', 'quantity:on-order']);
+  });
+
+  it('without one, a slug is taken as given', () => {
+    const reg = createComponentRegistry<string>();
+    reg.register('number', 'core.number', 'N');
+    expect(reg.resolve('integer')).toBeNull();
   });
 });

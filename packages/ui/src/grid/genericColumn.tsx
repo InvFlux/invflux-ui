@@ -16,6 +16,7 @@ import { viewRegistry } from '../datatypes/registry';
 import type { GridColumnMeta, TaxonomySpace } from '../types';
 import type { GridWrap } from './DataGrid';
 import type { StagedCell } from './DataGrid';
+import { isWholeNumberDataType } from '../datatypes/dataTypeNames';
 
 /** Column ids that render right-aligned (numeric). Mirrors DataGrid's RIGHT_ALIGNED. */
 const RIGHT_ALIGNED = new Set([
@@ -34,6 +35,8 @@ export interface GenericColumnDeps<TRow> {
   getValue: (row: TRow, columnId: string) => unknown;
   getStagedValue: (row: TRow, columnId: string) => StagedCell;
   isGenericColumnInherited?: (row: TRow, meta: GridColumnMeta) => boolean;
+  /** The cell's field error, shown as a ring with the message as its tooltip; undefined = none. */
+  fieldError?: (row: TRow, columnId: string) => string | undefined;
   componentChoiceId?: (dataType: string, role: 'view' | 'edit' | 'drilldown') => string | undefined;
   taxonomySpace?: () => TaxonomySpace | undefined;
   /** Current wrap mode (drives multi-item views like supplier pills). Defaults to "wrap". */
@@ -44,7 +47,7 @@ export interface GenericColumnDeps<TRow> {
 export function isRightAligned(meta: GridColumnMeta): boolean {
   return (
     RIGHT_ALIGNED.has(meta.id) ||
-    meta.dataType.startsWith('number') ||
+    isWholeNumberDataType(meta.dataType) ||
     meta.dataType.startsWith('decimal') ||
     meta.dataType.endsWith(':count')
   );
@@ -77,6 +80,7 @@ export function makeGenericColumn<TRow>(
       const dirty = (): boolean => staged().staged;
       const inherited = (): boolean =>
         deps.isGenericColumnInherited?.(info.row.original, meta) ?? false;
+      const error = (): string | undefined => deps.fieldError?.(info.row.original, meta.id);
 
       return (
         <span
@@ -87,13 +91,16 @@ export function makeGenericColumn<TRow>(
             // Shared `inherited` utility (italic + muted, AA-checked) rather than opacity-60, which
             // fell under the contrast floor.
             inherited: !dirty() && inherited(),
+            'rounded px-1 ring-1 ring-red-400': error() !== undefined,
           }}
+          data-field-error={error() !== undefined ? 'true' : undefined}
           title={
-            dirty()
+            error() ??
+            (dirty()
               ? `${String(info.getValue() ?? '')} → ${String(staged().value ?? '')}`
               : inherited()
                 ? __('Inherited from the parent product')
-                : undefined
+                : undefined)
           }
         >
           <Dynamic

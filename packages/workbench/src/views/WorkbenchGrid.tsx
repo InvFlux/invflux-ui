@@ -1,5 +1,5 @@
 import { windowUrlPort, type UrlParamsPort } from '../urlPort';
-import { createViewportFill, ErrorBanner, useHostNav } from '@invflux/ui';
+import { canonicalDataType, createViewportFill, ErrorBanner, useHostNav } from '@invflux/ui';
 import { wireMethod } from '@invflux/ui/api';
 import {
   createEffect,
@@ -10,6 +10,7 @@ import {
   onCleanup,
   Show,
   untrack,
+  type JSX,
 } from 'solid-js';
 import { Dynamic } from 'solid-js/web';
 // Built-in datatype components register themselves as a side effect of importing @invflux/ui, which
@@ -57,6 +58,8 @@ import {
   ModalFooter,
   ModalHeader,
   ModalPanel,
+  PencilIcon,
+  TrashIcon,
   Input,
   FieldError,
   focusFirstInvalid,
@@ -71,6 +74,7 @@ import {
 import { __, _n, _x, formatNumber, sprintf } from '@invflux/i18n';
 import type { SelectedCellRef } from '@invflux/ui';
 import { BringInControl } from '../components/BringInControl';
+import { WorksheetEditPanel } from './WorksheetEditPanel';
 import { useWorkbench } from '../context';
 import type {
   ComponentRole,
@@ -78,6 +82,7 @@ import type {
   TaxonomySpace,
   WorkbenchColumnMeta,
   WorkbenchWorksheet,
+  WorksheetColumnSource,
   WorkbenchFilterOption,
   WorkbenchToolbarSlotProps,
   WorkbenchSettingsSlotProps,
@@ -883,12 +888,21 @@ function WorksheetsModal(props: {
   /** What the per-worksheet action does with the selection: add / remove / replace items, or pure
    *  manage (no selection — rename/delete/create only). */
   mode: 'add' | 'remove' | 'replace' | 'manage';
+  /** Whether the user may write to worksheets; without it the list only offers "Filter on". */
+  canEdit: boolean;
+  /** How many unsaved grid edits a column holds; a worksheet column holding some cannot be removed. */
+  stagedEditCount: (columnId: string) => number;
   /** Filter the grid down to a worksheet's members (sets the Worksheet filter) + close. */
   onFilterOn: (worksheetId: number) => void;
+  /** The worksheets the grid is filtered on now, listed apart as "Applied", with no "Filter on". */
+  appliedIds: number[];
   onClose: () => void;
   onChanged: () => void;
 }) {
   const [worksheets, setWorksheets] = createSignal<WorkbenchWorksheet[]>([]);
+  const [sources, setSources] = createSignal<WorksheetColumnSource[]>([]);
+  // The worksheet being edited; the modal shows its panel in place of the list.
+  const [editing, setEditing] = createSignal<WorkbenchWorksheet | null>(null);
   const [newName, setNewName] = createSignal('');
   // The name is required, so it is marked only once a create has been attempted without one.
   const [createAttempted, setCreateAttempted] = createSignal(false);
@@ -903,6 +917,79 @@ function WorksheetsModal(props: {
     const q = filterText().trim().toLowerCase();
     return q === '' ? worksheets() : worksheets().filter((w) => w.name.toLowerCase().includes(q));
   });
+  const isApplied = (w: WorkbenchWorksheet): boolean => props.appliedIds.includes(w.id);
+  const applied = createMemo(() => filtered().filter(isApplied));
+  const others = createMemo(() => filtered().filter((w) => !isApplied(w)));
+  /** Whether the list splits into the applied worksheets and the others. */
+  const split = (): boolean => worksheets().some(isApplied);
+
+  /**
+   * One worksheet: its name, line count and first line of notes, then its actions. "Filter on" only
+   * where the grid is not filtered on it already; Edit and Delete as icons, named by their tooltips.
+   */
+  const worksheetRow = (w: WorkbenchWorksheet): JSX.Element => (
+    <div
+      class="flex items-center gap-1 rounded px-2 py-1 hover:bg-surface-hover"
+      data-worksheet-id={w.id}
+    >
+      <span class="min-w-0 flex-1 text-sm text-text">
+        <span class="block truncate">
+          {w.name} <span class="text-text-muted">({w.itemCount})</span>
+        </span>
+        {/* The notes' first line, so "taken 29 Oct" is visible at a glance. */}
+        <Show when={(w.description ?? '').trim() !== ''}>
+          <span class="block truncate text-xs text-text-muted">
+            {(w.description ?? '').trim().split('\n')[0]}
+          </span>
+        </Show>
+      </span>
+      <Show when={itemMode()}>
+        <Button
+          variant={props.mode === 'remove' ? 'danger' : 'primary'}
+          weight={props.mode === 'remove' ? 'outline' : 'solid'}
+          size="sm"
+          disabled={busy()}
+          onClick={() => void applyTo(w.id)}
+        >
+          {verb()} {props.subjectIds.length}
+        </Button>
+      </Show>
+      <Show when={!isApplied(w)}>
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={busy()}
+          onClick={() => props.onFilterOn(w.id)}
+          title={__("Filter the grid to this worksheet's members")}
+          data-testid="worksheet-filter-on"
+        >
+          {__('Filter on')}
+        </Button>
+      </Show>
+      <Show when={props.canEdit}>
+        <IconButton
+          label={__('Edit worksheet')}
+          size="xs"
+          disabled={busy()}
+          onClick={() => setEditing(w)}
+          data-testid="worksheet-edit-button"
+        >
+          <PencilIcon class="h-3.5 w-3.5" />
+        </IconButton>
+        <IconButton
+          label={__('Delete worksheet')}
+          size="xs"
+          danger={true}
+          class="text-rose-500"
+          disabled={busy()}
+          onClick={() => void remove(w)}
+          data-testid="worksheet-delete-button"
+        >
+          <TrashIcon class="h-3.5 w-3.5" />
+        </IconButton>
+      </Show>
+    </div>
+  );
 
   // Whether a per-worksheet item action (add/remove/replace the selection) is offered.
   const itemMode = (): boolean => props.mode !== 'manage';
@@ -913,11 +1000,12 @@ function WorksheetsModal(props: {
 
   async function reload(): Promise<void> {
     try {
-      const res = await getJson<{ worksheets: WorkbenchWorksheet[] }>(
-        props.ctx,
-        '/workbench/worksheets',
-      );
+      const res = await getJson<{
+        worksheets: WorkbenchWorksheet[];
+        columnSources?: WorksheetColumnSource[];
+      }>(props.ctx, '/workbench/worksheets');
       setWorksheets(res.worksheets);
+      setSources(res.columnSources ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -991,17 +1079,23 @@ function WorksheetsModal(props: {
     }).then(() => props.onClose());
   };
 
-  const rename = (w: WorkbenchWorksheet): Promise<void> | void => {
-    const name = window.prompt(__('Rename worksheet'), w.name);
-    if (name === null || name.trim() === '' || name.trim() === w.name) return;
-    return run(() =>
-      postJson(props.ctx, `/workbench/worksheets/${w.id}`, { name: name.trim() }, 'PATCH'),
-    );
-  };
-
   const remove = (w: WorkbenchWorksheet): Promise<void> | void => {
-    // An empty worksheet has nothing to lose → delete without a prompt; confirm only if it has items.
-    if (w.itemCount > 0 && !window.confirm(__('Delete this worksheet?'))) return;
+    // An empty worksheet has nothing to lose → delete without a prompt; confirm only if it has items,
+    // and say how many values in its own columns go with it.
+    const values = (w.columns ?? []).reduce((sum, c) => sum + c.values, 0);
+    const prompt =
+      values > 0
+        ? sprintf(
+            /* translators: %d = how many values the worksheet's own columns hold. */
+            _n(
+              'Delete this worksheet? The %d value in its own columns is deleted with it.',
+              'Delete this worksheet? The %d values in its own columns are deleted with it.',
+              values,
+            ),
+            values,
+          )
+        : __('Delete this worksheet?');
+    if (w.itemCount > 0 && !window.confirm(prompt)) return;
     return run(() => postJson(props.ctx, `/workbench/worksheets/${w.id}`, {}, 'DELETE'));
   };
 
@@ -1032,111 +1126,109 @@ function WorksheetsModal(props: {
           }
         />
 
-        {/* Create (top) + quick-filter, above the list. */}
-        <div class="flex flex-col gap-3 border-b border-border p-4">
-          <div ref={createRow} class="flex items-start gap-2">
-            <div class="min-w-0 flex-1">
-              <Input
-                size="md"
-                class="w-full"
-                placeholder={__('New worksheet name')}
-                aria-label={__('New worksheet name')}
-                aria-required="true"
-                invalid={nameError() !== null}
-                value={newName()}
-                disabled={busy()}
-                onInput={(e) => setNewName(e.currentTarget.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void createWorksheet();
-                }}
-                data-testid="worksheet-new-name"
-              />
-              <FieldError message={nameError()} testId="worksheet-new-name-error" />
-            </div>
-            <Button disabled={busy()} onClick={() => void createWorksheet()}>
-              {createApplies() ? __('Create + add') : __('Create')}
-            </Button>
-          </div>
-          <input
-            class="h-9 w-full rounded border border-border bg-surface px-3 text-sm shadow-sm"
-            placeholder={__('Filter worksheets…')}
-            value={filterText()}
-            onInput={(e) => setFilterText(e.currentTarget.value)}
-          />
-        </div>
-
-        <div class="flex-1 overflow-auto p-4">
-          <Show when={error()}>
-            <ErrorBanner class="mb-3 rounded border border-red-300 bg-red-50 px-3 py-2 text-sm">
-              {error()}
-            </ErrorBanner>
-          </Show>
-          <ul class="divide-y divide-border rounded border border-border">
-            <For
-              each={filtered()}
-              fallback={
-                <li class="px-3 py-2 text-sm text-text-muted">
-                  {worksheets().length === 0
-                    ? __('No worksheets yet.')
-                    : __('No matching worksheets.')}
-                </li>
-              }
-            >
-              {(w) => (
-                <li class="flex items-center justify-between gap-3 px-3 py-2">
-                  <span class="min-w-0 flex-1 truncate text-sm text-text">
-                    {w.name} <span class="text-text-muted">({w.itemCount})</span>
-                  </span>
-                  <div class="flex shrink-0 gap-2">
-                    <Show when={itemMode()}>
-                      <Button
-                        variant={props.mode === 'remove' ? 'danger' : 'primary'}
-                        weight={props.mode === 'remove' ? 'outline' : 'solid'}
-                        size="sm"
+        <Show
+          when={editing()}
+          fallback={
+            <>
+              {/* Create (top) + quick-filter, above the list. */}
+              <div class="flex flex-col gap-3 border-b border-border p-4">
+                <Show when={props.canEdit}>
+                  <div ref={createRow} class="flex items-start gap-2">
+                    <div class="min-w-0 flex-1">
+                      <Input
+                        size="md"
+                        class="w-full"
+                        placeholder={__('New worksheet name')}
+                        aria-label={__('New worksheet name')}
+                        aria-required="true"
+                        invalid={nameError() !== null}
+                        value={newName()}
                         disabled={busy()}
-                        onClick={() => void applyTo(w.id)}
-                      >
-                        {verb()} {props.subjectIds.length}
-                      </Button>
-                    </Show>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      disabled={busy()}
-                      onClick={() => props.onFilterOn(w.id)}
-                      title={__("Filter the grid to this worksheet's members")}
-                    >
-                      {__('Filter on')}
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      disabled={busy()}
-                      onClick={() => void rename(w)}
-                    >
-                      {__('Rename')}
-                    </Button>
-                    <Button
-                      variant="danger"
-                      weight="outline"
-                      size="sm"
-                      disabled={busy()}
-                      onClick={() => void remove(w)}
-                    >
-                      {__('Delete')}
+                        onInput={(e) => setNewName(e.currentTarget.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') void createWorksheet();
+                        }}
+                        data-testid="worksheet-new-name"
+                      />
+                      <FieldError message={nameError()} testId="worksheet-new-name-error" />
+                    </div>
+                    <Button disabled={busy()} onClick={() => void createWorksheet()}>
+                      {createApplies() ? __('Create + add') : __('Create')}
                     </Button>
                   </div>
-                </li>
-              )}
-            </For>
-          </ul>
-        </div>
+                </Show>
+                <input
+                  class="h-9 w-full rounded border border-border bg-surface px-3 text-sm shadow-sm"
+                  placeholder={__('Filter worksheets…')}
+                  value={filterText()}
+                  onInput={(e) => setFilterText(e.currentTarget.value)}
+                />
+              </div>
 
-        <ModalFooter>
-          <Button variant="secondary" onClick={props.onClose}>
-            {__('Close')}
-          </Button>
-        </ModalFooter>
+              <div class="flex-1 overflow-auto p-4">
+                <Show when={error()}>
+                  <ErrorBanner class="mb-3 rounded border border-red-300 bg-red-50 px-3 py-2 text-sm">
+                    {error()}
+                  </ErrorBanner>
+                </Show>
+                <Show when={split()}>
+                  <h3 class="pb-1 text-2xs font-semibold uppercase tracking-wide text-text-muted">
+                    {_x('Applied', 'worksheets list: the worksheets the grid is filtered on now')}
+                  </h3>
+                  <div class="mb-3 flex flex-col" data-testid="worksheets-applied">
+                    <For
+                      each={applied()}
+                      fallback={
+                        <p class="px-2 py-1 text-xs text-text-muted">
+                          {__('No matching worksheets.')}
+                        </p>
+                      }
+                    >
+                      {(w) => worksheetRow(w)}
+                    </For>
+                  </div>
+                  <h3 class="pb-1 text-2xs font-semibold uppercase tracking-wide text-text-muted">
+                    {__('Other worksheets')}
+                  </h3>
+                </Show>
+                <div class="flex flex-col" data-testid="worksheets-others">
+                  <For
+                    each={split() ? others() : filtered()}
+                    fallback={
+                      <p class="px-2 py-1 text-xs text-text-muted">
+                        {worksheets().length === 0
+                          ? __('No worksheets yet.')
+                          : __('No matching worksheets.')}
+                      </p>
+                    }
+                  >
+                    {(w) => worksheetRow(w)}
+                  </For>
+                </div>
+              </div>
+
+              <ModalFooter>
+                <Button variant="secondary" onClick={props.onClose}>
+                  {__('Close')}
+                </Button>
+              </ModalFooter>
+            </>
+          }
+        >
+          {(worksheet) => (
+            <WorksheetEditPanel
+              ctx={props.ctx}
+              worksheet={worksheet()}
+              sources={sources()}
+              stagedEditCount={props.stagedEditCount}
+              onSaved={() => {
+                void reload();
+                props.onChanged();
+              }}
+              onBack={() => setEditing(null)}
+            />
+          )}
+        </Show>
       </ModalPanel>
     </Modal>
   );
@@ -1170,10 +1262,18 @@ export function WorkbenchGrid(
 
   // Merchant's chosen component id for a (datatype, role), if any (§5.4 step 1). Threaded into the
   // grid so a merchant-picked plug-in component wins over the built-in default. Held in a signal
-  // (seeded from the bootstrap) so the settings panel's save reflects live.
+  // (seeded from the bootstrap) so the settings panel's save reflects live. A choice stored under an
+  // earlier datatype name (`number`) is read under today's.
   const [componentChoices, setComponentChoices] = createSignal<
     Record<string, Partial<Record<ComponentRole, string>>>
-  >(ctx.componentChoices ?? {});
+  >(
+    Object.fromEntries(
+      Object.entries(ctx.componentChoices ?? {}).map(([dataType, choice]) => [
+        canonicalDataType(dataType),
+        choice,
+      ]),
+    ),
+  );
   const componentChoiceId = (dataType: string, role: ComponentRole): string | undefined =>
     componentChoices()[dataType]?.[role];
   // Worksheets modal (Track 10): null = closed; subjectIds non-empty = opened via the
@@ -1927,10 +2027,15 @@ export function WorkbenchGrid(
   // ── Bulk actions (§2): register the workbench's own through the shared registry ──
   const needsSelection = (bctx: BulkActionContext): string | undefined =>
     bctx.selectedSubjectIds.length > 0 ? undefined : __('Select one or more products first');
+  // Hidden, not disabled, without the capability: it is not a precondition the operator can meet.
+  const canEditWorksheets = (): boolean => ctx.capabilities.editWorksheets ?? false;
+  // Both supplier actions read the supplier list, which is purchasing's.
+  const canManagePurchaseOrders = (): boolean => ctx.capabilities.managePurchaseOrders ?? false;
   bulkActionRegistry.register({
     id: 'add-to-worksheet',
     label: __('Add to worksheet…'),
     order: 100,
+    isEnabled: canEditWorksheets,
     disabledReason: needsSelection,
     run: (bctx) => setWorksheetsModal({ subjectIds: bctx.selectedSubjectIds, mode: 'add' }),
   });
@@ -1938,6 +2043,7 @@ export function WorkbenchGrid(
     id: 'remove-from-worksheet',
     label: __('Remove from worksheet…'),
     order: 101,
+    isEnabled: canEditWorksheets,
     disabledReason: needsSelection,
     run: (bctx) => setWorksheetsModal({ subjectIds: bctx.selectedSubjectIds, mode: 'remove' }),
   });
@@ -1945,6 +2051,7 @@ export function WorkbenchGrid(
     id: 'replace-worksheet',
     label: __('Replace worksheet content…'),
     order: 102,
+    isEnabled: canEditWorksheets,
     disabledReason: needsSelection,
     run: (bctx) => setWorksheetsModal({ subjectIds: bctx.selectedSubjectIds, mode: 'replace' }),
   });
@@ -1953,6 +2060,7 @@ export function WorkbenchGrid(
     label: __('Add to supplier catalog…'),
     // Ordered after the worksheet group (100–102) so the three worksheet actions stay together.
     order: 110,
+    isEnabled: canManagePurchaseOrders,
     // Only purchasable units can be sourced from a supplier; enabled when the selection has ≥1 unit
     // (non-units are dropped on run). Disabled with a hint when nothing (or only non-units) is selected.
     disabledReason: (bctx) => {
@@ -1973,6 +2081,7 @@ export function WorkbenchGrid(
     id: 'generate-po',
     label: __('Create replenishment PO…'),
     order: 120,
+    isEnabled: canManagePurchaseOrders,
     disabledReason: () => {
       const vals = query().filterValues['supplier'];
       return !!vals && vals.length === 1 ? undefined : __('Filter on a single supplier first');
@@ -2196,11 +2305,14 @@ export function WorkbenchGrid(
     if (conflicts.length === 0) return;
     const n = new Set(conflicts.map((c) => c.subject_id)).size;
     conflictToastId = toast.error(
+      // Not every refusal is a value that changed on the server: a duplicate SKU, a sale price at or
+      // above the regular price, a missing permission are refused again however often they are
+      // re-sent. The grid's save line says which, per column; this only points to it.
       sprintf(
-        /* translators: %d = number of rows whose values changed on the server and need review. */
+        /* translators: %d = number of products whose changes the server did not save. The reason for each is shown on the line under the grid. */
         _n(
-          '%d change needs review — the value changed on the server; adjust and save again.',
-          '%d changes need review — values changed on the server; adjust and save again.',
+          '%d product was not saved. The reason is shown under the grid.',
+          '%d products were not saved. The reasons are shown under the grid.',
           n,
         ),
         n,
@@ -2252,11 +2364,23 @@ export function WorkbenchGrid(
             ctx={ctx}
             subjectIds={modal().subjectIds}
             mode={modal().mode}
+            canEdit={canEditWorksheets()}
+            stagedEditCount={(columnId) => gridHandles()?.stagedEditCount(columnId) ?? 0}
+            appliedIds={
+              (query().filterModifiers.worksheet?.mode ?? 'in') === 'out'
+                ? []
+                : (query().filterValues.worksheet ?? []).map(Number)
+            }
             onFilterOn={(worksheetId) => {
-              setQuery((q) => ({
-                ...q,
-                filterValues: { ...q.filterValues, worksheet: [String(worksheetId)] },
-              }));
+              // Filtered on its members: a filter set to exclude a worksheet is set back to include.
+              setQuery((q) => {
+                const { worksheet: _mode, ...modifiers } = q.filterModifiers;
+                return {
+                  ...q,
+                  filterValues: { ...q.filterValues, worksheet: [String(worksheetId)] },
+                  filterModifiers: modifiers,
+                };
+              });
               setWorksheetsModal(null);
             }}
             onClose={() => setWorksheetsModal(null)}
